@@ -1,21 +1,25 @@
-"""Sandboxed command execution with basic policy checks."""
+"""Sandboxed command execution with policy checks and resource limits."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from fnmatch import fnmatch
+import ipaddress
 import re
+import resource
 import subprocess
 from typing import Protocol
+from urllib.parse import urlparse
 
 import config
 
-SUSPICIOUS_PATTERNS = [
-    re.compile(r"\b169\.254\.169\.254\b"),
-    re.compile(r"/etc/resolv\.conf"),
-    re.compile(r"\bcurl\b.+https?://(?!api\.anthropic\.com|docs\.anthropic\.com)", re.IGNORECASE),
-    re.compile(r"\bwget\b.+https?://(?!api\.anthropic\.com|docs\.anthropic\.com)", re.IGNORECASE),
-]
+URL_PATTERN = re.compile(r"https?://[^\s'\"]+")
+PRIVATE_HOST_PATTERNS = {
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "169.254.169.254",
+}
 
 
 @dataclass(slots=True)
@@ -31,8 +35,40 @@ class SandboxExecutor(Protocol):
         """Execute a command in a sandbox."""
 
 
-def is_command_safe(command: str) -> bool:
-    return not any(pattern.search(command) for pattern in SUSPICIOUS_PATTERNS)
+def _host_is_private(host: str) -> bool:
+    normalized = host.strip().lower()
+    if normalized in PRIVATE_HOST_PATTERNS:
+        return True
+    try:
+        ip = ipaddress.ip_address(normalized)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback or ip.is_link_local
+
+
+def _extract_hosts_from_command(command: str) -> set[str]:
+    hosts: set[str] = set()
+    for match in URL_PATTERN.findall(command):
+        parsed = urlparse(match)
+        if parsed.hostname:
+            hosts.add(parsed.hostname)
+    return hosts
+
+
+def is_command_safe(command: str, allowlist: list[str] | None = None) -> bool:
+    hosts = _extract_hosts_from_command(command)
+    policy = allowlist or config.NETWORK_ALLOWLIST
+
+    for host in hosts:
+        if _host_is_private(host):
+            return False
+        if not any(fnmatch(host, pattern) for pattern in policy):
+            return False
+
+    lowered = command.lower()
+    if "/etc/resolv.conf" in lowered:
+        return False
+    return True
 
 
 def truncate_output(text: str, max_length: int = 10_000) -> str:
@@ -59,19 +95,26 @@ class FlySpriteSandbox:
         return {
             "default_action": "deny",
             "allow": [{"host": host} for host in self.allowlist],
+            "block_private_ranges": True,
+            "block_localhost": True,
+            "block_metadata": True,
         }
 
     def allows_host(self, host: str) -> bool:
         return any(fnmatch(host, pattern) for pattern in self.allowlist)
 
     def execute(self, command: str, timeout: int = config.COMMAND_TIMEOUT) -> ExecutionResult:
-        if not is_command_safe(command):
+        if not is_command_safe(command, self.allowlist):
             return ExecutionResult(
                 stdout="",
                 stderr="Command rejected by sandbox policy",
                 exit_code=1,
                 timed_out=False,
             )
+
+        def _apply_limits() -> None:
+            memory_bytes = self.memory_limit_mb * 1024 * 1024
+            resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
 
         try:
             completed = subprocess.run(
@@ -81,6 +124,7 @@ class FlySpriteSandbox:
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                preexec_fn=_apply_limits,
             )
             return ExecutionResult(
                 stdout=truncate_output(completed.stdout, self.max_output_chars),

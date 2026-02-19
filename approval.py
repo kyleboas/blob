@@ -7,6 +7,7 @@ import threading
 from typing import Protocol
 
 import config
+from safety import append_audit_log
 
 READ_ONLY_PREFIXES = (
     "ls",
@@ -32,8 +33,6 @@ def classify_action(command: str, target_files: list[str]) -> str:
     has_write_op = bool(re.search(r"(>>|>|\brm\b|\bmv\b|\bcp\b|\btouch\b|\bsed\s+-i)", lowered))
     if lowered.startswith(READ_ONLY_PREFIXES) and not has_write_op and not target_files:
         return "auto-approve"
-    if target_files:
-        return "conditional"
     return "conditional"
 
 
@@ -59,6 +58,11 @@ class SlackApprovalGate:
             ),
         )
         ts = response["ts"]
+        append_audit_log(
+            config.APPROVAL_AUDIT_LOG,
+            {"message_ts": ts, "action": action_description, "tier": tier, "decision": "requested"},
+        )
+
         self.client.reactions_add(channel=self.channel, timestamp=ts, name="white_check_mark")
         self.client.reactions_add(channel=self.channel, timestamp=ts, name="x")
 
@@ -67,6 +71,7 @@ class SlackApprovalGate:
         approved = event.wait(timeout=self.timeout_seconds)
         if not approved:
             self._decisions[ts] = False
+            append_audit_log(config.APPROVAL_AUDIT_LOG, {"message_ts": ts, "decision": "timeout_reject"})
         return self._decisions.get(ts, False)
 
     def resolve_reaction(self, message_ts: str, reaction: str) -> None:
@@ -74,8 +79,14 @@ class SlackApprovalGate:
             return
         if reaction == "white_check_mark":
             self._decisions[message_ts] = True
+            decision = "approved"
         elif reaction == "x":
             self._decisions[message_ts] = False
+            decision = "rejected"
         else:
             return
+        append_audit_log(
+            config.APPROVAL_AUDIT_LOG,
+            {"message_ts": message_ts, "reaction": reaction, "decision": decision},
+        )
         self._events[message_ts].set()

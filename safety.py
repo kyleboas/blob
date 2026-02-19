@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
+import json
 from pathlib import Path
 import subprocess
 
@@ -17,9 +18,29 @@ def _run_git(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["git", *args], cwd=config.WORKSPACE_ROOT, check=True, text=True, capture_output=True)
 
 
-def git_auto_commit(message: str) -> None:
+def append_audit_log(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        **payload,
+    }
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row) + "\n")
+
+
+def git_auto_commit(message: str) -> bool:
     _run_git("add", "-A")
+    staged = subprocess.run(
+        ["git", "diff", "--cached", "--quiet"],
+        cwd=config.WORKSPACE_ROOT,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if staged.returncode == 0:
+        return False
     _run_git("commit", "-m", message)
+    return True
 
 
 def git_checkpoint(tag: str) -> None:
@@ -31,7 +52,10 @@ def git_revert_to_checkpoint(tag: str) -> None:
 
 
 def git_history() -> str:
-    result = _run_git("log", "--oneline", "-20")
+    try:
+        result = _run_git("log", "--oneline", "-20")
+    except subprocess.CalledProcessError:
+        return ""
     return result.stdout.strip()
 
 
