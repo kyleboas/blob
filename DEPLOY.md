@@ -1,69 +1,55 @@
-# Deployment Guide (Fly.io + Slack Socket Mode)
+# Deployment Guide (Cloudflare Workers + Slack Events API)
 
-## 1) Create and configure the Slack app
+## 1) Prerequisites
 
-1. Create a new app at https://api.slack.com/apps.
-2. Enable **Socket Mode** and create an app-level token with `connections:write` scope.
-3. Under **OAuth & Permissions**, add bot token scopes:
-   - `app_mentions:read`
-   - `channels:history`
-   - `channels:read`
-   - `chat:write`
-   - `groups:history`
-   - `im:history`
-   - `im:read`
-   - `im:write`
-   - `mpim:history`
-   - `reactions:read`
-   - `reactions:write`
-4. Install the app to your workspace and copy:
-   - `SLACK_BOT_TOKEN` (`xoxb-...`)
-   - `SLACK_APP_TOKEN` (`xapp-...`)
+- Cloudflare account with Workers + Durable Objects enabled.
+- Wrangler CLI authenticated (`npx wrangler login`).
+- Slack app with bot token (`xoxb-...`).
+- Anthropic API key.
 
-## 2) Launch Fly app
+## 2) Create Cloudflare resources
 
 ```bash
-flyctl launch --no-deploy
+npx wrangler r2 bucket create blob-repo-store
 ```
 
-Use the provided `fly.toml` and confirm app name/region as needed.
-
-## 3) Create persistent volume
+## 3) Configure Worker secrets
 
 ```bash
-flyctl volumes create agent_data --size 1 --region iad
+npx wrangler secret put ANTHROPIC_API_KEY
+npx wrangler secret put SLACK_BOT_TOKEN
+npx wrangler secret put SLACK_SIGNING_SECRET
 ```
 
-The app mounts this volume at `/data` for repository state, `AGENT.md`, and cached docs.
-
-## 4) Set secrets
+## 4) Deploy
 
 ```bash
-flyctl secrets set \
-  ANTHROPIC_API_KEY=... \
-  SLACK_BOT_TOKEN=... \
-  SLACK_APP_TOKEN=... \
-  FLY_API_TOKEN=...
+npx wrangler deploy
 ```
 
-## 5) Deploy
+## 5) Configure Slack Event Subscriptions
 
-```bash
-flyctl deploy
-```
+1. Open your Slack app settings at <https://api.slack.com/apps>.
+2. Go to **Event Subscriptions** and enable events.
+3. Set **Request URL** to:
+   - `https://<your-worker-domain>/slack/events`
+4. Subscribe to bot events:
+   - `message.im`
+   - `reaction_added`
+5. Disable **Socket Mode** (the app uses HTTP webhooks now).
+6. Reinstall the app if Slack requests it.
 
-## 6) Verify
+## 6) Smoke test
 
-```bash
-flyctl status
-flyctl logs
-```
+1. DM the bot a simple request, for example: `list files in the repository`.
+2. Verify the bot responds in-thread.
+3. Trigger an approval-required command and react with 👍 or 👎.
+4. Verify approval and denial flows are reflected in bot replies.
 
-The app exposes `/healthz` and should show healthy checks once Socket Mode is connected.
+## 7) Persistence + safety checks
 
-## 7) Use from Slack
-
-1. Invite the bot to a channel (or DM it).
-2. Send a task (example: `list the files in the current directory`).
-3. Watch progress and completion messages in the same thread.
-4. For protected operations, approve/reject via `:white_check_mark:` / `:x:` reactions.
+1. Complete a task that updates conversation history.
+2. Wait for idle time, then send a follow-up in the same Slack thread.
+3. Verify the agent retains context.
+4. Attempt actions that exceed rate limits or target protected files.
+5. Verify the action is blocked (or gated for approval) by policy.
