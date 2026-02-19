@@ -19,6 +19,18 @@ dependencies = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.setuptools]
+py-modules = [
+  "agent",
+  "approval",
+  "config",
+  "llm_client",
+  "safety",
+  "sandbox",
+  "slack_bot",
+  "tools",
+]
+
 
 [project.scripts]
 agent = "agent:main"
