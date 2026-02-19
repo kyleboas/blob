@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 from typing import Callable
 
@@ -19,6 +20,28 @@ except ImportError:  # pragma: no cover
     App = None
     SocketModeHandler = None
 
+
+
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path == "/healthz":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+        return
+
+
+def start_health_server(port: int = 8080) -> HTTPServer:
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    Thread(target=server.serve_forever, daemon=True).start()
+    return server
 
 @dataclass(slots=True)
 class SessionContext:
@@ -109,6 +132,7 @@ def main() -> None:
     def on_reaction_added(event: dict[str, object]) -> None:
         bot.handle_reaction_event(event)
 
+    start_health_server()
     handler = SocketModeHandler(app, os.getenv("SLACK_APP_TOKEN"))
     handler.start()
 
