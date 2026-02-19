@@ -107,19 +107,19 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 7.8 Implement step limiting and conversation management: track step count, enforce `MAX_STEPS`, maintain the conversation messages array, persist to DO SQLite after each step.
   - [x] 7.9 Write unit tests in `src/agent.test.ts`: test the ReAct loop with mocked LLM responses and sandbox, test approval gate flow, test rate limit enforcement, test step limiting, test session lifecycle (snapshot save/restore).
 
-- [ ] 8.0 Implement Worker entry point and wiring
-  - [ ] 8.1 Create `src/index.ts`: implement the Worker `fetch()` handler. Route requests: `/slack/events` → Slack event handling, `/health` → health check response.
-  - [ ] 8.2 Implement Slack event routing in the Worker: verify signature, parse event, handle `url_verification` directly, route `message` and `reaction_added` events to the appropriate DO (using `mapThreadToDO()`).
-  - [ ] 8.3 For `message` events: get the DO stub, forward the task. Return `200 OK` to Slack immediately (within 3 seconds), let the DO process asynchronously.
-  - [ ] 8.4 For `reaction_added` events: route to the corresponding DO to resolve pending approval gates.
-  - [ ] 8.5 Write unit tests in `src/index.test.ts`: test routing, signature verification pass-through, health check, Slack challenge response, event forwarding to DO.
+- [x] 8.0 Implement Worker entry point and wiring
+  - [x] 8.1 Create `src/index.ts`: implement the Worker `fetch()` handler. Route requests: `/slack/events` → Slack event handling, `/health` → health check response.
+  - [x] 8.2 Implement Slack event routing in the Worker: verify signature, parse event, handle `url_verification` directly, route `message` and `reaction_added` events to the appropriate DO (using `mapThreadToDO()`).
+  - [x] 8.3 For `message` events: get the DO stub, forward the task. Return `200 OK` to Slack immediately (within 3 seconds), let the DO process asynchronously.
+  - [x] 8.4 For `reaction_added` events: route to the corresponding DO to resolve pending approval gates.
+  - [x] 8.5 Write unit tests in `src/index.test.ts`: test routing, signature verification pass-through, health check, Slack challenge response, event forwarding to DO.
 
 - [ ] 9.0 Integration testing and deployment
-  - [ ] 9.1 Write an integration test that exercises the full flow: Worker receives a Slack event → routes to DO → DO calls LLM (mocked) → DO executes command in sandbox (mocked) → DO posts result to Slack (mocked). Verify state is persisted in DO SQLite.
+  - [x] 9.1 Write an integration test that exercises the full flow: Worker receives a Slack event → routes to DO → DO calls LLM (mocked) → DO executes command in sandbox (mocked) → DO posts result to Slack (mocked). Verify state is persisted in DO SQLite.
   - [ ] 9.2 Deploy to Cloudflare with `npx wrangler deploy`. Create the R2 bucket (`wrangler r2 bucket create blob-repo-store`). Set secrets (`wrangler secret put ANTHROPIC_API_KEY`, etc.).
   - [ ] 9.3 Configure the Slack app: update the Event Subscriptions Request URL to the Worker's `/slack/events` endpoint. Subscribe to `message.im` and `reaction_added` events. Disable Socket Mode.
   - [ ] 9.4 Smoke test: send a message to the Slack bot and verify end-to-end flow — message received, agent processes, sandbox executes, result posted back to Slack.
   - [ ] 9.5 Verify persistence: complete a task, wait for sandbox to scale to zero, send a follow-up message in the same thread — verify conversation history and knowledge are preserved.
   - [ ] 9.6 Verify safety: attempt to exceed rate limits, attempt to modify a protected file without approval, verify the orchestration layer blocks these correctly.
-  - [ ] 9.7 Update `DEPLOY.md` with Cloudflare deployment instructions replacing the Fly.io guide.
-  - [ ] 9.8 Remove or archive Fly.io configuration files (`fly.toml`, `Dockerfile`, `.github/workflows/deploy-fly.yml`) after confirming Cloudflare deployment is stable.
+  - [x] 9.7 Update `DEPLOY.md` with Cloudflare deployment instructions replacing the Fly.io guide.
+  - [x] 9.8 Remove or archive Fly.io configuration files (`fly.toml`, `Dockerfile`, `.github/workflows/deploy-fly.yml`) after confirming Cloudflare deployment is stable.
