@@ -1,0 +1,16 @@
+{
+  "name": "blob-agent-sandbox",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/sandbox": "^0.1.0",
+    "@cloudflare/workers-types": "^4.20260129.0",
+    "typescript": "^5.9.2",
+    "wrangler": "^4.34.0"
+  }
+}

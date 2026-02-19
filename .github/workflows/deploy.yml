@@ -12,9 +12,35 @@ on:
         default: 'production'
 
 jobs:
-  deploy:
+  deploy-sandbox:
     runs-on: ubuntu-latest
-    name: Deploy
+    name: Deploy Sandbox Service
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: sandbox/package.json
+
+      - name: Install sandbox dependencies
+        run: npm ci
+        working-directory: sandbox
+
+      - name: Deploy blob-agent-sandbox
+        run: npx wrangler deploy
+        working-directory: sandbox
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  deploy-worker:
+    runs-on: ubuntu-latest
+    name: Deploy Main Worker
+    needs: deploy-sandbox
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,7 +54,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Deploy to Cloudflare Workers
+      - name: Deploy blob-agent
         run: npx wrangler deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
