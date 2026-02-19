@@ -117,8 +117,9 @@ describe("AgentDO runAgentLoop", () => {
       .mockResolvedValueOnce({ content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "rm -rf tmp" } }] });
     const postSlackApproval = vi.fn().mockResolvedValue(undefined);
     const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+    const setAlarm = vi.fn();
 
-    const agent = new AgentDO({ storage: { sql } }, env, {
+    const agent = new AgentDO({ storage: { sql, setAlarm } }, env, {
       llmCall: llmCall as never,
       postSlackMessage: postSlackMessage as never,
       postSlackApproval: postSlackApproval as never
@@ -128,6 +129,7 @@ describe("AgentDO runAgentLoop", () => {
 
     expect(result.finalText).toContain("Paused pending approval");
     expect(postSlackApproval).toHaveBeenCalledTimes(1);
+    expect(setAlarm).toHaveBeenCalledTimes(1);
   });
 
   it("enforces max steps", async () => {

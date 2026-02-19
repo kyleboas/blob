@@ -115,6 +115,24 @@ export function getRateLimit(sql: SqlStorage, scope: string, key: string): numbe
   return Number(rows[0].count ?? 0);
 }
 
+
+
+export function saveApprovalDecision(
+  sql: SqlStorage,
+  sessionId: string,
+  command: string,
+  decision: "approved" | "denied" | "timed_out",
+  decidedBy: string | null
+): void {
+  sql.exec(
+    `INSERT INTO approval_log (session_id, command, decision, decided_by) VALUES (?, ?, ?, ?)`,
+    sessionId,
+    command,
+    decision,
+    decidedBy
+  );
+}
+
 export function saveKnowledge(sql: SqlStorage, content: string): void {
   sql.exec(
     `INSERT INTO knowledge (key, content)
