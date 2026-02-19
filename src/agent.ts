@@ -52,6 +52,18 @@ const DEFAULT_DEPS: AgentDeps = {
   now: () => Date.now()
 };
 
+const UNCONFIGURED_SANDBOX: SandboxBinding = {
+  async exec() {
+    throw new Error("Sandbox binding is not configured. Set env.SANDBOX via a service binding before running commands.");
+  },
+  async writeFile() {
+    throw new Error("Sandbox binding is not configured. Set env.SANDBOX via a service binding before syncing files.");
+  },
+  async readFile() {
+    throw new Error("Sandbox binding is not configured. Set env.SANDBOX via a service binding before reading files.");
+  }
+};
+
 export class AgentDO extends Agent {
   private readonly sql: SqlStorage;
   private readonly sandbox: SandboxClient;
@@ -61,7 +73,7 @@ export class AgentDO extends Agent {
   constructor(private readonly state: DurableObjectStateLike, private readonly env: Env, deps: Partial<AgentDeps> = {}) {
     super(state, env);
     this.sql = state.storage.sql;
-    this.sandbox = new SandboxClient(env.SANDBOX as unknown as SandboxBinding);
+    this.sandbox = new SandboxClient((env.SANDBOX as unknown as SandboxBinding | undefined) ?? UNCONFIGURED_SANDBOX);
     this.deps = { ...DEFAULT_DEPS, ...deps };
     initSchema(this.sql);
   }
