@@ -1,6 +1,8 @@
 import { mapThreadToDO, parseSlackEvent, verifySlackSignature } from "./slack";
 import type { Env, SlackEvent } from "./types";
 
+export { AgentDO } from "./agent";
+
 async function forwardToAgent(env: Env, threadTs: string, payload: { action: "message" | "reaction"; event: SlackEvent }): Promise<void> {
   const id = env.AGENT_DO.idFromName(mapThreadToDO(threadTs));
   const stub = env.AGENT_DO.get(id);
