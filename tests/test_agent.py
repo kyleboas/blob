@@ -24,6 +24,8 @@ class DummySandbox:
         self.commands.append(command)
         if command == "pytest tests/":
             return ExecutionResult(stdout="ok", stderr="", exit_code=0)
+        if command.startswith("curl -fsSL"):
+            return ExecutionResult(stdout="<html><body><h1>Title</h1><p>Body</p></body></html>", stderr="", exit_code=0)
         return ExecutionResult(stdout="ran", stderr="", exit_code=0)
 
 
@@ -112,19 +114,7 @@ def test_fetch_documentation_allowlist_and_ingestion(tmp_path: Path) -> None:
     ])
     agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
 
-    with patch("agent.urlopen") as mock_open:
-        class _Response:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return None
-
-            def read(self):
-                return b"<html><body><h1>Title</h1><p>Body</p></body></html>"
-
-        mock_open.return_value = _Response()
-        output = agent.fetch_documentation("https://docs.anthropic.com/reference", docs_root=tmp_path)
+    output = agent.fetch_documentation("https://docs.anthropic.com/reference", docs_root=tmp_path)
 
     assert output.exists()
     assert "Title" in output.read_text()

@@ -4,24 +4,25 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlparse
-from urllib.request import urlopen
-from typing import Callable
 import re
+from typing import Callable
+from urllib.parse import quote, urlparse
 
 import config
 from approval import ApprovalGate, classify_action
 from llm_client import LLMClient
 from safety import (
     ModificationRateLimiter,
+    append_audit_log,
     git_auto_commit,
     git_checkpoint,
+    git_history,
     git_revert_to_checkpoint,
-    is_constitution_file,
 )
 from sandbox import SandboxExecutor
 from tools import BASH_TOOL, format_tool_result
@@ -89,27 +90,51 @@ class Agent:
         if self.on_status:
             self.on_status(message)
 
+    def _select_model_for_task(self, task: str) -> str:
+        lowered = task.lower()
+        if any(keyword in lowered for keyword in ("refactor", "architecture", "security", "self-modify")):
+            return config.MODEL_ROUTING["complex"]
+        return config.MODEL_ROUTING["routine"]
+
+    def _record_llm_usage(self, task: str, model: str, input_tokens: int, output_tokens: int) -> None:
+        append_audit_log(
+            config.LLM_TELEMETRY_LOG,
+            {
+                "task": task[:120],
+                "model": model,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": input_tokens + output_tokens,
+            },
+        )
+
     def run_task(self, task: str, extra_context: str = "") -> str:
         messages = list(self._base_messages)
-        task_text = task
+        try:
+            git_context = git_history()
+        except subprocess.CalledProcessError:
+            git_context = ""
+        task_text = f"{task}\n\nRecent git history:\n{git_context or '(empty)'}"
         if extra_context:
-            task_text = f"{task}\n\nAdditional context:\n{extra_context}"
+            task_text = f"{task_text}\n\nAdditional context:\n{extra_context}"
         messages.append({"role": "user", "content": [{"type": "text", "text": task_text}]})
 
         final_text = ""
         done = False
         steps = 0
+        model = self._select_model_for_task(task)
 
         while not done and steps < config.MAX_STEPS:
             steps += 1
             self._emit_status(f"Step {steps}/{config.MAX_STEPS}: querying model")
 
             response = self.llm_client.create_message(
-                model=config.MODEL_ROUTING["routine"],
+                model=model,
                 system=self._system_prompt,
                 messages=messages,
                 tools=[BASH_TOOL],
             )
+            self._record_llm_usage(task, model, response.usage.input_tokens, response.usage.output_tokens)
             messages.append({"role": "assistant", "content": response.content})
 
             tool_uses = [block for block in response.content if block.get("type") == "tool_use"]
@@ -123,9 +148,9 @@ class Agent:
             for tool_use in tool_uses:
                 command = tool_use.get("input", {}).get("command", "")
                 target_files = _extract_target_files(command)
-                if any(is_constitution_file(path) for path in target_files):
-                    result_text = "Blocked: constitution file modification is not allowed."
-                elif _is_modification_command(command, target_files) and not self.rate_limiter.can_modify():
+                is_modification = _is_modification_command(command, target_files)
+
+                if is_modification and not self.rate_limiter.can_modify():
                     result_text = "Blocked: self-modification rate limit reached."
                 else:
                     tier = classify_action(command, target_files)
@@ -134,8 +159,23 @@ class Agent:
                         result_text = "Blocked: approval denied or timed out."
                     else:
                         execution = self.sandbox.execute(command=command, timeout=config.COMMAND_TIMEOUT)
-                        if _is_modification_command(command, target_files):
+                        if is_modification:
                             self.rate_limiter.record_modification()
+                            commit_message = f"agent: apply `{command[:80]}`"
+                            try:
+                                committed = git_auto_commit(commit_message)
+                            except subprocess.CalledProcessError:
+                                committed = False
+                            append_audit_log(
+                                config.TOOL_AUDIT_LOG,
+                                {
+                                    "command": command,
+                                    "target_files": target_files,
+                                    "tier": tier,
+                                    "exit_code": execution.exit_code,
+                                    "auto_committed": committed,
+                                },
+                            )
                         result_text = f"exit={execution.exit_code}\nstdout:\n{execution.stdout}\nstderr:\n{execution.stderr}"
 
                 messages.append(
@@ -178,14 +218,19 @@ class Agent:
     def fetch_documentation(self, url: str, docs_root: Path | None = None) -> Path:
         parsed = urlparse(url)
         host = parsed.netloc
+        if not host:
+            raise ValueError("URL must include a host")
         if not any(host == allowed or host.endswith(allowed.replace("*.", ".")) for allowed in config.NETWORK_ALLOWLIST):
             raise ValueError(f"Domain not allowlisted: {host}")
 
-        with urlopen(url, timeout=config.COMMAND_TIMEOUT) as response:  # nosec - allowlisted validation above
-            html = response.read().decode("utf-8", errors="replace")
+        escaped_url = quote(url, safe=":/?&=#%")
+        fetch_command = f"curl -fsSL '{escaped_url}'"
+        response = self.sandbox.execute(fetch_command, timeout=config.COMMAND_TIMEOUT)
+        if response.exit_code != 0:
+            raise RuntimeError(f"Failed to fetch documentation: {response.stderr}")
 
         parser = _HTMLToTextParser()
-        parser.feed(html)
+        parser.feed(response.stdout)
         content = parser.as_markdown()
 
         root = docs_root or (config.WORKSPACE_ROOT / "docs")
@@ -208,10 +253,17 @@ class Agent:
         agent_md = agent_md_path or (config.WORKSPACE_ROOT / "AGENT.md")
         timestamp = datetime.now(timezone.utc).isoformat()
         status = "SUCCESS" if success else "FAILED"
+        discovered = [
+            line.strip("- ")
+            for line in result.splitlines()
+            if any(k in line.lower() for k in ("pattern", "gotcha", "learned", "note"))
+        ]
+        patterns = discovered[:3] or ["No explicit patterns recorded."]
         entry = (
             f"\n- {timestamp} [{status}]\n"
             f"  - Task: {task}\n"
             f"  - What changed: {result[:500] or 'No summary returned.'}\n"
+            f"  - Patterns/Gotchas: {' | '.join(patterns)}\n"
         )
         with agent_md.open("a", encoding="utf-8") as f:
             f.write(entry)

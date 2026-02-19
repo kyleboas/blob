@@ -28,9 +28,12 @@ NETWORK_ALLOWLIST = [
 ]
 
 CONSTITUTION_FILES = [
-    "safety.py",
+    "agent.py",
+    "sandbox.py",
     "approval.py",
+    "safety.py",
     "config.py",
+    "slack_bot.py",
 ]
 
 MODEL_ROUTING = {
@@ -43,3 +46,7 @@ if AGENT_ENV == "prod":
     WORKSPACE_ROOT = Path("/data")
 else:
     WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", Path(__file__).resolve().parent))
+
+APPROVAL_AUDIT_LOG = WORKSPACE_ROOT / ".audit" / "approvals.jsonl"
+TOOL_AUDIT_LOG = WORKSPACE_ROOT / ".audit" / "tool_actions.jsonl"
+LLM_TELEMETRY_LOG = WORKSPACE_ROOT / ".audit" / "llm_usage.jsonl"
