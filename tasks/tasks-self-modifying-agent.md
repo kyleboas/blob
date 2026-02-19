@@ -69,35 +69,35 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 2.4 Implement model routing: add a `get_model_for_tier(tier: str) -> str` function that maps "routine" → Haiku 4.5, "complex" → Sonnet 4.5, with tier-to-model mappings configurable in `config.py`
   - [x] 2.5 Write `tests/test_llm_client.py`: test `LLMResponse` dataclass construction, model routing logic, and `AnthropicClient` with a mocked `anthropic.Anthropic` client
 
-- [ ] 3.0 Build the sandboxed command executor
-  - [ ] 3.1 Define a `SandboxExecutor` protocol/ABC in `sandbox.py` with `execute(command: str, timeout: int) -> ExecutionResult` and `ExecutionResult` dataclass (stdout, stderr, exit_code, timed_out)
-  - [ ] 3.2 Implement `FlySpriteSandbox(SandboxExecutor)` that provisions/reuses a Fly.io Sprite machine, sends commands via the Machines API, and enforces the configured timeout and memory limit
-  - [ ] 3.3 Configure deny-all network policy with allowlist for `api.anthropic.com`, `*.pypi.org`, `files.pythonhosted.org`, `docs.anthropic.com` in the Sprite machine config
-  - [ ] 3.4 Add command-injection detection: scan incoming commands for suspicious patterns (e.g., attempts to curl non-allowlisted hosts, modify `/etc/resolv.conf`, access cloud metadata endpoints) and reject or flag them
-  - [ ] 3.5 Implement output truncation: cap stdout/stderr at a configurable max length (default 10,000 chars) to prevent context window overflow
-  - [ ] 3.6 Write `tests/test_sandbox.py`: test `ExecutionResult` construction, timeout handling logic, command-injection detection patterns, and output truncation
+- [x] 3.0 Build the sandboxed command executor
+  - [x] 3.1 Define a `SandboxExecutor` protocol/ABC in `sandbox.py` with `execute(command: str, timeout: int) -> ExecutionResult` and `ExecutionResult` dataclass (stdout, stderr, exit_code, timed_out)
+  - [x] 3.2 Implement `FlySpriteSandbox(SandboxExecutor)` that provisions/reuses a Fly.io Sprite machine, sends commands via the Machines API, and enforces the configured timeout and memory limit
+  - [x] 3.3 Configure deny-all network policy with allowlist for `api.anthropic.com`, `*.pypi.org`, `files.pythonhosted.org`, `docs.anthropic.com` in the Sprite machine config
+  - [x] 3.4 Add command-injection detection: scan incoming commands for suspicious patterns (e.g., attempts to curl non-allowlisted hosts, modify `/etc/resolv.conf`, access cloud metadata endpoints) and reject or flag them
+  - [x] 3.5 Implement output truncation: cap stdout/stderr at a configurable max length (default 10,000 chars) to prevent context window overflow
+  - [x] 3.6 Write `tests/test_sandbox.py`: test `ExecutionResult` construction, timeout handling logic, command-injection detection patterns, and output truncation
 
-- [ ] 4.0 Implement the core agent ReAct loop
-  - [ ] 4.1 Create `tools.py` with the bash tool definition: name, description, and JSON schema (`{"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}`). Add a `format_tool_result(tool_use_id, output) -> dict` helper
-  - [ ] 4.2 Implement the main loop in `agent.py`: load `AGENT.md` into the system prompt, initialize conversation history, and enter the `while not done and steps < MAX_STEPS` loop. Accept an optional `on_status` callback for external progress reporting
-  - [ ] 4.3 In the loop body: call `llm_client.create_message()`, iterate over response content blocks, dispatch `tool_use` blocks to the sandbox executor, and append `tool_result` messages back to conversation history. Call `on_status` with progress updates
-  - [ ] 4.4 Handle the stop condition: when `stop_reason == "end_turn"` with no tool_use blocks, set `done = True` and capture the agent's final text response
-  - [ ] 4.5 Add a CLI entrypoint for local dev/testing: `python agent.py "task description"` that accepts a task string, runs the loop, and prints the result. Wire this up as a script in `pyproject.toml`
-  - [ ] 4.6 Add conversation context reset: after each completed task, clear conversation history but preserve the system prompt and `AGENT.md` content
-  - [ ] 4.7 Write `tests/test_agent.py`: test loop termination on `end_turn`, step limit enforcement, tool dispatch routing, conversation reset behavior, and `on_status` callback invocation using a mock LLM client
+- [x] 4.0 Implement the core agent ReAct loop
+  - [x] 4.1 Create `tools.py` with the bash tool definition: name, description, and JSON schema (`{"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}`). Add a `format_tool_result(tool_use_id, output) -> dict` helper
+  - [x] 4.2 Implement the main loop in `agent.py`: load `AGENT.md` into the system prompt, initialize conversation history, and enter the `while not done and steps < MAX_STEPS` loop. Accept an optional `on_status` callback for external progress reporting
+  - [x] 4.3 In the loop body: call `llm_client.create_message()`, iterate over response content blocks, dispatch `tool_use` blocks to the sandbox executor, and append `tool_result` messages back to conversation history. Call `on_status` with progress updates
+  - [x] 4.4 Handle the stop condition: when `stop_reason == "end_turn"` with no tool_use blocks, set `done = True` and capture the agent's final text response
+  - [x] 4.5 Add a CLI entrypoint for local dev/testing: `python agent.py "task description"` that accepts a task string, runs the loop, and prints the result. Wire this up as a script in `pyproject.toml`
+  - [x] 4.6 Add conversation context reset: after each completed task, clear conversation history but preserve the system prompt and `AGENT.md` content
+  - [x] 4.7 Write `tests/test_agent.py`: test loop termination on `end_turn`, step limit enforcement, tool dispatch routing, conversation reset behavior, and `on_status` callback invocation using a mock LLM client
 
-- [ ] 5.0 Add git-based safety, approval gates, and self-modification controls
-  - [ ] 5.1 Implement `git_auto_commit(message: str)` in `safety.py`: stages all changes in the workspace and commits with the given message. Called after every successful file modification detected by the agent
-  - [ ] 5.2 Implement `git_checkpoint(tag: str)` in `safety.py`: creates a tagged commit representing a known-good state before any self-modification attempt
-  - [ ] 5.3 Implement `git_revert_to_checkpoint(tag: str)` in `safety.py`: hard-reverts the workspace to the given tag. Called automatically when tests fail after a self-modification
-  - [ ] 5.4 Implement `git_history() -> str` in `safety.py`: returns `git log --oneline -20` output for the agent to read and reason about its version history
-  - [ ] 5.5 Define the `ApprovalGate` ABC in `approval.py` with `request_approval(action_description: str, tier: str) -> bool`. Implement `SlackApprovalGate` that posts the proposed action to the session's Slack thread, adds reaction prompts, and waits for a `:white_check_mark:` (approve) or `:x:` (reject) reaction or a threaded reply. Auto-approves for "auto-approve" tier, times out after `APPROVAL_TIMEOUT_MINUTES` (auto-reject)
-  - [ ] 5.6 Implement permission tier classification in `approval.py`: a function `classify_action(command: str, target_files: list[str]) -> str` that returns "auto-approve", "conditional", or "always-require-approval" based on whether the command is read-only, modifies workspace files, or touches constitution files
-  - [ ] 5.7 Implement self-modification rate limiter in `safety.py`: track session and daily modification counts, persist daily count to a `.modify_count` file, reject modifications that exceed `SELF_MODIFY_LIMIT_SESSION` or `SELF_MODIFY_LIMIT_DAY`
-  - [ ] 5.8 Implement constitution enforcement in `safety.py`: a `is_constitution_file(path: str) -> bool` check against the list in `config.py`. The agent loop must call this before any file write and block modifications to protected files
-  - [ ] 5.9 Integrate safety into the agent loop: wire `git_auto_commit` after tool executions that modify files, call `classify_action` + `request_approval` before executing commands, and check rate limits before self-modification
-  - [ ] 5.10 Write `tests/test_safety.py`: test auto-commit (mock git), checkpoint/revert flow, rate limiter counting and rejection, constitution file detection
-  - [ ] 5.11 Write `tests/test_approval.py`: test tier classification for read-only, workspace-edit, and core-file-edit commands. Test `SlackApprovalGate` with a mocked Slack client (mock posting approval message, simulate reaction events, test timeout behavior)
+- [x] 5.0 Add git-based safety, approval gates, and self-modification controls
+  - [x] 5.1 Implement `git_auto_commit(message: str)` in `safety.py`: stages all changes in the workspace and commits with the given message. Called after every successful file modification detected by the agent
+  - [x] 5.2 Implement `git_checkpoint(tag: str)` in `safety.py`: creates a tagged commit representing a known-good state before any self-modification attempt
+  - [x] 5.3 Implement `git_revert_to_checkpoint(tag: str)` in `safety.py`: hard-reverts the workspace to the given tag. Called automatically when tests fail after a self-modification
+  - [x] 5.4 Implement `git_history() -> str` in `safety.py`: returns `git log --oneline -20` output for the agent to read and reason about its version history
+  - [x] 5.5 Define the `ApprovalGate` ABC in `approval.py` with `request_approval(action_description: str, tier: str) -> bool`. Implement `SlackApprovalGate` that posts the proposed action to the session's Slack thread, adds reaction prompts, and waits for a `:white_check_mark:` (approve) or `:x:` (reject) reaction or a threaded reply. Auto-approves for "auto-approve" tier, times out after `APPROVAL_TIMEOUT_MINUTES` (auto-reject)
+  - [x] 5.6 Implement permission tier classification in `approval.py`: a function `classify_action(command: str, target_files: list[str]) -> str` that returns "auto-approve", "conditional", or "always-require-approval" based on whether the command is read-only, modifies workspace files, or touches constitution files
+  - [x] 5.7 Implement self-modification rate limiter in `safety.py`: track session and daily modification counts, persist daily count to a `.modify_count` file, reject modifications that exceed `SELF_MODIFY_LIMIT_SESSION` or `SELF_MODIFY_LIMIT_DAY`
+  - [x] 5.8 Implement constitution enforcement in `safety.py`: a `is_constitution_file(path: str) -> bool` check against the list in `config.py`. The agent loop must call this before any file write and block modifications to protected files
+  - [x] 5.9 Integrate safety into the agent loop: wire `git_auto_commit` after tool executions that modify files, call `classify_action` + `request_approval` before executing commands, and check rate limits before self-modification
+  - [x] 5.10 Write `tests/test_safety.py`: test auto-commit (mock git), checkpoint/revert flow, rate limiter counting and rejection, constitution file detection
+  - [x] 5.11 Write `tests/test_approval.py`: test tier classification for read-only, workspace-edit, and core-file-edit commands. Test `SlackApprovalGate` with a mocked Slack client (mock posting approval message, simulate reaction events, test timeout behavior)
 
 - [ ] 6.0 Build the Slack bot and session management
   - [ ] 6.1 Create `slack_bot.py` using Slack Bolt (Socket Mode): initialize the app with `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`, register event listeners
