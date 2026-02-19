@@ -49,25 +49,25 @@ Update the file after completing each sub-task, not just after completing an ent
 
 ## Tasks
 
-- [ ] 0.0 Create feature branch
-  - [ ] 0.1 Create and checkout a new branch for this feature (e.g., `git checkout -b feature/self-modifying-agent`)
+- [x] 0.0 Create feature branch
+  - [x] 0.1 Create and checkout a new branch for this feature (e.g., `git checkout -b feature/self-modifying-agent`)
 
-- [ ] 1.0 Set up project skeleton and configuration
-  - [ ] 1.1 Create `pyproject.toml` with project metadata, Python >=3.11 requirement, and dependencies: `anthropic`, `slack-bolt`, `slack-sdk`, `pytest`, `python-dotenv`
-  - [ ] 1.2 Create `.gitignore` with patterns for `.env`, `__pycache__/`, `.pytest_cache/`, `docs/*.cached.md`, and IDE files
-  - [ ] 1.3 Create `.env.example` listing required env vars: `ANTHROPIC_API_KEY`, `FLY_API_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `AGENT_ENV` (dev/prod)
-  - [ ] 1.4 Create `config.py` with all configuration constants: `MAX_STEPS=25`, `COMMAND_TIMEOUT=30`, `MEMORY_LIMIT_MB=512`, `SELF_MODIFY_LIMIT_SESSION=3`, `SELF_MODIFY_LIMIT_DAY=10`, `APPROVAL_TIMEOUT_MINUTES=30`, network allowlist, and constitution file list. Load overrides from environment variables.
-  - [ ] 1.5 Create the initial `AGENT.md` knowledge file with a header, project description, and empty sections for Patterns, Gotchas, and Session Log
-  - [ ] 1.6 Create an empty `tasks.json` with one seed task (e.g., "Add a hello-world bash alias tool")
-  - [ ] 1.7 Create `docs/` directory with a `.gitkeep` file
-  - [ ] 1.8 Create `tests/__init__.py` and verify `pytest tests/` runs with no errors
+- [x] 1.0 Set up project skeleton and configuration
+  - [x] 1.1 Create `pyproject.toml` with project metadata, Python >=3.11 requirement, and dependencies: `anthropic`, `slack-bolt`, `slack-sdk`, `pytest`, `python-dotenv`
+  - [x] 1.2 Create `.gitignore` with patterns for `.env`, `__pycache__/`, `.pytest_cache/`, `docs/*.cached.md`, and IDE files
+  - [x] 1.3 Create `.env.example` listing required env vars: `ANTHROPIC_API_KEY`, `FLY_API_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `AGENT_ENV` (dev/prod)
+  - [x] 1.4 Create `config.py` with all configuration constants: `MAX_STEPS=25`, `COMMAND_TIMEOUT=30`, `MEMORY_LIMIT_MB=512`, `SELF_MODIFY_LIMIT_SESSION=3`, `SELF_MODIFY_LIMIT_DAY=10`, `APPROVAL_TIMEOUT_MINUTES=30`, network allowlist, and constitution file list. Load overrides from environment variables.
+  - [x] 1.5 Create the initial `AGENT.md` knowledge file with a header, project description, and empty sections for Patterns, Gotchas, and Session Log
+  - [x] 1.6 Create an empty `tasks.json` with one seed task (e.g., "Add a hello-world bash alias tool")
+  - [x] 1.7 Create `docs/` directory with a `.gitkeep` file
+  - [x] 1.8 Create `tests/__init__.py` and verify `pytest tests/` runs with no errors
 
-- [ ] 2.0 Implement the LLM provider abstraction layer
-  - [ ] 2.1 Define an `LLMClient` protocol/ABC in `llm_client.py` with a `create_message(model, system, messages, tools) -> LLMResponse` method and a standardized `LLMResponse` dataclass (content blocks, stop_reason, usage)
-  - [ ] 2.2 Implement `AnthropicClient(LLMClient)` that wraps the `anthropic` SDK, calling `client.messages.create()` and mapping the response to `LLMResponse`
-  - [ ] 2.3 Add prompt caching support: ensure static content (system prompt, tool definitions) is placed first in every request with appropriate cache control headers
-  - [ ] 2.4 Implement model routing: add a `get_model_for_tier(tier: str) -> str` function that maps "routine" → Haiku 4.5, "complex" → Sonnet 4.5, with tier-to-model mappings configurable in `config.py`
-  - [ ] 2.5 Write `tests/test_llm_client.py`: test `LLMResponse` dataclass construction, model routing logic, and `AnthropicClient` with a mocked `anthropic.Anthropic` client
+- [x] 2.0 Implement the LLM provider abstraction layer
+  - [x] 2.1 Define an `LLMClient` protocol/ABC in `llm_client.py` with a `create_message(model, system, messages, tools) -> LLMResponse` method and a standardized `LLMResponse` dataclass (content blocks, stop_reason, usage)
+  - [x] 2.2 Implement `AnthropicClient(LLMClient)` that wraps the `anthropic` SDK, calling `client.messages.create()` and mapping the response to `LLMResponse`
+  - [x] 2.3 Add prompt caching support: ensure static content (system prompt, tool definitions) is placed first in every request with appropriate cache control headers
+  - [x] 2.4 Implement model routing: add a `get_model_for_tier(tier: str) -> str` function that maps "routine" → Haiku 4.5, "complex" → Sonnet 4.5, with tier-to-model mappings configurable in `config.py`
+  - [x] 2.5 Write `tests/test_llm_client.py`: test `LLMResponse` dataclass construction, model routing logic, and `AnthropicClient` with a mocked `anthropic.Anthropic` client
 
 - [ ] 3.0 Build the sandboxed command executor
   - [ ] 3.1 Define a `SandboxExecutor` protocol/ABC in `sandbox.py` with `execute(command: str, timeout: int) -> ExecutionResult` and `ExecutionResult` dataclass (stdout, stderr, exit_code, timed_out)
