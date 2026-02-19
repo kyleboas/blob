@@ -38,4 +38,8 @@ MODEL_ROUTING = {
     "complex": os.getenv("MODEL_COMPLEX", "claude-sonnet-4-5"),
 }
 
-WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", Path(__file__).resolve().parent))
+AGENT_ENV = os.getenv("AGENT_ENV", "dev").lower()
+if AGENT_ENV == "prod":
+    WORKSPACE_ROOT = Path("/data")
+else:
+    WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", Path(__file__).resolve().parent))

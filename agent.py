@@ -11,11 +11,18 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import urlopen
 from typing import Callable
+import re
 
 import config
 from approval import ApprovalGate, classify_action
 from llm_client import LLMClient
-from safety import git_auto_commit, git_checkpoint, git_revert_to_checkpoint, is_constitution_file
+from safety import (
+    ModificationRateLimiter,
+    git_auto_commit,
+    git_checkpoint,
+    git_revert_to_checkpoint,
+    is_constitution_file,
+)
 from sandbox import SandboxExecutor
 from tools import BASH_TOOL, format_tool_result
 
@@ -42,6 +49,13 @@ def _extract_target_files(command: str) -> list[str]:
     return files
 
 
+def _is_modification_command(command: str, target_files: list[str]) -> bool:
+    lowered = command.strip().lower()
+    if target_files:
+        return True
+    return bool(re.search(r"(>>|>|\brm\b|\bmv\b|\bcp\b|\btouch\b|\bsed\s+-i)", lowered))
+
+
 @dataclass(slots=True)
 class ImprovementTask:
     id: str
@@ -56,11 +70,13 @@ class Agent:
         sandbox: SandboxExecutor,
         approval_gate: ApprovalGate,
         on_status: Callable[[str], None] | None = None,
+        rate_limiter: ModificationRateLimiter | None = None,
     ) -> None:
         self.llm_client = llm_client
         self.sandbox = sandbox
         self.approval_gate = approval_gate
         self.on_status = on_status
+        self.rate_limiter = rate_limiter or ModificationRateLimiter()
         self._system_prompt = self._build_system_prompt()
         self._base_messages: list[dict[str, object]] = []
 
@@ -109,6 +125,8 @@ class Agent:
                 target_files = _extract_target_files(command)
                 if any(is_constitution_file(path) for path in target_files):
                     result_text = "Blocked: constitution file modification is not allowed."
+                elif _is_modification_command(command, target_files) and not self.rate_limiter.can_modify():
+                    result_text = "Blocked: self-modification rate limit reached."
                 else:
                     tier = classify_action(command, target_files)
                     allowed = self.approval_gate.request_approval(command, tier)
@@ -116,6 +134,8 @@ class Agent:
                         result_text = "Blocked: approval denied or timed out."
                     else:
                         execution = self.sandbox.execute(command=command, timeout=config.COMMAND_TIMEOUT)
+                        if _is_modification_command(command, target_files):
+                            self.rate_limiter.record_modification()
                         result_text = f"exit={execution.exit_code}\nstdout:\n{execution.stdout}\nstderr:\n{execution.stderr}"
 
                 messages.append(

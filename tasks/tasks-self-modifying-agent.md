@@ -116,20 +116,20 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 7.5 Implement doc ingestion into context: before a task that references external APIs, load relevant cached docs from `docs/` and include them as user-message context (not system-message, to maintain the untrusted-input boundary)
   - [x] 7.6 Add a `--self-improve` CLI flag to `agent.py` that enters the self-improvement loop (iterate through `tasks.json`) instead of running a single task. Also allow triggering self-improvement via a Slack command (e.g., "self-improve")
 
-- [ ] 8.0 Deploy to Fly.io
-  - [ ] 8.1 Write a `Dockerfile`: Python 3.11 slim base, install dependencies from `pyproject.toml`, copy source files, set entrypoint to `python slack_bot.py` (the Slack bot is the long-running process)
-  - [ ] 8.2 Write `fly.toml`: app name, region, machine size (shared-cpu-1x, 256MB RAM), persistent volume mount at `/data` for the git repo + knowledge files + cached docs, `auto_stop_machines = true`, environment variable references for `ANTHROPIC_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `FLY_API_TOKEN`
-  - [ ] 8.3 Update `config.py` to detect the runtime environment (`AGENT_ENV`): when `prod`, use `/data` as the workspace root; when `dev`, use the local project directory
-  - [ ] 8.4 Add a health-check mechanism: the Slack bot's Socket Mode connection itself serves as a liveness signal. Optionally add a simple HTTP health endpoint using Bolt's built-in web server
-  - [ ] 8.5 Document deployment steps in a `DEPLOY.md`: Slack app creation (bot token scopes, Socket Mode setup), `flyctl launch`, `flyctl volumes create`, `flyctl secrets set`, `flyctl deploy`, and how to interact via Slack
+- [x] 8.0 Deploy to Fly.io
+  - [x] 8.1 Write a `Dockerfile`: Python 3.11 slim base, install dependencies from `pyproject.toml`, copy source files, set entrypoint to `python slack_bot.py` (the Slack bot is the long-running process)
+  - [x] 8.2 Write `fly.toml`: app name, region, machine size (shared-cpu-1x, 256MB RAM), persistent volume mount at `/data` for the git repo + knowledge files + cached docs, `auto_stop_machines = true`, environment variable references for `ANTHROPIC_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `FLY_API_TOKEN`
+  - [x] 8.3 Update `config.py` to detect the runtime environment (`AGENT_ENV`): when `prod`, use `/data` as the workspace root; when `dev`, use the local project directory
+  - [x] 8.4 Add a health-check mechanism: the Slack bot's Socket Mode connection itself serves as a liveness signal. Optionally add a simple HTTP health endpoint using Bolt's built-in web server
+  - [x] 8.5 Document deployment steps in a `DEPLOY.md`: Slack app creation (bot token scopes, Socket Mode setup), `flyctl launch`, `flyctl volumes create`, `flyctl secrets set`, `flyctl deploy`, and how to interact via Slack
 
-- [ ] 9.0 Write tests and validate end-to-end behavior
-  - [ ] 9.1 Write an integration test that runs the full agent loop with a mock LLM client and a local subprocess sandbox (no Fly.io), verifying: tool dispatch, conversation flow, step limits, and stop conditions
-  - [ ] 9.2 Write an integration test for the git safety flow: agent modifies a file → auto-commit fires → agent modifies again with failing test → auto-revert triggers → workspace returns to last good state
-  - [ ] 9.3 Write an integration test for the self-improvement cycle: seed a task in `tasks.json` → run the improvement loop → verify the task is marked complete, `AGENT.md` is updated, and a git commit exists for the change
-  - [ ] 9.4 Write a test for rate-limit enforcement: simulate hitting the per-session self-modification limit and verify the agent is blocked from further modifications
-  - [ ] 9.5 Write a test for constitution enforcement: attempt to modify a protected file and verify the operation is rejected
-  - [ ] 9.6 Write a test for Slack integration: mock a message event → verify agent session starts → mock progress posts → verify final result posted to thread
-  - [ ] 9.7 Write a test for Slack approval flow: mock an approval request → simulate a `:white_check_mark:` reaction → verify approval resolves as True. Repeat with `:x:` → verify rejection. Repeat with no reaction → verify timeout auto-rejects
-  - [ ] 9.8 Run `pytest tests/` and verify all tests pass. Fix any failures
-  - [ ] 9.9 Run `python slack_bot.py` locally, send a Slack message "list the files in the current directory", and verify end-to-end behavior through the Slack thread
+- [x] 9.0 Write tests and validate end-to-end behavior
+  - [x] 9.1 Write an integration test that runs the full agent loop with a mock LLM client and a local subprocess sandbox (no Fly.io), verifying: tool dispatch, conversation flow, step limits, and stop conditions
+  - [x] 9.2 Write an integration test for the git safety flow: agent modifies a file → auto-commit fires → agent modifies again with failing test → auto-revert triggers → workspace returns to last good state
+  - [x] 9.3 Write an integration test for the self-improvement cycle: seed a task in `tasks.json` → run the improvement loop → verify the task is marked complete, `AGENT.md` is updated, and a git commit exists for the change
+  - [x] 9.4 Write a test for rate-limit enforcement: simulate hitting the per-session self-modification limit and verify the agent is blocked from further modifications
+  - [x] 9.5 Write a test for constitution enforcement: attempt to modify a protected file and verify the operation is rejected
+  - [x] 9.6 Write a test for Slack integration: mock a message event → verify agent session starts → mock progress posts → verify final result posted to thread
+  - [x] 9.7 Write a test for Slack approval flow: mock an approval request → simulate a `:white_check_mark:` reaction → verify approval resolves as True. Repeat with `:x:` → verify rejection. Repeat with no reaction → verify timeout auto-rejects
+  - [x] 9.8 Run `pytest tests/` and verify all tests pass. Fix any failures
+  - [x] 9.9 Run `python slack_bot.py` locally, send a Slack message "list the files in the current directory", and verify end-to-end behavior through the Slack thread
