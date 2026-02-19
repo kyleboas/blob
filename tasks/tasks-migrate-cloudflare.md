@@ -67,26 +67,26 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 2.4 Write unit tests in `src/llm.test.ts`: test API request formation, model routing, error handling (rate limits, API errors), and response parsing.
   - [x] 2.5 Write unit tests in `src/tools.test.ts`: test tool schema validity, output truncation, and tool result formatting.
 
-- [ ] 3.0 Implement sandbox client
-  - [ ] 3.1 Create `src/sandbox-client.ts`: implement `SandboxClient` class that wraps the Sandbox SDK. Methods: `exec(command, timeout?)`, `writeFile(path, content)`, `readFile(path)`, `fileExists(path)`.
-  - [ ] 3.2 Implement timeout enforcement in `exec()`: kill long-running commands after `COMMAND_TIMEOUT` seconds, return timeout error message.
-  - [ ] 3.3 Implement output truncation in `exec()`: cap stdout/stderr to a configurable max length (e.g., 10,000 chars) to avoid blowing up the LLM context.
-  - [ ] 3.4 Implement command-injection detection: port the pattern checks from Python `sandbox.py` (block commands containing `$(`, backticks targeting sensitive paths, etc.) — enforce in the orchestration layer before sending to sandbox.
-  - [ ] 3.5 Write unit tests in `src/sandbox-client.test.ts`: test exec calls, timeout handling, output truncation, and command validation. Mock the Sandbox SDK binding.
+- [x] 3.0 Implement sandbox client
+  - [x] 3.1 Create `src/sandbox-client.ts`: implement `SandboxClient` class that wraps the Sandbox SDK. Methods: `exec(command, timeout?)`, `writeFile(path, content)`, `readFile(path)`, `fileExists(path)`.
+  - [x] 3.2 Implement timeout enforcement in `exec()`: kill long-running commands after `COMMAND_TIMEOUT` seconds, return timeout error message.
+  - [x] 3.3 Implement output truncation in `exec()`: cap stdout/stderr to a configurable max length (e.g., 10,000 chars) to avoid blowing up the LLM context.
+  - [x] 3.4 Implement command-injection detection: port the pattern checks from Python `sandbox.py` (block commands containing `$(`, backticks targeting sensitive paths, etc.) — enforce in the orchestration layer before sending to sandbox.
+  - [x] 3.5 Write unit tests in `src/sandbox-client.test.ts`: test exec calls, timeout handling, output truncation, and command validation. Mock the Sandbox SDK binding.
 
-- [ ] 4.0 Implement storage layer (DO SQLite + R2)
-  - [ ] 4.1 Create `src/storage.ts`: define the DO SQLite schema — tables for `conversation_messages`, `agent_state`, `rate_limits`, `approval_log`, `knowledge`.
-  - [ ] 4.2 Implement SQLite helper functions: `initSchema(sql)`, `saveMessage(sql, msg)`, `getHistory(sql, threadId)`, `incrementRateLimit(sql, scope, key)`, `getRateLimit(sql, scope, key)`, `saveKnowledge(sql, content)`, `getKnowledge(sql)`.
-  - [ ] 4.3 Implement R2 helper functions: `saveRepoSnapshot(r2, sessionId, sandbox)` — reads key workspace files from sandbox and stores them in R2. `restoreRepoSnapshot(r2, sessionId, sandbox)` — writes stored files back to the sandbox container.
-  - [ ] 4.4 Implement knowledge persistence: `syncKnowledgeToSandbox(sql, sandbox)` — reads knowledge from DO SQLite and writes it as `AGENT.md` in the sandbox workspace. `syncKnowledgeFromSandbox(sql, sandbox)` — reads `AGENT.md` from sandbox and updates DO SQLite.
-  - [ ] 4.5 Write unit tests in `src/storage.test.ts`: test schema initialization, CRUD operations for all tables, R2 save/restore logic (mock R2 binding), knowledge sync.
+- [x] 4.0 Implement storage layer (DO SQLite + R2)
+  - [x] 4.1 Create `src/storage.ts`: define the DO SQLite schema — tables for `conversation_messages`, `agent_state`, `rate_limits`, `approval_log`, `knowledge`.
+  - [x] 4.2 Implement SQLite helper functions: `initSchema(sql)`, `saveMessage(sql, msg)`, `getHistory(sql, threadId)`, `incrementRateLimit(sql, scope, key)`, `getRateLimit(sql, scope, key)`, `saveKnowledge(sql, content)`, `getKnowledge(sql)`.
+  - [x] 4.3 Implement R2 helper functions: `saveRepoSnapshot(r2, sessionId, sandbox)` — reads key workspace files from sandbox and stores them in R2. `restoreRepoSnapshot(r2, sessionId, sandbox)` — writes stored files back to the sandbox container.
+  - [x] 4.4 Implement knowledge persistence: `syncKnowledgeToSandbox(sql, sandbox)` — reads knowledge from DO SQLite and writes it as `AGENT.md` in the sandbox workspace. `syncKnowledgeFromSandbox(sql, sandbox)` — reads `AGENT.md` from sandbox and updates DO SQLite.
+  - [x] 4.5 Write unit tests in `src/storage.test.ts`: test schema initialization, CRUD operations for all tables, R2 save/restore logic (mock R2 binding), knowledge sync.
 
-- [ ] 5.0 Implement safety enforcement in orchestration layer
-  - [ ] 5.1 Create `src/safety.ts`: implement `checkRateLimit(sql, sessionId)` — queries DO SQLite for session and daily self-modification counts, returns allow/deny.
-  - [ ] 5.2 Implement `classifyCommand(command)` — categorize a bash command as: `auto_approve` (read-only, e.g., `cat`, `ls`, `git status`), `conditional` (workspace writes), or `requires_approval` (modifies protected files, destructive git operations).
-  - [ ] 5.3 Implement `checkConstitution(command, files)` — given a command and the files it may affect, check if any protected files are being modified. Return the list of violations.
-  - [ ] 5.4 Implement `enforeSafety(command, sql, sessionId)` — orchestrate rate limit check, command classification, and constitution check. Return a decision: `{ allowed: boolean, reason?: string, requiresApproval?: boolean }`.
-  - [ ] 5.5 Write unit tests in `src/safety.test.ts`: test rate limit enforcement (within limits, at limits, over limits), command classification for various commands, constitution violation detection, and the combined `enforceSafety` flow.
+- [x] 5.0 Implement safety enforcement in orchestration layer
+  - [x] 5.1 Create `src/safety.ts`: implement `checkRateLimit(sql, sessionId)` — queries DO SQLite for session and daily self-modification counts, returns allow/deny.
+  - [x] 5.2 Implement `classifyCommand(command)` — categorize a bash command as: `auto_approve` (read-only, e.g., `cat`, `ls`, `git status`), `conditional` (workspace writes), or `requires_approval` (modifies protected files, destructive git operations).
+  - [x] 5.3 Implement `checkConstitution(command, files)` — given a command and the files it may affect, check if any protected files are being modified. Return the list of violations.
+  - [x] 5.4 Implement `enforeSafety(command, sql, sessionId)` — orchestrate rate limit check, command classification, and constitution check. Return a decision: `{ allowed: boolean, reason?: string, requiresApproval?: boolean }`.
+  - [x] 5.5 Write unit tests in `src/safety.test.ts`: test rate limit enforcement (within limits, at limits, over limits), command classification for various commands, constitution violation detection, and the combined `enforceSafety` flow.
 
 - [ ] 6.0 Implement Slack integration (Events API)
   - [ ] 6.1 Create `src/slack.ts`: implement `verifySlackSignature(request, signingSecret)` — verify the `x-slack-signature` and `x-slack-request-timestamp` headers against the request body using HMAC-SHA256.
