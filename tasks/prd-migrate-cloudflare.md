@@ -41,7 +41,7 @@ This project migrates Blob from its single-VM Fly.io deployment to Cloudflare's 
 
 1. **The system must** implement a TypeScript Worker entry point that handles incoming HTTP requests (Slack Events API webhooks, health checks).
 2. **The system must** implement a Durable Object (using the Agents SDK `Agent` base class) that manages the full agent lifecycle: receiving tasks, calling the LLM, dispatching tool executions, and returning results.
-3. **The system must** call the Anthropic API from the orchestration layer using `fetch()`, supporting both Haiku 4.5 (routine) and Sonnet 4.5 (complex) model routing, with prompt caching.
+3. **The system must** call the Anthropic API from the orchestration layer using `fetch()`, supporting both Haiku 4.5 (routine) and Sonnet 4.6 (complex) model routing, with prompt caching.
 4. **The system must** implement the bash tool by forwarding commands to a Sandbox container via the Sandbox SDK (`sandbox.exec()`), with timeout enforcement and output truncation.
 5. **The system must** manage sandbox container lifecycle: create on task start, keep alive during execution, allow scale-to-zero on idle.
 6. **The system must** persist agent state (conversation history, task logs, rate limit counters, approval records) in DO SQLite.

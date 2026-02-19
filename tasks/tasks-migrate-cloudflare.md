@@ -63,7 +63,7 @@ Update the file after completing each sub-task, not just after completing an ent
 - [ ] 2.0 Implement LLM client and tool definitions
   - [ ] 2.1 Create `src/tools.ts`: define the bash tool JSON schema (matching Anthropic's tool_use format), implement `formatToolResult()` helper for truncating output and formatting responses.
   - [ ] 2.2 Create `src/llm.ts`: implement `callLLM()` function that calls the Anthropic Messages API via `fetch()`. Support parameters: model selection (routine vs complex), system prompt, conversation messages, tools array, prompt caching headers.
-  - [ ] 2.3 Implement model routing logic in `src/llm.ts`: use `MODEL_ROUTINE` (Haiku 4.5) by default, escalate to `MODEL_COMPLEX` (Sonnet 4.5) when the system prompt or tool call indicates complex reasoning.
+  - [ ] 2.3 Implement model routing logic in `src/llm.ts`: use `MODEL_ROUTINE` (Haiku 4.5) by default, escalate to `MODEL_COMPLEX` (Sonnet 4.6) when the system prompt or tool call indicates complex reasoning.
   - [ ] 2.4 Write unit tests in `src/llm.test.ts`: test API request formation, model routing, error handling (rate limits, API errors), and response parsing.
   - [ ] 2.5 Write unit tests in `src/tools.test.ts`: test tool schema validity, output truncation, and tool result formatting.
 
