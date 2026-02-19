@@ -1,5 +1,5 @@
 import { Agent } from "@cloudflare/agents";
-import { APPROVAL_TIMEOUT_MINUTES, MAX_STEPS } from "./config";
+import { MAX_STEPS } from "./config";
 import { callLLM, type LLMResponse } from "./llm";
 import { enforceSafety } from "./safety";
 import { SandboxClient, type SandboxBinding } from "./sandbox-client";
@@ -16,11 +16,13 @@ import {
 } from "./storage";
 import { BASH_TOOL, formatToolResult } from "./tools";
 import { postApprovalRequest, postMessage } from "./slack";
+import { createApprovalRequest, expireTimedOutApprovals, resolveApprovalReaction, type PendingApproval } from "./approval";
 import type { Env, SlackEvent } from "./types";
 
 interface DurableObjectStateLike {
   storage: {
     sql: SqlStorage;
+    setAlarm?: (scheduledTime: number | Date) => Promise<void> | void;
   };
 }
 
@@ -54,7 +56,7 @@ export class AgentDO extends Agent {
   private readonly sql: SqlStorage;
   private readonly sandbox: SandboxClient;
   private readonly deps: AgentDeps;
-  private pendingApprovals = new Map<string, { command: string; channel: string; threadTs: string }>();
+  private pendingApprovals = new Map<string, PendingApproval>();
 
   constructor(private readonly state: DurableObjectStateLike, private readonly env: Env, deps: Partial<AgentDeps> = {}) {
     super(state, env);
@@ -148,12 +150,17 @@ export class AgentDO extends Agent {
     const safety = enforceSafety(command, this.sql, sessionId, []);
 
     if (!safety.allowed && safety.requiresApproval) {
-      this.pendingApprovals.set(threadTs, { command, channel, threadTs });
-      await this.deps.postSlackApproval(
+      await createApprovalRequest(
+        this.pendingApprovals,
+        {
+          sessionId,
+          command,
+          channel,
+          threadTs
+        },
+        this.deps,
         this.env.SLACK_BOT_TOKEN,
-        channel,
-        threadTs,
-        `The agent wants to run:\n\`${command}\``
+        this.state.storage
       );
       return {
         done: true,
@@ -205,34 +212,13 @@ export class AgentDO extends Agent {
   }
 
   private async handleApprovalReaction(event: SlackEvent): Promise<void> {
-    const threadTs = event.thread_ts ?? event.ts;
-    if (!threadTs) {
-      return;
-    }
-
-    const pending = this.pendingApprovals.get(threadTs);
-    if (!pending) {
-      return;
-    }
-
-    if (event.reaction === "thumbsup") {
-      this.pendingApprovals.delete(threadTs);
-      const result = await this.sandbox.exec(pending.command);
-      await this.deps.postSlackMessage(
-        this.env.SLACK_BOT_TOKEN,
-        pending.channel,
-        `Approval received. Command finished with exit code ${result.exitCode}.`,
-        pending.threadTs
-      );
-      return;
-    }
-
-    this.pendingApprovals.delete(threadTs);
-    await this.deps.postSlackMessage(
+    await resolveApprovalReaction(
+      event,
+      this.pendingApprovals,
+      this.deps,
       this.env.SLACK_BOT_TOKEN,
-      pending.channel,
-      "Approval denied. I did not execute the command.",
-      pending.threadTs
+      this.sql,
+      async (command) => this.executeWithGitSafety(command)
     );
   }
 
@@ -247,19 +233,6 @@ export class AgentDO extends Agent {
   }
 
   async alarm(): Promise<void> {
-    const timeoutMs = APPROVAL_TIMEOUT_MINUTES * 60 * 1000;
-    const now = this.deps.now();
-
-    for (const [threadTs, pending] of this.pendingApprovals.entries()) {
-      if (now - Number(threadTs.split(".")[0]) * 1000 > timeoutMs) {
-        this.pendingApprovals.delete(threadTs);
-        await this.deps.postSlackMessage(
-          this.env.SLACK_BOT_TOKEN,
-          pending.channel,
-          "Approval timed out. Command was not executed.",
-          pending.threadTs
-        );
-      }
-    }
+    await expireTimedOutApprovals(this.pendingApprovals, this.deps, this.env.SLACK_BOT_TOKEN, this.sql);
   }
 }
