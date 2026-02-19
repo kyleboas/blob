@@ -46,26 +46,26 @@ Update the file after completing each sub-task, not just after completing an ent
 
 ## Tasks
 
-- [ ] 0.0 Create feature branch
-  - [ ] 0.1 Create and checkout a new branch for this feature (e.g., `git checkout -b feature/migrate-cloudflare`)
+- [x] 0.0 Create feature branch
+  - [x] 0.1 Create and checkout a new branch for this feature (e.g., `git checkout -b feature/migrate-cloudflare`)
 
-- [ ] 1.0 Initialize Cloudflare Worker project
-  - [ ] 1.1 Run `npm init -y` in project root to create `package.json` (or update existing if present). Add `"type": "module"` and set `"main": "src/index.ts"`.
-  - [ ] 1.2 Install core dependencies: `wrangler`, `@cloudflare/agents`, `@cloudflare/sandbox` (check latest package names from Cloudflare docs).
-  - [ ] 1.3 Install dev dependencies: `typescript`, `vitest`, `@cloudflare/vitest-pool-workers`, `@cloudflare/workers-types`.
-  - [ ] 1.4 Create `tsconfig.json` with Cloudflare Workers-compatible settings (target: ESNext, module: ESNext, moduleResolution: bundler, types: `@cloudflare/workers-types`).
-  - [ ] 1.5 Create `vitest.config.ts` configured for Workers pool (`@cloudflare/vitest-pool-workers`).
-  - [ ] 1.6 Create `wrangler.toml` with: Worker name (`blob-agent`), compatibility date, Durable Object binding (AgentDO), R2 bucket binding (`REPO_STORE`), Sandbox binding, and secret references (`ANTHROPIC_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`).
-  - [ ] 1.7 Create `src/types.ts` with shared type definitions: `Env` interface (Worker bindings), `AgentState`, `ConversationMessage`, `ToolCall`, `ToolResult`, `SlackEvent`.
-  - [ ] 1.8 Create `src/config.ts` with configuration constants ported from Python `config.py`: `MAX_STEPS`, `COMMAND_TIMEOUT`, `MEMORY_LIMIT_MB`, `SELF_MODIFY_LIMIT_SESSION`, `SELF_MODIFY_LIMIT_DAY`, `APPROVAL_TIMEOUT_MINUTES`, `MODEL_ROUTINE`, `MODEL_COMPLEX`, `PROTECTED_FILES`.
-  - [ ] 1.9 Verify the project compiles with `npx wrangler deploy --dry-run` (or `npx tsc --noEmit`).
+- [x] 1.0 Initialize Cloudflare Worker project
+  - [x] 1.1 Run `npm init -y` in project root to create `package.json` (or update existing if present). Add `"type": "module"` and set `"main": "src/index.ts"`.
+  - [x] 1.2 Install core dependencies: `wrangler`, `@cloudflare/agents`, `@cloudflare/sandbox` (check latest package names from Cloudflare docs).
+  - [x] 1.3 Install dev dependencies: `typescript`, `vitest`, `@cloudflare/vitest-pool-workers`, `@cloudflare/workers-types`.
+  - [x] 1.4 Create `tsconfig.json` with Cloudflare Workers-compatible settings (target: ESNext, module: ESNext, moduleResolution: bundler, types: `@cloudflare/workers-types`).
+  - [x] 1.5 Create `vitest.config.ts` configured for Workers pool (`@cloudflare/vitest-pool-workers`).
+  - [x] 1.6 Create `wrangler.toml` with: Worker name (`blob-agent`), compatibility date, Durable Object binding (AgentDO), R2 bucket binding (`REPO_STORE`), Sandbox binding, and secret references (`ANTHROPIC_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`).
+  - [x] 1.7 Create `src/types.ts` with shared type definitions: `Env` interface (Worker bindings), `AgentState`, `ConversationMessage`, `ToolCall`, `ToolResult`, `SlackEvent`.
+  - [x] 1.8 Create `src/config.ts` with configuration constants ported from Python `config.py`: `MAX_STEPS`, `COMMAND_TIMEOUT`, `MEMORY_LIMIT_MB`, `SELF_MODIFY_LIMIT_SESSION`, `SELF_MODIFY_LIMIT_DAY`, `APPROVAL_TIMEOUT_MINUTES`, `MODEL_ROUTINE`, `MODEL_COMPLEX`, `PROTECTED_FILES`.
+  - [x] 1.9 Verify the project compiles with `npx wrangler deploy --dry-run` (or `npx tsc --noEmit`).
 
-- [ ] 2.0 Implement LLM client and tool definitions
-  - [ ] 2.1 Create `src/tools.ts`: define the bash tool JSON schema (matching Anthropic's tool_use format), implement `formatToolResult()` helper for truncating output and formatting responses.
-  - [ ] 2.2 Create `src/llm.ts`: implement `callLLM()` function that calls the Anthropic Messages API via `fetch()`. Support parameters: model selection (routine vs complex), system prompt, conversation messages, tools array, prompt caching headers.
-  - [ ] 2.3 Implement model routing logic in `src/llm.ts`: use `MODEL_ROUTINE` (Haiku 4.5) by default, escalate to `MODEL_COMPLEX` (Sonnet 4.6) when the system prompt or tool call indicates complex reasoning.
-  - [ ] 2.4 Write unit tests in `src/llm.test.ts`: test API request formation, model routing, error handling (rate limits, API errors), and response parsing.
-  - [ ] 2.5 Write unit tests in `src/tools.test.ts`: test tool schema validity, output truncation, and tool result formatting.
+- [x] 2.0 Implement LLM client and tool definitions
+  - [x] 2.1 Create `src/tools.ts`: define the bash tool JSON schema (matching Anthropic's tool_use format), implement `formatToolResult()` helper for truncating output and formatting responses.
+  - [x] 2.2 Create `src/llm.ts`: implement `callLLM()` function that calls the Anthropic Messages API via `fetch()`. Support parameters: model selection (routine vs complex), system prompt, conversation messages, tools array, prompt caching headers.
+  - [x] 2.3 Implement model routing logic in `src/llm.ts`: use `MODEL_ROUTINE` (Haiku 4.5) by default, escalate to `MODEL_COMPLEX` (Sonnet 4.6) when the system prompt or tool call indicates complex reasoning.
+  - [x] 2.4 Write unit tests in `src/llm.test.ts`: test API request formation, model routing, error handling (rate limits, API errors), and response parsing.
+  - [x] 2.5 Write unit tests in `src/tools.test.ts`: test tool schema validity, output truncation, and tool result formatting.
 
 - [ ] 3.0 Implement sandbox client
   - [ ] 3.1 Create `src/sandbox-client.ts`: implement `SandboxClient` class that wraps the Sandbox SDK. Methods: `exec(command, timeout?)`, `writeFile(path, content)`, `readFile(path)`, `fileExists(path)`.
