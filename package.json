@@ -11,7 +11,7 @@
     "deploy:dry-run": "wrangler deploy --dry-run"
   },
   "dependencies": {
-    "@cloudflare/agents": "^0.0.20",
+    "@cloudflare/agents": "latest",
     "@cloudflare/sandbox": "^0.1.0",
     "wrangler": "^4.34.0"
   },
