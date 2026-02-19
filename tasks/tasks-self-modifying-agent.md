@@ -99,22 +99,22 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 5.10 Write `tests/test_safety.py`: test auto-commit (mock git), checkpoint/revert flow, rate limiter counting and rejection, constitution file detection
   - [x] 5.11 Write `tests/test_approval.py`: test tier classification for read-only, workspace-edit, and core-file-edit commands. Test `SlackApprovalGate` with a mocked Slack client (mock posting approval message, simulate reaction events, test timeout behavior)
 
-- [ ] 6.0 Build the Slack bot and session management
-  - [ ] 6.1 Create `slack_bot.py` using Slack Bolt (Socket Mode): initialize the app with `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`, register event listeners
-  - [ ] 6.2 Implement the `message` event handler: when a message is received in the designated channel (or DM), acknowledge it, post a threaded reply ("Starting session..."), and spawn the agent loop as a background task with the message text as the task
-  - [ ] 6.3 Wire the agent's `on_status` callback to post progress updates to the Slack thread (e.g., "Step 3/25: Running `pytest tests/`...")
-  - [ ] 6.4 Post the agent's final result (success summary or failure/error) back to the Slack thread when the session completes
-  - [ ] 6.5 Implement thread-to-session mapping: maintain a dict of `{thread_ts: session}` to ensure each thread maps to exactly one agent session and prevent cross-talk
-  - [ ] 6.6 Wire `SlackApprovalGate` into the bot: when an approval is needed, the gate posts to the thread and the bot listens for reaction_added events on that message to resolve the approval future
-  - [ ] 6.7 Write `tests/test_slack_bot.py`: test message event dispatching, thread mapping, progress posting, and approval reaction handling with a mocked Slack client
+- [x] 6.0 Build the Slack bot and session management
+  - [x] 6.1 Create `slack_bot.py` using Slack Bolt (Socket Mode): initialize the app with `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`, register event listeners
+  - [x] 6.2 Implement the `message` event handler: when a message is received in the designated channel (or DM), acknowledge it, post a threaded reply ("Starting session..."), and spawn the agent loop as a background task with the message text as the task
+  - [x] 6.3 Wire the agent's `on_status` callback to post progress updates to the Slack thread (e.g., "Step 3/25: Running `pytest tests/`...")
+  - [x] 6.4 Post the agent's final result (success summary or failure/error) back to the Slack thread when the session completes
+  - [x] 6.5 Implement thread-to-session mapping: maintain a dict of `{thread_ts: session}` to ensure each thread maps to exactly one agent session and prevent cross-talk
+  - [x] 6.6 Wire `SlackApprovalGate` into the bot: when an approval is needed, the gate posts to the thread and the bot listens for reaction_added events on that message to resolve the approval future
+  - [x] 6.7 Write `tests/test_slack_bot.py`: test message event dispatching, thread mapping, progress posting, and approval reaction handling with a mocked Slack client
 
-- [ ] 7.0 Build the self-improvement loop and documentation ingestion
-  - [ ] 7.1 Implement task queue reader: load `tasks.json`, pick the next incomplete task, mark it in-progress, and pass it to the agent loop as the task description
-  - [ ] 7.2 Implement the improvement cycle wrapper: for each task — create a checkpoint → run the agent loop → run `pytest tests/` inside the sandbox → if tests pass, commit and update `AGENT.md` → if tests fail, revert to checkpoint and log the failure
-  - [ ] 7.3 Implement `AGENT.md` update logic: after a successful task, append a session entry with timestamp, task description, what changed, and any patterns/gotchas the agent discovered (extracted from the agent's final response)
-  - [ ] 7.4 Implement documentation fetcher: a function that fetches a URL (from the allowlist only), converts HTML to markdown, and saves it to `docs/<domain>/<path>.md`. Run fetches inside the sandbox to isolate network access
-  - [ ] 7.5 Implement doc ingestion into context: before a task that references external APIs, load relevant cached docs from `docs/` and include them as user-message context (not system-message, to maintain the untrusted-input boundary)
-  - [ ] 7.6 Add a `--self-improve` CLI flag to `agent.py` that enters the self-improvement loop (iterate through `tasks.json`) instead of running a single task. Also allow triggering self-improvement via a Slack command (e.g., "self-improve")
+- [x] 7.0 Build the self-improvement loop and documentation ingestion
+  - [x] 7.1 Implement task queue reader: load `tasks.json`, pick the next incomplete task, mark it in-progress, and pass it to the agent loop as the task description
+  - [x] 7.2 Implement the improvement cycle wrapper: for each task — create a checkpoint → run the agent loop → run `pytest tests/` inside the sandbox → if tests pass, commit and update `AGENT.md` → if tests fail, revert to checkpoint and log the failure
+  - [x] 7.3 Implement `AGENT.md` update logic: after a successful task, append a session entry with timestamp, task description, what changed, and any patterns/gotchas the agent discovered (extracted from the agent's final response)
+  - [x] 7.4 Implement documentation fetcher: a function that fetches a URL (from the allowlist only), converts HTML to markdown, and saves it to `docs/<domain>/<path>.md`. Run fetches inside the sandbox to isolate network access
+  - [x] 7.5 Implement doc ingestion into context: before a task that references external APIs, load relevant cached docs from `docs/` and include them as user-message context (not system-message, to maintain the untrusted-input boundary)
+  - [x] 7.6 Add a `--self-improve` CLI flag to `agent.py` that enters the self-improvement loop (iterate through `tasks.json`) instead of running a single task. Also allow triggering self-improvement via a Slack command (e.g., "self-improve")
 
 - [ ] 8.0 Deploy to Fly.io
   - [ ] 8.1 Write a `Dockerfile`: Python 3.11 slim base, install dependencies from `pyproject.toml`, copy source files, set entrypoint to `python slack_bot.py` (the Slack bot is the long-running process)
