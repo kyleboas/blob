@@ -88,24 +88,24 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 5.4 Implement `enforeSafety(command, sql, sessionId)` — orchestrate rate limit check, command classification, and constitution check. Return a decision: `{ allowed: boolean, reason?: string, requiresApproval?: boolean }`.
   - [x] 5.5 Write unit tests in `src/safety.test.ts`: test rate limit enforcement (within limits, at limits, over limits), command classification for various commands, constitution violation detection, and the combined `enforceSafety` flow.
 
-- [ ] 6.0 Implement Slack integration (Events API)
-  - [ ] 6.1 Create `src/slack.ts`: implement `verifySlackSignature(request, signingSecret)` — verify the `x-slack-signature` and `x-slack-request-timestamp` headers against the request body using HMAC-SHA256.
-  - [ ] 6.2 Implement `parseSlackEvent(body)` — parse incoming Slack Events API payloads. Handle `url_verification` challenges, `event_callback` with `message` events, and `reaction_added` events.
-  - [ ] 6.3 Implement `postMessage(token, channel, text, threadTs?)` — post a message to Slack via the `chat.postMessage` API using `fetch()`.
-  - [ ] 6.4 Implement `postApprovalRequest(token, channel, threadTs, description)` — post a message asking for approval with instructions to react with thumbsup/thumbsdown.
-  - [ ] 6.5 Implement `mapThreadToDO(threadTs)` — derive a Durable Object ID from a Slack thread timestamp (deterministic mapping so the same thread always routes to the same DO).
-  - [ ] 6.6 Write unit tests in `src/slack.test.ts`: test signature verification (valid, invalid, expired), event parsing for all event types, message posting (mock fetch), thread-to-DO mapping consistency.
+- [x] 6.0 Implement Slack integration (Events API)
+  - [x] 6.1 Create `src/slack.ts`: implement `verifySlackSignature(request, signingSecret)` — verify the `x-slack-signature` and `x-slack-request-timestamp` headers against the request body using HMAC-SHA256.
+  - [x] 6.2 Implement `parseSlackEvent(body)` — parse incoming Slack Events API payloads. Handle `url_verification` challenges, `event_callback` with `message` events, and `reaction_added` events.
+  - [x] 6.3 Implement `postMessage(token, channel, text, threadTs?)` — post a message to Slack via the `chat.postMessage` API using `fetch()`.
+  - [x] 6.4 Implement `postApprovalRequest(token, channel, threadTs, description)` — post a message asking for approval with instructions to react with thumbsup/thumbsdown.
+  - [x] 6.5 Implement `mapThreadToDO(threadTs)` — derive a Durable Object ID from a Slack thread timestamp (deterministic mapping so the same thread always routes to the same DO).
+  - [x] 6.6 Write unit tests in `src/slack.test.ts`: test signature verification (valid, invalid, expired), event parsing for all event types, message posting (mock fetch), thread-to-DO mapping consistency.
 
-- [ ] 7.0 Implement core agent Durable Object
-  - [ ] 7.1 Create `src/agent.ts`: define the `AgentDO` class extending the Agents SDK `Agent` base class. Initialize DO SQLite schema in constructor (or on first request).
-  - [ ] 7.2 Implement the `fetch()` handler on the DO: accept task messages from the Worker, parse the incoming Slack event, and initiate the agent loop.
-  - [ ] 7.3 Implement the ReAct loop: `runAgentLoop(task, threadTs)` — iteratively call the LLM, parse tool calls, enforce safety, execute approved tools via sandbox, append observations, and repeat until the LLM produces a final text response or `MAX_STEPS` is reached.
-  - [ ] 7.4 Implement tool dispatch within the loop: when the LLM returns a `tool_use` block for the bash tool, call `enforceSafety()`, handle approval gates if needed, then execute via `SandboxClient.exec()`.
-  - [ ] 7.5 Implement approval gate flow: when a command `requiresApproval`, post an approval request to Slack, set a DO alarm for the timeout, and pause the loop. On receiving a reaction callback, resume the loop with the approval decision.
-  - [ ] 7.6 Implement session lifecycle: on task start, create/wake the sandbox, restore repo from R2, sync knowledge. On task end, persist repo to R2, sync knowledge back, and post the final result to Slack.
-  - [ ] 7.7 Implement git safety operations: before risky modifications, execute `git add -A && git commit -m "checkpoint"` in the sandbox. After test failures, execute `git revert` or `git reset`. Trigger these from the orchestration layer via sandbox exec calls.
-  - [ ] 7.8 Implement step limiting and conversation management: track step count, enforce `MAX_STEPS`, maintain the conversation messages array, persist to DO SQLite after each step.
-  - [ ] 7.9 Write unit tests in `src/agent.test.ts`: test the ReAct loop with mocked LLM responses and sandbox, test approval gate flow, test rate limit enforcement, test step limiting, test session lifecycle (snapshot save/restore).
+- [x] 7.0 Implement core agent Durable Object
+  - [x] 7.1 Create `src/agent.ts`: define the `AgentDO` class extending the Agents SDK `Agent` base class. Initialize DO SQLite schema in constructor (or on first request).
+  - [x] 7.2 Implement the `fetch()` handler on the DO: accept task messages from the Worker, parse the incoming Slack event, and initiate the agent loop.
+  - [x] 7.3 Implement the ReAct loop: `runAgentLoop(task, threadTs)` — iteratively call the LLM, parse tool calls, enforce safety, execute approved tools via sandbox, append observations, and repeat until the LLM produces a final text response or `MAX_STEPS` is reached.
+  - [x] 7.4 Implement tool dispatch within the loop: when the LLM returns a `tool_use` block for the bash tool, call `enforceSafety()`, handle approval gates if needed, then execute via `SandboxClient.exec()`.
+  - [x] 7.5 Implement approval gate flow: when a command `requiresApproval`, post an approval request to Slack, set a DO alarm for the timeout, and pause the loop. On receiving a reaction callback, resume the loop with the approval decision.
+  - [x] 7.6 Implement session lifecycle: on task start, create/wake the sandbox, restore repo from R2, sync knowledge. On task end, persist repo to R2, sync knowledge back, and post the final result to Slack.
+  - [x] 7.7 Implement git safety operations: before risky modifications, execute `git add -A && git commit -m "checkpoint"` in the sandbox. After test failures, execute `git revert` or `git reset`. Trigger these from the orchestration layer via sandbox exec calls.
+  - [x] 7.8 Implement step limiting and conversation management: track step count, enforce `MAX_STEPS`, maintain the conversation messages array, persist to DO SQLite after each step.
+  - [x] 7.9 Write unit tests in `src/agent.test.ts`: test the ReAct loop with mocked LLM responses and sandbox, test approval gate flow, test rate limit enforcement, test step limiting, test session lifecycle (snapshot save/restore).
 
 - [ ] 8.0 Implement Worker entry point and wiring
   - [ ] 8.1 Create `src/index.ts`: implement the Worker `fetch()` handler. Route requests: `/slack/events` → Slack event handling, `/health` → health check response.
