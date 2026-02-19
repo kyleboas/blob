@@ -1,0 +1,186 @@
+import { describe, expect, it, vi } from "vitest";
+import { AgentDO } from "./agent";
+import type { Env } from "./types";
+import type { SqlStorage } from "./storage";
+
+class FakeSql implements SqlStorage {
+  private messages: Array<{ id: number; threadId: string; role: string; content: string }> = [];
+  private rateLimits = new Map<string, number>();
+  private knowledge = "";
+  private nextId = 1;
+
+  exec(query: string, ...bindings: Array<string | number | null>) {
+    const normalized = query.trim().replace(/\s+/g, " ");
+    if (normalized.startsWith("CREATE TABLE")) {
+      return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("INSERT INTO conversation_messages")) {
+      this.messages.push({
+        id: this.nextId++,
+        threadId: String(bindings[0]),
+        role: String(bindings[1]),
+        content: String(bindings[2])
+      });
+      return { toArray: () => [] };
+    }
+
+    if (normalized.includes("FROM conversation_messages")) {
+      const threadId = String(bindings[0]);
+      return {
+        toArray: () => this.messages.filter((m) => m.threadId === threadId).map((m) => ({ role: m.role, content: m.content }))
+      };
+    }
+
+    if (normalized.startsWith("INSERT INTO rate_limits")) {
+      const key = `${bindings[0]}:${bindings[1]}`;
+      this.rateLimits.set(key, (this.rateLimits.get(key) ?? 0) + 1);
+      return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("SELECT count FROM rate_limits")) {
+      const key = `${bindings[0]}:${bindings[1]}`;
+      const count = this.rateLimits.get(key);
+      return { toArray: () => (count === undefined ? [] : [{ count }]) };
+    }
+
+    if (normalized.startsWith("INSERT INTO knowledge")) {
+      this.knowledge = String(bindings[1]);
+      return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("SELECT content FROM knowledge")) {
+      return { toArray: () => (this.knowledge ? [{ content: this.knowledge }] : []) };
+    }
+
+    return { toArray: () => [] };
+  }
+}
+
+function makeTestEnv() {
+  const sandbox = {
+    exec: vi.fn().mockResolvedValue({ stdout: "ok", stderr: "", exitCode: 0 }),
+    writeFile: vi.fn().mockResolvedValue(undefined),
+    readFile: vi.fn().mockResolvedValue("knowledge")
+  };
+
+  const r2Store = new Map<string, string>();
+  const env: Env = {
+    AGENT_DO: {} as DurableObjectNamespace,
+    REPO_STORE: {
+      put: vi.fn(async (key: string, value: unknown) => {
+        r2Store.set(key, String(value));
+      }),
+      get: vi.fn(async (key: string) => {
+        const value = r2Store.get(key);
+        if (!value) return null;
+        return { text: async () => value };
+      })
+    } as unknown as R2Bucket,
+    SANDBOX: sandbox as unknown as Fetcher,
+    ANTHROPIC_API_KEY: "key",
+    SLACK_BOT_TOKEN: "token",
+    SLACK_SIGNING_SECRET: "secret"
+  };
+
+  return { env, sandbox };
+}
+
+describe("AgentDO runAgentLoop", () => {
+  it("runs tool call then final response", async () => {
+    const sql = new FakeSql();
+    const { env, sandbox } = makeTestEnv();
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({ content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "ls" } }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "All done" }] });
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runAgentLoop("list files", "C1", "thread-1");
+
+    expect(result.finalText).toBe("All done");
+    expect(sandbox.exec).toHaveBeenCalledWith("ls");
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "All done", "thread-1");
+  });
+
+  it("pauses and requests approval for dangerous commands", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({ content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "rm -rf tmp" } }] });
+    const postSlackApproval = vi.fn().mockResolvedValue(undefined);
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: postSlackApproval as never
+    });
+
+    const result = await agent.runAgentLoop("cleanup", "C1", "1711111111.1111");
+
+    expect(result.finalText).toContain("Paused pending approval");
+    expect(postSlackApproval).toHaveBeenCalledTimes(1);
+  });
+
+  it("enforces max steps", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const llmCall = vi.fn().mockResolvedValue({
+      content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "echo hi" } }]
+    });
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runAgentLoop("loop", "C1", "thread-limit");
+
+    expect(result.finalText).toContain("max steps");
+    expect(result.steps).toBe(25);
+  });
+
+  it("handles approval reaction callbacks", async () => {
+    const sql = new FakeSql();
+    const { env, sandbox } = makeTestEnv();
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: vi.fn().mockResolvedValue({ content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "rm -rf tmp" } }] }) as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn().mockResolvedValue(undefined) as never
+    });
+
+    await agent.fetch(
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "message",
+          event: { type: "message", text: "run", channel: "C1", thread_ts: "1711111111.1111" }
+        })
+      })
+    );
+
+    await agent.fetch(
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "reaction",
+          event: { type: "reaction_added", reaction: "thumbsup", thread_ts: "1711111111.1111" }
+        })
+      })
+    );
+
+    expect(sandbox.exec).toHaveBeenCalled();
+    expect(postSlackMessage).toHaveBeenCalled();
+  });
+});
