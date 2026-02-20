@@ -132,49 +132,51 @@ export class AgentDO extends Agent {
     let sessionStarted = false;
     let llmResponse = firstResponse;
 
-    while (steps < MAX_STEPS) {
-      steps += 1;
+    try {
+      while (steps < MAX_STEPS) {
+        steps += 1;
 
-      const blocks = llmResponse.content as Array<ToolUseBlock | TextBlock>;
-      const hasToolUse = blocks.some((b) => b.type === "tool_use");
+        const blocks = llmResponse.content as Array<ToolUseBlock | TextBlock>;
+        const hasToolUse = blocks.some((b) => b.type === "tool_use");
 
-      if (!hasToolUse) {
-        finalText = blocks
-          .filter((b): b is TextBlock => b.type === "text")
-          .map((b) => b.text)
-          .join("\n")
-          .trim() || "Done.";
-        break;
+        if (!hasToolUse) {
+          finalText = blocks
+            .filter((b): b is TextBlock => b.type === "text")
+            .map((b) => b.text)
+            .join("\n")
+            .trim() || "Done.";
+          break;
+        }
+
+        if (!sessionStarted) {
+          await this.startSession(threadTs);
+          sessionStarted = true;
+        }
+
+        const decision = await this.processLlmResponse(llmResponse, channel, threadTs, task);
+        if (decision.done) {
+          finalText = decision.text;
+          break;
+        }
+
+        conversation.push({ role: "assistant", content: decision.observation });
+        saveMessage(this.db, threadTs, { role: "assistant", content: decision.observation });
+
+        llmResponse = await this.deps.llmCall({
+          apiKey: this.env.ANTHROPIC_API_KEY,
+          systemPrompt: "You are Blob, a careful coding agent. Use tools when needed.",
+          messages: conversation,
+          tools: [BASH_TOOL]
+        });
       }
-
-      if (!sessionStarted) {
-        await this.startSession(threadTs);
-        sessionStarted = true;
+    } finally {
+      if (sessionStarted) {
+        await this.endSession(threadTs);
       }
-
-      const decision = await this.processLlmResponse(llmResponse, channel, threadTs, task);
-      if (decision.done) {
-        finalText = decision.text;
-        break;
-      }
-
-      conversation.push({ role: "assistant", content: decision.observation });
-      saveMessage(this.db, threadTs, { role: "assistant", content: decision.observation });
-
-      llmResponse = await this.deps.llmCall({
-        apiKey: this.env.ANTHROPIC_API_KEY,
-        systemPrompt: "You are Blob, a careful coding agent. Use tools when needed.",
-        messages: conversation,
-        tools: [BASH_TOOL]
-      });
     }
 
     if (!finalText) {
       finalText = `Stopped after reaching max steps (${MAX_STEPS}).`;
-    }
-
-    if (sessionStarted) {
-      await this.endSession(threadTs);
     }
 
     await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, finalText, threadTs);

@@ -18,6 +18,49 @@ export interface RepoSnapshotFile {
 
 const SNAPSHOT_FILES = ["AGENT.md", "README.md", "package.json", "tsconfig.json"];
 
+function parseChangedPaths(gitStatusOutput: string): string[] {
+  const paths: string[] = [];
+
+  for (const rawLine of gitStatusOutput.split("\n")) {
+    const line = rawLine.trimEnd();
+    if (!line || line.length < 4) {
+      continue;
+    }
+
+    const status = line.slice(0, 2);
+    // Skip deleted files. They should remain deleted on restore.
+    if (status.includes("D")) {
+      continue;
+    }
+
+    const pathSpec = line.slice(3).trim();
+    if (!pathSpec) {
+      continue;
+    }
+
+    const resolvedPath = pathSpec.includes(" -> ") ? pathSpec.split(" -> ").at(-1) ?? "" : pathSpec;
+    if (!resolvedPath) {
+      continue;
+    }
+
+    paths.push(resolvedPath);
+  }
+
+  return paths;
+}
+
+async function getSnapshotCandidates(
+  sandbox: Pick<SandboxClient, "exec">,
+  basePaths: string[]
+): Promise<string[]> {
+  const gitStatus = await sandbox.exec("git status --porcelain=v1 -uall");
+  if (gitStatus.exitCode !== 0) {
+    return basePaths;
+  }
+
+  return Array.from(new Set([...basePaths, ...parseChangedPaths(gitStatus.stdout)]));
+}
+
 export function initSchema(sql: SqlStorage): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS conversation_messages (
@@ -152,10 +195,11 @@ export function getKnowledge(sql: SqlStorage): string {
 export async function saveRepoSnapshot(
   r2: R2Bucket,
   sessionId: string,
-  sandbox: Pick<SandboxClient, "fileExists" | "readFile">
+  sandbox: Pick<SandboxClient, "fileExists" | "readFile" | "exec">
 ): Promise<void> {
+  const candidates = await getSnapshotCandidates(sandbox, SNAPSHOT_FILES);
   const results = await Promise.all(
-    SNAPSHOT_FILES.map(async (path) => {
+    candidates.map(async (path) => {
       if (await sandbox.fileExists(path)) {
         return { path, content: await sandbox.readFile(path) };
       }
@@ -166,6 +210,10 @@ export async function saveRepoSnapshot(
 
   await r2.put(`snapshots/${sessionId}.json`, JSON.stringify(files));
 }
+
+export const __testables = {
+  parseChangedPaths
+};
 
 export async function restoreRepoSnapshot(
   r2: R2Bucket,
