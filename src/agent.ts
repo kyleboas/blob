@@ -70,9 +70,9 @@ export class AgentDO extends Agent {
   private readonly deps: AgentDeps;
   private pendingApprovals = new Map<string, PendingApproval>();
 
-  constructor(private readonly state: DurableObjectStateLike, private readonly env: Env, deps: Partial<AgentDeps> = {}) {
-    super(state, env);
-    this.sql = state.storage.sql;
+  constructor(private readonly ctx: DurableObjectStateLike, private readonly env: Env, deps: Partial<AgentDeps> = {}) {
+    super(ctx, env);
+    this.sql = ctx.storage.sql;
     this.sandbox = new SandboxClient((env.SANDBOX as unknown as SandboxBinding | undefined) ?? UNCONFIGURED_SANDBOX);
     this.deps = { ...DEFAULT_DEPS, ...deps };
     initSchema(this.sql);
@@ -182,7 +182,7 @@ export class AgentDO extends Agent {
         },
         this.deps,
         this.env.SLACK_BOT_TOKEN,
-        this.state.storage
+        this.ctx.storage
       );
       return {
         done: true,
