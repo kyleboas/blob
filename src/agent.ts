@@ -110,7 +110,7 @@ export class AgentDO extends Agent {
   }
 
   async runAgentLoop(task: string, channel: string, threadTs: string): Promise<{ finalText: string; steps: number }> {
-    await this.startSession(threadTs);
+    await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, "Thinking...", threadTs);
 
     const conversation = getHistory(this.db, threadTs);
     if (conversation.length === 0) {
@@ -120,6 +120,7 @@ export class AgentDO extends Agent {
 
     let finalText = "";
     let steps = 0;
+    let sessionStarted = false;
 
     while (steps < MAX_STEPS) {
       steps += 1;
@@ -129,6 +130,23 @@ export class AgentDO extends Agent {
         messages: conversation,
         tools: [BASH_TOOL]
       });
+
+      const blocks = llmResponse.content as Array<ToolUseBlock | TextBlock>;
+      const hasToolUse = blocks.some((b) => b.type === "tool_use");
+
+      if (!hasToolUse) {
+        finalText = blocks
+          .filter((b): b is TextBlock => b.type === "text")
+          .map((b) => b.text)
+          .join("\n")
+          .trim() || "Done.";
+        break;
+      }
+
+      if (!sessionStarted) {
+        await this.startSession(threadTs);
+        sessionStarted = true;
+      }
 
       const decision = await this.processLlmResponse(llmResponse, channel, threadTs, task);
       if (decision.done) {
@@ -144,7 +162,10 @@ export class AgentDO extends Agent {
       finalText = `Stopped after reaching max steps (${MAX_STEPS}).`;
     }
 
-    await this.endSession(threadTs);
+    if (sessionStarted) {
+      await this.endSession(threadTs);
+    }
+
     await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, finalText, threadTs);
 
     return { finalText, steps };
