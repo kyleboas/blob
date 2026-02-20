@@ -1,7 +1,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
-from agent import Agent
+from agent import Agent, _extract_urls
 from llm_client import LLMResponse, LLMUsage
 from sandbox import ExecutionResult
 
@@ -249,3 +249,166 @@ def test_fetch_documentation_allowlist_and_ingestion(tmp_path: Path) -> None:
 
     loaded = agent.load_relevant_docs("Read API docs", docs_root=tmp_path)
     assert "reference.md" in loaded
+
+
+def test_run_task_auto_fetches_urls_and_updates_allowlist(tmp_path: Path) -> None:
+    llm = MockLLM([
+        LLMResponse(content=[{"type": "text", "text": "summarized"}], stop_reason="end_turn", usage=LLMUsage(1, 1))
+    ])
+    sandbox = DummySandbox()
+    agent = Agent(llm_client=llm, sandbox=sandbox, approval_gate=DummyApproval())
+
+    with patch("agent.config.WORKSPACE_ROOT", tmp_path), patch("agent.config.NETWORK_ALLOWLIST", ["docs.anthropic.com"]):
+        result = agent.run_task("What can you learn from https://blog.cloudflare.com/code-mode-mcp/?x=1")
+
+    assert result == "summarized"
+    assert any(command.startswith("curl -fsSL") for command in sandbox.commands)
+    allowlist_file = tmp_path / ".network_allowlist"
+    assert "cloudflare.com" in allowlist_file.read_text().splitlines()
+
+
+
+
+
+
+def test_fetch_documentation_prefers_single_cloudflare_markdown_service(tmp_path: Path) -> None:
+    class WorkerSandbox(DummySandbox):
+        def execute(self, command: str, timeout: int) -> ExecutionResult:
+            self.commands.append(command)
+            if "/markdown-fetch" in command:
+                return ExecutionResult(stdout='{"markdown":"# Edge Markdown"}', stderr="", exit_code=0)
+            raise AssertionError("Expected single worker markdown endpoint to be used")
+
+    llm = MockLLM([
+        LLMResponse(content=[{"type": "text", "text": "done"}], stop_reason="end_turn", usage=LLMUsage(1, 1))
+    ])
+    sandbox = WorkerSandbox()
+    agent = Agent(llm_client=llm, sandbox=sandbox, approval_gate=DummyApproval())
+
+    with patch("agent.config.CLOUDFLARE_MARKDOWN_FETCH_URL", "https://worker.example/markdown-fetch"), patch(
+        "agent.config.CLOUDFLARE_API_TOKEN", "token"
+    ):
+        output = agent.fetch_documentation("https://example.com/docs", docs_root=tmp_path)
+
+    assert output.read_text() == "# Edge Markdown"
+    assert any("/markdown-fetch" in command for command in sandbox.commands)
+
+def test_fetch_documentation_uses_user_agent_and_plain_text_fallback(tmp_path: Path) -> None:
+    class PlainTextSandbox(DummySandbox):
+        def execute(self, command: str, timeout: int) -> ExecutionResult:
+            self.commands.append(command)
+            return ExecutionResult(stdout="plain text docs\n__BLOB_CONTENT_TYPE__:text/plain", stderr="", exit_code=0)
+
+    llm = MockLLM([
+        LLMResponse(content=[{"type": "text", "text": "done"}], stop_reason="end_turn", usage=LLMUsage(1, 1))
+    ])
+    sandbox = PlainTextSandbox()
+    agent = Agent(llm_client=llm, sandbox=sandbox, approval_gate=DummyApproval())
+
+    output = agent.fetch_documentation("https://example.com/docs", docs_root=tmp_path)
+
+    assert output.read_text() == "plain text docs"
+    assert any("BlobBot/1.0" in command for command in sandbox.commands)
+    assert any("Accept: text/markdown" in command for command in sandbox.commands)
+
+
+
+
+
+def test_fetch_documentation_prefers_workers_ai_markdown_conversion_endpoint_name(tmp_path: Path) -> None:
+    class AISandbox(DummySandbox):
+        def execute(self, command: str, timeout: int) -> ExecutionResult:
+            self.commands.append(command)
+            if "/workers-ai/markdown-conversion" in command:
+                return ExecutionResult(stdout='{"markdown":"# Workers AI Markdown"}', stderr="", exit_code=0)
+            return ExecutionResult(
+                stdout="<html><body><h1>Title</h1></body></html>\n__BLOB_CONTENT_TYPE__:text/html", stderr="", exit_code=0
+            )
+
+    llm = MockLLM([
+        LLMResponse(content=[{"type": "text", "text": "done"}], stop_reason="end_turn", usage=LLMUsage(1, 1))
+    ])
+    sandbox = AISandbox()
+    agent = Agent(llm_client=llm, sandbox=sandbox, approval_gate=DummyApproval())
+
+    with patch(
+        "agent.config.CLOUDFLARE_WORKERS_AI_MARKDOWN_CONVERSION_URL",
+        "https://api.cloudflare.com/client/v4/accounts/a/workers-ai/markdown-conversion",
+    ), patch("agent.config.CLOUDFLARE_API_TOKEN", "token"):
+        output = agent.fetch_documentation("https://example.com/docs", docs_root=tmp_path)
+
+    assert output.read_text() == "# Workers AI Markdown"
+    assert any("/workers-ai/markdown-conversion" in command for command in sandbox.commands)
+
+def test_fetch_documentation_uses_cloudflare_ai_markdown_when_configured(tmp_path: Path) -> None:
+    class AISandbox(DummySandbox):
+        def execute(self, command: str, timeout: int) -> ExecutionResult:
+            self.commands.append(command)
+            if "/ai/tomarkdown" in command:
+                return ExecutionResult(stdout='{"markdown":"# Converted by AI"}', stderr="", exit_code=0)
+            return ExecutionResult(
+                stdout="<html><body><h1>Title</h1></body></html>\n__BLOB_CONTENT_TYPE__:text/html", stderr="", exit_code=0
+            )
+
+    llm = MockLLM([
+        LLMResponse(content=[{"type": "text", "text": "done"}], stop_reason="end_turn", usage=LLMUsage(1, 1))
+    ])
+    sandbox = AISandbox()
+    agent = Agent(llm_client=llm, sandbox=sandbox, approval_gate=DummyApproval())
+
+    with patch("agent.config.CLOUDFLARE_AI_TO_MARKDOWN_URL", "https://api.cloudflare.com/client/v4/accounts/a/ai/tomarkdown"), patch(
+        "agent.config.CLOUDFLARE_API_TOKEN", "token"
+    ):
+        output = agent.fetch_documentation("https://example.com/docs", docs_root=tmp_path)
+
+    assert output.read_text() == "# Converted by AI"
+    assert any("/ai/tomarkdown" in command for command in sandbox.commands)
+
+
+def test_fetch_documentation_uses_browser_rendering_markdown_when_configured(tmp_path: Path) -> None:
+    class BrowserSandbox(DummySandbox):
+        def execute(self, command: str, timeout: int) -> ExecutionResult:
+            self.commands.append(command)
+            if "/browser-rendering/markdown" in command:
+                return ExecutionResult(stdout="# Rendered Page", stderr="", exit_code=0)
+            return ExecutionResult(
+                stdout="<html><body><script>hydrate()</script></body></html>\n__BLOB_CONTENT_TYPE__:text/html",
+                stderr="",
+                exit_code=0,
+            )
+
+    llm = MockLLM([
+        LLMResponse(content=[{"type": "text", "text": "done"}], stop_reason="end_turn", usage=LLMUsage(1, 1))
+    ])
+    sandbox = BrowserSandbox()
+    agent = Agent(llm_client=llm, sandbox=sandbox, approval_gate=DummyApproval())
+
+    with patch(
+        "agent.config.CLOUDFLARE_BROWSER_RENDER_MARKDOWN_URL",
+        "https://api.cloudflare.com/client/v4/accounts/a/browser-rendering/markdown",
+    ), patch("agent.config.CLOUDFLARE_API_TOKEN", "token"):
+        output = agent.fetch_documentation("https://example.com/docs", docs_root=tmp_path)
+
+    assert output.read_text() == "# Rendered Page"
+    assert any("/browser-rendering/markdown" in command for command in sandbox.commands)
+
+def test_extract_urls_strips_trailing_punctuation_and_deduplicates() -> None:
+    text = (
+        "Learn from https://blog.cloudflare.com/code-mode-mcp/ and "
+        "https://blog.cloudflare.com/code-mode-mcp/. Then compare with "
+        "https://developers.cloudflare.com/workers), please."
+    )
+
+    assert _extract_urls(text) == [
+        "https://blog.cloudflare.com/code-mode-mcp/",
+        "https://developers.cloudflare.com/workers",
+    ]
+
+
+def test_extract_urls_handles_slack_link_format() -> None:
+    text = (
+        "So if I share <https://blog.cloudflare.com/code-mode-mcp/?utm_source=twitter|this post> "
+        "in Slack, and also https://blog.cloudflare.com/code-mode-mcp/?utm_source=twitter>, what happens?"
+    )
+
+    assert _extract_urls(text) == ["https://blog.cloudflare.com/code-mode-mcp/?utm_source=twitter"]

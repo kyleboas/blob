@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 import re
+import shlex
 from typing import Callable
 from urllib.parse import quote, urlparse
 
@@ -56,6 +57,18 @@ def _is_modification_command(command: str, target_files: list[str]) -> bool:
     if target_files:
         return True
     return bool(re.search(r"(>>|>|\brm\b|\bmv\b|\bcp\b|\btouch\b|\bsed\s+-i)", lowered))
+
+
+def _extract_urls(text: str) -> list[str]:
+    matches = re.findall(r"https?://\S+", text)
+    cleaned: list[str] = []
+    for match in matches:
+        normalized = match.split("|", 1)[0]
+        normalized = normalized.lstrip("<")
+        normalized = normalized.rstrip(".,!?:;\"')>]}")
+        if normalized not in cleaned:
+            cleaned.append(normalized)
+    return cleaned
 
 
 @dataclass(slots=True)
@@ -111,6 +124,14 @@ class Agent:
 
     def run_task(self, task: str, extra_context: str = "") -> str:
         messages = list(self._base_messages)
+        auto_docs: list[str] = []
+        for url in _extract_urls(task):
+            try:
+                doc_path = self.fetch_documentation(url)
+                auto_docs.append(f"Fetched {url} into {doc_path.relative_to(config.WORKSPACE_ROOT)}")
+            except Exception as exc:
+                auto_docs.append(f"Failed to fetch {url}: {exc}")
+
         try:
             git_context = git_history()
         except subprocess.CalledProcessError:
@@ -118,6 +139,8 @@ class Agent:
         task_text = f"{task}\n\nRecent git history:\n{git_context or '(empty)'}"
         if extra_context:
             task_text = f"{task_text}\n\nAdditional context:\n{extra_context}"
+        if auto_docs:
+            task_text = f"{task_text}\n\nURL context:\n" + "\n".join(auto_docs)
         messages.append({"role": "user", "content": [{"type": "text", "text": task_text}]})
 
         final_text = ""
@@ -223,22 +246,165 @@ class Agent:
             raise ValueError("URL must include a host")
         self._ensure_domain_allowlisted(host)
 
+        worker_markdown = self._fetch_markdown_with_cloudflare_worker(url)
+        if worker_markdown:
+            return self._write_doc_content(parsed=parsed, content=worker_markdown, docs_root=docs_root)
+
         escaped_url = quote(url, safe=":/?&=#%")
-        fetch_command = f"curl -fsSL '{escaped_url}'"
+        fetch_command = (
+            "curl -fsSL "
+            "-A 'Mozilla/5.0 (compatible; BlobBot/1.0; +https://example.com/bot)' "
+            "-H 'Accept: text/markdown, text/html;q=0.9, */*;q=0.8' "
+            "-w '\n__BLOB_CONTENT_TYPE__:%{content_type}' "
+            f"'{escaped_url}'"
+        )
         response = self.sandbox.execute(fetch_command, timeout=config.COMMAND_TIMEOUT)
         if response.exit_code != 0:
             raise RuntimeError(f"Failed to fetch documentation: {response.stderr}")
 
-        parser = _HTMLToTextParser()
-        parser.feed(response.stdout)
-        content = parser.as_markdown()
+        body, separator, content_type = response.stdout.rpartition("\n__BLOB_CONTENT_TYPE__:")
+        if not separator:
+            body = response.stdout
+            content_type = ""
+        normalized_type = content_type.split(";", 1)[0].strip().lower()
 
+        content = body.strip()
+        if normalized_type == "text/markdown":
+            pass
+        elif self._is_html_response(normalized_type, content):
+            content = self._convert_html_response(url=url, html=content)
+
+        return self._write_doc_content(parsed=parsed, content=content, docs_root=docs_root)
+
+    def _write_doc_content(self, parsed, content: str, docs_root: Path | None = None) -> Path:
+        parsed_url = parsed
+        host = parsed_url.hostname or "unknown-host"
         root = docs_root or (config.WORKSPACE_ROOT / "docs")
-        path_suffix = parsed.path.strip("/") or "index"
+        path_suffix = parsed_url.path.strip("/") or "index"
         target = root / host / f"{path_suffix}.md"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
         return target
+
+    def _fetch_markdown_with_cloudflare_worker(self, url: str) -> str | None:
+        endpoint = config.CLOUDFLARE_MARKDOWN_FETCH_URL
+        token = config.CLOUDFLARE_API_TOKEN
+        if not endpoint:
+            return None
+
+        payload = json.dumps({"url": url})
+        command_parts = [
+            "curl -fsSL",
+            f"-X POST {shlex.quote(endpoint)}",
+            "-H 'Content-Type: application/json'",
+        ]
+        if token:
+            command_parts.append(f"-H {shlex.quote(f'Authorization: Bearer {token}')}")
+        command_parts.append(f"--data-raw {shlex.quote(payload)}")
+        command = " ".join(command_parts)
+
+        response = self.sandbox.execute(command, timeout=config.COMMAND_TIMEOUT)
+        if response.exit_code != 0:
+            return None
+
+        text = response.stdout.strip()
+        if not text:
+            return None
+        try:
+            payload_obj = json.loads(text)
+        except json.JSONDecodeError:
+            return text
+
+        if isinstance(payload_obj, dict):
+            result_block = payload_obj.get("result")
+            nested_markdown = result_block.get("markdown") if isinstance(result_block, dict) else None
+            markdown = payload_obj.get("markdown") or nested_markdown
+            if isinstance(markdown, str) and markdown.strip():
+                return markdown.strip()
+        return None
+
+    def _is_html_response(self, content_type: str, content: str) -> bool:
+        if content_type in {"text/html", "application/xhtml+xml"}:
+            return True
+        lowered = content.lstrip().lower()
+        return lowered.startswith("<!doctype html") or lowered.startswith("<html")
+
+    def _convert_html_response(self, url: str, html: str) -> str:
+        browser_markdown = self._render_markdown_with_browser(url)
+        if browser_markdown:
+            return browser_markdown
+
+        ai_markdown = self._convert_html_with_cloudflare_ai(html)
+        if ai_markdown:
+            return ai_markdown
+
+        parser = _HTMLToTextParser()
+        parser.feed(html)
+        return parser.as_markdown() or html.strip()
+
+    def _render_markdown_with_browser(self, url: str) -> str | None:
+        endpoint = config.CLOUDFLARE_BROWSER_RENDER_MARKDOWN_URL
+        token = config.CLOUDFLARE_API_TOKEN
+        if not endpoint or not token:
+            return None
+
+        payload = json.dumps({"url": url})
+        command = (
+            "curl -fsSL "
+            f"-X POST {shlex.quote(endpoint)} "
+            f"-H {shlex.quote(f'Authorization: Bearer {token}')} "
+            "-H 'Content-Type: application/json' "
+            f"--data-raw {shlex.quote(payload)}"
+        )
+        response = self.sandbox.execute(command, timeout=config.COMMAND_TIMEOUT)
+        if response.exit_code != 0:
+            return None
+
+        text = response.stdout.strip()
+        if not text:
+            return None
+        try:
+            payload_obj = json.loads(text)
+        except json.JSONDecodeError:
+            return text
+        if isinstance(payload_obj, dict):
+            result_block = payload_obj.get("result")
+            nested_markdown = result_block.get("markdown") if isinstance(result_block, dict) else None
+            markdown = payload_obj.get("markdown") or nested_markdown
+            if isinstance(markdown, str) and markdown.strip():
+                return markdown.strip()
+        return None
+
+    def _convert_html_with_cloudflare_ai(self, html: str) -> str | None:
+        endpoint = config.CLOUDFLARE_WORKERS_AI_MARKDOWN_CONVERSION_URL or config.CLOUDFLARE_AI_TO_MARKDOWN_URL
+        token = config.CLOUDFLARE_API_TOKEN
+        if not endpoint or not token:
+            return None
+
+        payload = json.dumps({"html": html})
+        command = (
+            "curl -fsSL "
+            f"-X POST {shlex.quote(endpoint)} "
+            f"-H {shlex.quote(f'Authorization: Bearer {token}')} "
+            "-H 'Content-Type: application/json' "
+            f"--data-raw {shlex.quote(payload)}"
+        )
+        response = self.sandbox.execute(command, timeout=config.COMMAND_TIMEOUT)
+        if response.exit_code != 0:
+            return None
+
+        try:
+            payload_obj = json.loads(response.stdout)
+        except json.JSONDecodeError:
+            return None
+
+        if isinstance(payload_obj, dict):
+            result_block = payload_obj.get("result")
+            nested_markdown = result_block.get("markdown") if isinstance(result_block, dict) else None
+            markdown = payload_obj.get("markdown") or nested_markdown
+            if isinstance(markdown, str) and markdown.strip():
+                return markdown.strip()
+        return None
 
     def _is_host_allowlisted(self, host: str) -> bool:
         normalized = host.lower()
