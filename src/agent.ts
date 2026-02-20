@@ -110,26 +110,30 @@ export class AgentDO extends Agent {
   }
 
   async runAgentLoop(task: string, channel: string, threadTs: string): Promise<{ finalText: string; steps: number }> {
-    await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, "Thinking...", threadTs);
-
     const conversation = getHistory(this.db, threadTs);
     if (conversation.length === 0) {
       saveMessage(this.db, threadTs, { role: "user", content: task });
       conversation.push({ role: "user", content: task });
     }
 
-    let finalText = "";
-    let steps = 0;
-    let sessionStarted = false;
-
-    while (steps < MAX_STEPS) {
-      steps += 1;
-      const llmResponse = await this.deps.llmCall({
+    // Fire "Thinking..." and the first LLM call concurrently
+    const [firstResponse] = await Promise.all([
+      this.deps.llmCall({
         apiKey: this.env.ANTHROPIC_API_KEY,
         systemPrompt: "You are Blob, a careful coding agent. Use tools when needed.",
         messages: conversation,
         tools: [BASH_TOOL]
-      });
+      }),
+      this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, "Thinking...", threadTs)
+    ]);
+
+    let finalText = "";
+    let steps = 0;
+    let sessionStarted = false;
+    let llmResponse = firstResponse;
+
+    while (steps < MAX_STEPS) {
+      steps += 1;
 
       const blocks = llmResponse.content as Array<ToolUseBlock | TextBlock>;
       const hasToolUse = blocks.some((b) => b.type === "tool_use");
@@ -156,6 +160,13 @@ export class AgentDO extends Agent {
 
       conversation.push({ role: "assistant", content: decision.observation });
       saveMessage(this.db, threadTs, { role: "assistant", content: decision.observation });
+
+      llmResponse = await this.deps.llmCall({
+        apiKey: this.env.ANTHROPIC_API_KEY,
+        systemPrompt: "You are Blob, a careful coding agent. Use tools when needed.",
+        messages: conversation,
+        tools: [BASH_TOOL]
+      });
     }
 
     if (!finalText) {
@@ -271,8 +282,10 @@ export class AgentDO extends Agent {
   }
 
   private async endSession(sessionId: string): Promise<void> {
-    await saveRepoSnapshot(this.env.REPO_STORE, sessionId, this.sandbox);
-    await syncKnowledgeFromSandbox(this.db, this.sandbox);
+    await Promise.all([
+      saveRepoSnapshot(this.env.REPO_STORE, sessionId, this.sandbox),
+      syncKnowledgeFromSandbox(this.db, this.sandbox)
+    ]);
   }
 
   async alarm(): Promise<void> {
