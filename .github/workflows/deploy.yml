@@ -53,12 +53,15 @@ jobs:
       - name: Warn if sandbox deploy failed
         if: steps.deploy_sandbox.outcome == 'failure'
         run: |
-          echo "::warning::Sandbox worker deploy failed (exit code ${{ steps.deploy_sandbox.outputs.exit_code }})."
-          echo "::warning::The Cloudflare Containers feature (used by blob-agent-sandbox) requires:"
-          echo "::warning::  1. Account enrollment in the Cloudflare Containers open beta."
-          echo "::warning::  2. A Cloudflare API token with 'Workers Scripts:Edit' AND"
-          echo "::warning::     'Workers Containers:Edit' permissions."
-          echo "::warning::The main agent worker will still be deployed, but bash tool execution"
+          echo "::warning::Sandbox worker deploy failed."
+          echo "::warning::Cloudflare Containers (used by blob-agent-sandbox) is in public beta"
+          echo "::warning::and has a known API token authorization bug (workers-sdk#12483):"
+          echo "::warning::  https://github.com/cloudflare/workers-sdk/issues/12483"
+          echo "::warning::Even a token with 'containers (write)' scope may be rejected."
+          echo "::warning::Workaround: deploy the sandbox manually from a machine logged in via"
+          echo "::warning::  'npx wrangler login' (OAuth) rather than an API token, e.g.:"
+          echo "::warning::  npx wrangler deploy --config sandbox/wrangler.toml"
+          echo "::warning::The main blob-agent worker has been deployed. Bash tool execution"
           echo "::warning::will be unavailable until the sandbox is deployed successfully."
 
       - name: Deploy main worker
