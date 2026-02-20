@@ -18,3 +18,5 @@ export const PROTECTED_FILES = [
 ] as const;
 
 export const TOOL_OUTPUT_MAX_CHARS = 8_000;
+export const TOOL_RETRY_MAX = 2;
+export const TOOL_RETRY_BACKOFF_BASE_MS = 1_500;

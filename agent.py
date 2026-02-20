@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -158,7 +159,7 @@ class Agent:
                     if not allowed:
                         result_text = "Blocked: approval denied or timed out."
                     else:
-                        execution = self.sandbox.execute(command=command, timeout=config.COMMAND_TIMEOUT)
+                        execution = self._execute_with_retry(command)
                         if is_modification:
                             self.rate_limiter.record_modification()
                             commit_message = f"agent: apply `{command[:80]}`"
@@ -297,6 +298,32 @@ class Agent:
                 summaries.append(f"reverted: {next_task.title}")
 
         return summaries
+
+    def _execute_with_retry(self, command: str) -> "ExecutionResult":
+        """Execute a command with exponential-backoff retries on transient failures.
+
+        Retries are skipped for sandbox policy rejections and approval blocks since
+        those are deterministic and re-running the command would not change the outcome.
+        """
+        from sandbox import ExecutionResult  # local import to avoid circularity at module level
+
+        last_result: ExecutionResult | None = None
+        for attempt in range(config.TOOL_RETRY_MAX + 1):
+            result = self.sandbox.execute(command=command, timeout=config.COMMAND_TIMEOUT)
+            if result.exit_code == 0:
+                return result
+            # Non-retryable: sandbox policy blocks are deterministic.
+            if "Command rejected by sandbox policy" in result.stderr:
+                return result
+            last_result = result
+            if attempt < config.TOOL_RETRY_MAX:
+                wait = config.TOOL_RETRY_BACKOFF_BASE ** attempt
+                self._emit_status(
+                    f"Tool call failed (exit={result.exit_code}), retrying in {wait:.1f}s"
+                    f" (attempt {attempt + 1}/{config.TOOL_RETRY_MAX})"
+                )
+                time.sleep(wait)
+        return last_result  # type: ignore[return-value]  # always set after first iteration
 
     def _reset_conversation(self) -> None:
         self._base_messages = []

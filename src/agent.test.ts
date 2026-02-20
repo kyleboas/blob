@@ -181,6 +181,87 @@ describe("AgentDO runAgentLoop", () => {
     );
   });
 
+  it("retries a failed tool call up to TOOL_RETRY_MAX times", async () => {
+    vi.useFakeTimers();
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+
+    let callCount = 0;
+    const sandbox = {
+      exec: vi.fn(async () => {
+        callCount += 1;
+        if (callCount < 3) {
+          return { stdout: "", stderr: "transient error", exitCode: 1 };
+        }
+        return { stdout: "success", stderr: "", exitCode: 0 };
+      }),
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      readFile: vi.fn().mockResolvedValue("")
+    };
+    const envWithSandbox = { ...env, SANDBOX: sandbox as unknown as Fetcher };
+
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({ content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "flaky-cmd" } }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "All good" }] });
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, envWithSandbox, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const loopPromise = agent.runAgentLoop("run flaky command", "C1", "thread-retry");
+
+    // Advance timers to resolve the retry delays
+    await vi.runAllTimersAsync();
+    const result = await loopPromise;
+
+    expect(result.finalText).toBe("All good");
+    expect(callCount).toBe(3);
+    vi.useRealTimers();
+  });
+
+  it("reports final failure to LLM after exhausting retries", async () => {
+    vi.useFakeTimers();
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+
+    let callCount = 0;
+    const sandbox = {
+      exec: vi.fn(async () => {
+        callCount += 1;
+        return { stdout: "", stderr: "persistent error", exitCode: 2 };
+      }),
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      readFile: vi.fn().mockResolvedValue("")
+    };
+    const envWithSandbox = { ...env, SANDBOX: sandbox as unknown as Fetcher };
+
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({ content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "bad-cmd" } }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Gave up" }] });
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, envWithSandbox, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const loopPromise = agent.runAgentLoop("run bad command", "C1", "thread-exhaust");
+
+    await vi.runAllTimersAsync();
+    const result = await loopPromise;
+
+    expect(result.finalText).toBe("Gave up");
+    // 1 initial attempt + TOOL_RETRY_MAX (2) retries = 3 total
+    expect(callCount).toBe(3);
+    vi.useRealTimers();
+  });
+
   it("handles approval reaction callbacks", async () => {
     const sql = new FakeSql();
     const { env, sandbox } = makeTestEnv();

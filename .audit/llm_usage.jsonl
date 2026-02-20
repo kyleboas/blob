@@ -1,0 +1,37 @@
+{"timestamp": "2026-02-20T16:08:57.776466+00:00", "task": "say hi", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:08:57.799527+00:00", "task": "run echo", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:08:57.800816+00:00", "task": "run echo", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:08:57.826096+00:00", "task": "loop", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:08:57.826547+00:00", "task": "loop", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:08:57.858650+00:00", "task": "first", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:08:57.884275+00:00", "task": "second", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:08:57.920857+00:00", "task": "Improve X", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:08:57.956414+00:00", "task": "test retry", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:08:57.957645+00:00", "task": "test retry", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:08:57.985224+00:00", "task": "test max retries", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:08:57.986289+00:00", "task": "test max retries", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:08:58.011183+00:00", "task": "test policy rejection", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:08:58.012852+00:00", "task": "test policy rejection", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:08:58.047607+00:00", "task": "test backoff", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:08:58.048971+00:00", "task": "test backoff", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:49.149955+00:00", "task": "say hi", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:49.182022+00:00", "task": "run echo", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:49.182823+00:00", "task": "run echo", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:49.216661+00:00", "task": "loop", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:49.217479+00:00", "task": "loop", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:49.254070+00:00", "task": "first", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:49.282251+00:00", "task": "second", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:49.317205+00:00", "task": "Improve X", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:49.354745+00:00", "task": "test retry", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:49.356081+00:00", "task": "test retry", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:49.403289+00:00", "task": "test max retries", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:49.404644+00:00", "task": "test max retries", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:49.436145+00:00", "task": "test policy rejection", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:49.436932+00:00", "task": "test policy rejection", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:49.467562+00:00", "task": "test backoff", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:49.468830+00:00", "task": "test backoff", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:49.579861+00:00", "task": "run tool", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:49.580772+00:00", "task": "run tool", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:50.790618+00:00", "task": "try edits", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:50.791442+00:00", "task": "try edits", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T16:09:50.792143+00:00", "task": "try edits", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}

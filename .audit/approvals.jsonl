@@ -1,0 +1,5 @@
+{"timestamp": "2026-02-20T16:09:49.487583+00:00", "message_ts": "123.456", "action": "edit file", "tier": "conditional", "decision": "requested"}
+{"timestamp": "2026-02-20T16:09:49.538536+00:00", "message_ts": "123.456", "reaction": "white_check_mark", "decision": "approved"}
+{"timestamp": "2026-02-20T16:09:49.543979+00:00", "message_ts": "123.999", "action": "danger", "tier": "always-require-approval", "decision": "requested"}
+{"timestamp": "2026-02-20T16:09:49.545139+00:00", "message_ts": "123.999", "decision": "timeout_reject"}
+{"timestamp": "2026-02-20T16:09:50.927249+00:00", "message_ts": "approval-ts", "reaction": "white_check_mark", "decision": "approved"}
