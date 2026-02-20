@@ -144,12 +144,33 @@ describe("knowledge sync", () => {
     const sql = new FakeSql();
     const writeFile = vi.fn().mockResolvedValue(undefined);
     const readFile = vi.fn().mockResolvedValue("sandbox knowledge");
+    const fileExists = vi.fn().mockResolvedValue(true);
 
     saveKnowledge(sql, "local knowledge");
     await syncKnowledgeToSandbox(sql, { writeFile });
-    await syncKnowledgeFromSandbox(sql, { readFile });
+    await syncKnowledgeFromSandbox(sql, { readFile, fileExists });
 
     expect(writeFile).toHaveBeenCalledWith("AGENT.md", "local knowledge");
     expect(getKnowledge(sql)).toBe("sandbox knowledge");
+  });
+
+  it("skips sandbox write when knowledge is empty", async () => {
+    const sql = new FakeSql();
+    const writeFile = vi.fn().mockResolvedValue(undefined);
+
+    await syncKnowledgeToSandbox(sql, { writeFile });
+
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it("skips sandbox read when AGENT.md does not exist", async () => {
+    const sql = new FakeSql();
+    const readFile = vi.fn().mockResolvedValue("");
+    const fileExists = vi.fn().mockResolvedValue(false);
+
+    await syncKnowledgeFromSandbox(sql, { readFile, fileExists });
+
+    expect(readFile).not.toHaveBeenCalled();
+    expect(getKnowledge(sql)).toBe("");
   });
 });
