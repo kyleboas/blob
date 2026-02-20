@@ -13,7 +13,7 @@ def test_classify_action_tiers() -> None:
 def test_slack_approval_gate_reaction_approve() -> None:
     client = Mock()
     client.chat_postMessage.return_value = {"ts": "123.456"}
-    gate = SlackApprovalGate(client=client, channel="C1", thread_ts="T1", timeout_minutes=1)
+    gate = SlackApprovalGate(client=client, channel="C1", timeout_minutes=1)
 
     from threading import Thread
 
@@ -34,5 +34,5 @@ def test_slack_approval_gate_reaction_approve() -> None:
 def test_slack_approval_gate_timeout_rejects() -> None:
     client = Mock()
     client.chat_postMessage.return_value = {"ts": "123.999"}
-    gate = SlackApprovalGate(client=client, channel="C1", thread_ts="T1", timeout_minutes=0)
+    gate = SlackApprovalGate(client=client, channel="C1", timeout_minutes=0)
     assert gate.request_approval("danger", "always-require-approval") is False

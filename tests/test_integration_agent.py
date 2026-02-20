@@ -36,8 +36,8 @@ class MemoryClient:
     def __init__(self) -> None:
         self.posts: list[dict[str, str]] = []
 
-    def chat_postMessage(self, channel: str, thread_ts: str, text: str) -> dict[str, str]:
-        self.posts.append({"channel": channel, "thread_ts": thread_ts, "text": text})
+    def chat_postMessage(self, channel: str, text: str) -> dict[str, str]:
+        self.posts.append({"channel": channel, "text": text})
         return {"ts": f"msg-{len(self.posts)}"}
 
     def reactions_add(self, channel: str, timestamp: str, name: str) -> None:  # noqa: ARG002
@@ -166,7 +166,7 @@ def test_slack_message_and_approval_flow() -> None:
 
         def run_task(self, text: str) -> str:
             self.on_status("Step 1/25: running")
-            msg = self.gate.client.chat_postMessage(channel="C1", thread_ts="1", text="approval")
+            msg = self.gate.client.chat_postMessage(channel="C1", text="approval")
             self.gate.resolve_reaction(msg["ts"], "white_check_mark")
             done.set()
             return f"done: {text}"

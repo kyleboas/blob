@@ -8,8 +8,8 @@ class MockClient:
     def __init__(self) -> None:
         self.posts: list[dict[str, str]] = []
 
-    def chat_postMessage(self, channel: str, thread_ts: str, text: str) -> dict[str, str]:
-        self.posts.append({"channel": channel, "thread_ts": thread_ts, "text": text})
+    def chat_postMessage(self, channel: str, text: str) -> dict[str, str]:
+        self.posts.append({"channel": channel, "text": text})
         return {"ts": f"msg-{len(self.posts)}"}
 
     def reactions_add(self, channel: str, timestamp: str, name: str) -> None:  # noqa: ARG002
@@ -51,7 +51,7 @@ def test_message_dispatch_posts_progress_and_result() -> None:
     assert any("Session complete" in post["text"] for post in client.posts)
 
 
-def test_thread_mapping_and_reaction_resolution() -> None:
+def test_session_mapping_and_reaction_resolution() -> None:
     client = MockClient()
     gate_holder: dict[str, SlackApprovalGate] = {}
 
@@ -72,7 +72,7 @@ def test_thread_mapping_and_reaction_resolution() -> None:
 
     gate = gate_holder["gate"]
     gate._events["approval-ts"] = Event()
-    bot.thread_sessions["200.1"] = SessionContext(thread_ts="200.1", channel="C1", approval_gate=gate)
+    bot.thread_sessions["200.1"] = SessionContext(session_ts="200.1", channel="C1", approval_gate=gate)
     bot.handle_reaction_event({"reaction": "white_check_mark", "item": {"ts": "approval-ts"}})
 
     assert gate._decisions["approval-ts"] is True
