@@ -108,6 +108,22 @@ export function initSchema(sql: SqlStorage): void {
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )
   `);
+
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS agent_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      thread_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )
+  `);
+}
+
+export interface AgentEvent {
+  eventType: string;
+  message: string;
+  createdAt: number;
 }
 
 export function saveMessage(sql: SqlStorage, threadId: string, msg: ConversationMessage): void {
@@ -156,6 +172,35 @@ export function getRateLimit(sql: SqlStorage, scope: string, key: string): numbe
   }
 
   return Number(rows[0].count ?? 0);
+}
+
+export function logAgentEvent(sql: SqlStorage, threadId: string, eventType: string, message: string): void {
+  sql.exec(
+    `INSERT INTO agent_events (thread_id, event_type, message) VALUES (?, ?, ?)`,
+    threadId,
+    eventType,
+    message
+  );
+}
+
+export function getRecentAgentEvents(sql: SqlStorage, threadId: string, limit = 200): AgentEvent[] {
+  const rows = sql
+    .exec(
+      `SELECT event_type, message, created_at
+       FROM agent_events
+       WHERE thread_id = ?
+       ORDER BY id DESC
+       LIMIT ?`,
+      threadId,
+      limit
+    )
+    .toArray();
+
+  return rows.reverse().map((row) => ({
+    eventType: String(row.event_type),
+    message: String(row.message),
+    createdAt: Number(row.created_at)
+  }));
 }
 
 

@@ -204,4 +204,31 @@ describe("worker entry point", () => {
     const forwardedBody = JSON.parse(stub.fetch.mock.calls[0][1].body as string);
     expect(forwardedBody.action).toBe("reaction");
   });
+
+  it("renders the live logs page for a thread", async () => {
+    const stub = { fetch: vi.fn() };
+    const env = makeEnv(stub);
+    const { ctx } = makeCtx();
+
+    const response = await worker.fetch(new Request("https://example.com/logs?thread_ts=1711111111.3333"), env, ctx);
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).toContain("Blob Live Logs");
+    expect(html).toContain("1711111111.3333");
+  });
+
+  it("proxies live log data through durable objects", async () => {
+    const stub = { fetch: vi.fn().mockResolvedValue(Response.json({ events: [{ eventType: "thinking", message: "Started", createdAt: 1700000000 }] })) };
+    const env = makeEnv(stub);
+    const { ctx } = makeCtx();
+
+    const response = await worker.fetch(new Request("https://example.com/logs/data?thread_ts=1711111111.4444"), env, ctx);
+    const payload = await response.json() as { events: Array<{ eventType: string }> };
+
+    expect(response.status).toBe(200);
+    expect(payload.events[0]?.eventType).toBe("thinking");
+    const forwardedBody = JSON.parse(stub.fetch.mock.calls[0][1].body as string);
+    expect(forwardedBody.action).toBe("logs_snapshot");
+  });
 });
