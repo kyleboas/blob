@@ -127,9 +127,21 @@ export function initSchema(sql: SqlStorage): void {
       last_message_at INTEGER NOT NULL
     )
   `);
+
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS session_summaries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )
+  `);
 }
 
-export function resolveOrCreateSession(sql: SqlStorage, nowMs: number): string {
+export function resolveOrCreateSession(
+  sql: SqlStorage,
+  nowMs: number
+): { sessionId: string; previousSessionId: string | null } {
   const rows = sql
     .exec(`SELECT current_session_id, last_message_at FROM session_state WHERE id = 1`)
     .toArray();
@@ -138,8 +150,11 @@ export function resolveOrCreateSession(sql: SqlStorage, nowMs: number): string {
   const timeoutMs = CONVERSATION_TIMEOUT_MINUTES * 60 * 1000;
 
   let sessionId: string;
+  let previousSessionId: string | null = null;
+
   if (!existing || (nowMs - Number(existing.last_message_at)) > timeoutMs) {
     sessionId = `session:${nowMs}`;
+    previousSessionId = existing ? String(existing.current_session_id) : null;
   } else {
     sessionId = String(existing.current_session_id);
   }
@@ -154,7 +169,7 @@ export function resolveOrCreateSession(sql: SqlStorage, nowMs: number): string {
     nowMs
   );
 
-  return sessionId;
+  return { sessionId, previousSessionId };
 }
 
 export function getCurrentSession(sql: SqlStorage): string | null {
@@ -162,6 +177,54 @@ export function getCurrentSession(sql: SqlStorage): string | null {
     .exec(`SELECT current_session_id FROM session_state WHERE id = 1`)
     .toArray();
   return rows[0] ? String(rows[0].current_session_id) : null;
+}
+
+export interface SessionSummary {
+  sessionId: string;
+  summary: string;
+  createdAt: number;
+}
+
+export function saveSessionSummary(sql: SqlStorage, sessionId: string, summary: string): void {
+  sql.exec(
+    `INSERT INTO session_summaries (session_id, summary) VALUES (?, ?)`,
+    sessionId,
+    summary
+  );
+}
+
+export function getRecentSessionSummaries(sql: SqlStorage, limit: number): SessionSummary[] {
+  const rows = sql
+    .exec(
+      `SELECT session_id, summary, created_at
+       FROM session_summaries
+       ORDER BY id DESC
+       LIMIT ?`,
+      limit
+    )
+    .toArray();
+
+  return rows.reverse().map((row) => ({
+    sessionId: String(row.session_id),
+    summary: String(row.summary),
+    createdAt: Number(row.created_at)
+  }));
+}
+
+export function compactMessagesInDB(
+  sql: SqlStorage,
+  sessionId: string,
+  compactedMessages: ConversationMessage[]
+): void {
+  sql.exec(`DELETE FROM conversation_messages WHERE thread_id = ?`, sessionId);
+  for (const msg of compactedMessages) {
+    sql.exec(
+      `INSERT INTO conversation_messages (thread_id, role, content) VALUES (?, ?, ?)`,
+      sessionId,
+      msg.role,
+      msg.content
+    );
+  }
 }
 
 export interface AgentEvent {
