@@ -218,11 +218,10 @@ class Agent:
 
     def fetch_documentation(self, url: str, docs_root: Path | None = None) -> Path:
         parsed = urlparse(url)
-        host = parsed.netloc
+        host = parsed.hostname or ""
         if not host:
             raise ValueError("URL must include a host")
-        if not any(host == allowed or host.endswith(allowed.replace("*.", ".")) for allowed in config.NETWORK_ALLOWLIST):
-            raise ValueError(f"Domain not allowlisted: {host}")
+        self._ensure_domain_allowlisted(host)
 
         escaped_url = quote(url, safe=":/?&=#%")
         fetch_command = f"curl -fsSL '{escaped_url}'"
@@ -240,6 +239,53 @@ class Agent:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
         return target
+
+    def _is_host_allowlisted(self, host: str) -> bool:
+        normalized = host.lower()
+        for pattern in config.NETWORK_ALLOWLIST:
+            if pattern.startswith("*."):
+                suffix = pattern[2:]
+                if normalized == suffix or normalized.endswith(f".{suffix}"):
+                    return True
+            if normalized == pattern.lower():
+                return True
+        return False
+
+    def _extract_base_domain(self, host: str) -> str:
+        normalized = host.lower().strip(".")
+        labels = normalized.split(".")
+        if len(labels) <= 2:
+            return normalized
+        return ".".join(labels[-2:])
+
+    def _ensure_domain_allowlisted(self, host: str) -> None:
+        if self._is_host_allowlisted(host):
+            return
+
+        base_domain = self._extract_base_domain(host)
+        new_patterns = [base_domain, f"*.{base_domain}"]
+        existing = {item.lower() for item in config.NETWORK_ALLOWLIST}
+        additions = [pattern for pattern in new_patterns if pattern.lower() not in existing]
+        if not additions:
+            return
+
+        config.NETWORK_ALLOWLIST.extend(additions)
+
+        if hasattr(self.sandbox, "allowlist") and isinstance(self.sandbox.allowlist, list):
+            self.sandbox.allowlist.extend(additions)
+
+        custom_allowlist_path = config.WORKSPACE_ROOT / ".network_allowlist"
+        custom_allowlist_path.parent.mkdir(parents=True, exist_ok=True)
+        current_custom = []
+        if custom_allowlist_path.exists():
+            current_custom = [
+                line.strip()
+                for line in custom_allowlist_path.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            ]
+
+        merged = sorted(dict.fromkeys([*current_custom, *additions]))
+        custom_allowlist_path.write_text("\n".join(merged) + "\n", encoding="utf-8")
 
     def load_relevant_docs(self, task: str, docs_root: Path | None = None) -> str:
         root = docs_root or (config.WORKSPACE_ROOT / "docs")

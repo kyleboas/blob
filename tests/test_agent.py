@@ -218,6 +218,24 @@ def test_tool_retry_backoff_timing() -> None:
     assert mock_sleep.call_args_list == [call(1.0), call(2.0)]
 
 
+
+def test_fetch_documentation_auto_adds_domain_to_allowlist(tmp_path: Path) -> None:
+    llm = MockLLM([
+        LLMResponse(content=[{"type": "text", "text": "done"}], stop_reason="end_turn", usage=LLMUsage(1, 1))
+    ])
+    sandbox = DummySandbox()
+    agent = Agent(llm_client=llm, sandbox=sandbox, approval_gate=DummyApproval())
+
+    with patch("agent.config.WORKSPACE_ROOT", tmp_path), patch("agent.config.NETWORK_ALLOWLIST", ["docs.anthropic.com"]):
+        output = agent.fetch_documentation("https://developers.cloudflare.com/workers", docs_root=tmp_path)
+
+    assert output.exists()
+    allowlist_file = tmp_path / ".network_allowlist"
+    assert allowlist_file.exists()
+    entries = allowlist_file.read_text().splitlines()
+    assert "cloudflare.com" in entries
+    assert "*.cloudflare.com" in entries
+
 def test_fetch_documentation_allowlist_and_ingestion(tmp_path: Path) -> None:
     llm = MockLLM([
         LLMResponse(content=[{"type": "text", "text": "done"}], stop_reason="end_turn", usage=LLMUsage(1, 1))
