@@ -296,4 +296,29 @@ describe("AgentDO runAgentLoop", () => {
     expect(sandbox.exec).toHaveBeenCalled();
     expect(postSlackMessage).toHaveBeenCalled();
   });
+
+  it("posts a confirmation when a Cloudflare deploy command succeeds", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({ content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "npx wrangler deploy" } }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Deployment done" }] });
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.runAgentLoop("deploy latest changes", "C1", "thread-deploy");
+
+    expect(postSlackMessage).toHaveBeenCalledWith(
+      "token",
+      "C1",
+      "✅ Cloudflare update applied successfully. Your latest changes should now be effective.",
+      "thread-deploy"
+    );
+  });
 });
