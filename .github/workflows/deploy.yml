@@ -46,7 +46,20 @@ jobs:
         run: npx wrangler whoami
 
       - name: Deploy sandbox worker
+        id: deploy_sandbox
+        continue-on-error: true
         run: npx wrangler deploy --config sandbox/wrangler.toml
+
+      - name: Warn if sandbox deploy failed
+        if: steps.deploy_sandbox.outcome == 'failure'
+        run: |
+          echo "::warning::Sandbox worker deploy failed (exit code ${{ steps.deploy_sandbox.outputs.exit_code }})."
+          echo "::warning::The Cloudflare Containers feature (used by blob-agent-sandbox) requires:"
+          echo "::warning::  1. Account enrollment in the Cloudflare Containers open beta."
+          echo "::warning::  2. A Cloudflare API token with 'Workers Scripts:Edit' AND"
+          echo "::warning::     'Workers Containers:Edit' permissions."
+          echo "::warning::The main agent worker will still be deployed, but bash tool execution"
+          echo "::warning::will be unavailable until the sandbox is deployed successfully."
 
       - name: Deploy main worker
         run: npx wrangler deploy

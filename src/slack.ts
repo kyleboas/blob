@@ -64,15 +64,26 @@ export function parseSlackEvent(body: string): ParsedSlackEnvelope {
   }
 
   if (payload.type === "event_callback" && payload.event) {
-    if (payload.event.type === "message" || payload.event.type === "reaction_added") {
-      return {
-        type: "event_callback",
-        event: payload.event
-      };
+    const event = payload.event;
+
+    if (event.type === "message") {
+      // Ignore bot messages (including our own replies) and message edit/delete subtypes
+      if (event.bot_id || event.subtype) {
+        return { type: "event_callback" };
+      }
+      return { type: "event_callback", event };
     }
+
+    if (event.type === "reaction_added") {
+      return { type: "event_callback", event };
+    }
+
+    // Unknown event type — acknowledge without processing
+    return { type: "event_callback" };
   }
 
-  throw new Error("Unsupported Slack event payload");
+  // Unknown top-level payload type — acknowledge without processing
+  return { type: "event_callback" };
 }
 
 export async function postMessage(
