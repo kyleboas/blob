@@ -5,9 +5,11 @@ import { enforceSafety } from "./safety";
 import { SandboxClient, type SandboxBinding } from "./sandbox-client";
 import {
   getHistory,
+  getRecentAgentEvents,
   getKnowledge,
   incrementRateLimit,
   initSchema,
+  logAgentEvent,
   restoreRepoSnapshot,
   saveMessage,
   saveRepoSnapshot,
@@ -103,6 +105,10 @@ export class AgentDO extends Agent {
   async fetch(request: Request): Promise<Response> {
     const body = await request.json() as { action?: string; event?: SlackEvent; task?: string };
 
+    if (body.action === "logs_snapshot" && body.event?.thread_ts) {
+      return Response.json({ events: getRecentAgentEvents(this.db, body.event.thread_ts) });
+    }
+
     if (body.action === "reaction" && body.event) {
       await this.handleApprovalReaction(body.event);
       return new Response("ok");
@@ -132,6 +138,7 @@ export class AgentDO extends Agent {
   }
 
   async runAgentLoop(task: string, channel: string, threadTs: string): Promise<{ finalText: string; steps: number }> {
+    logAgentEvent(this.db, threadTs, "task_received", task);
     const conversation = getHistory(this.db, threadTs);
     if (conversation.length === 0) {
       saveMessage(this.db, threadTs, { role: "user", content: task });
@@ -151,6 +158,7 @@ export class AgentDO extends Agent {
       }),
       this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, "Thinking...", threadTs)
     ]);
+    logAgentEvent(this.db, threadTs, "thinking", "Started reasoning loop.");
 
     let finalText = "";
     let steps = 0;
@@ -176,6 +184,7 @@ export class AgentDO extends Agent {
         if (!sessionStarted) {
           await this.startSession(threadTs);
           sessionStarted = true;
+          logAgentEvent(this.db, threadTs, "session", "Sandbox session started.");
         }
 
         const decision = await this.processLlmResponse(llmResponse, channel, threadTs, task);
@@ -197,6 +206,7 @@ export class AgentDO extends Agent {
     } finally {
       if (sessionStarted) {
         await this.endSession(threadTs);
+        logAgentEvent(this.db, threadTs, "session", "Sandbox session ended.");
       }
     }
 
@@ -205,6 +215,7 @@ export class AgentDO extends Agent {
     }
 
     await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, finalText, threadTs);
+    logAgentEvent(this.db, threadTs, "completed", finalText);
 
     return { finalText, steps };
   }
@@ -228,6 +239,7 @@ export class AgentDO extends Agent {
     }
 
     const command = String(toolBlock.input.command ?? "");
+    logAgentEvent(this.db, threadTs, "command", command);
     const safety = enforceSafety(command, this.db, sessionId, []);
 
     if (!safety.allowed && safety.requiresApproval) {
@@ -256,6 +268,8 @@ export class AgentDO extends Agent {
 
     incrementRateLimit(this.db, "session", sessionId);
     const result = await this.executeWithGitSafety(command);
+    const exitSummary = `Command finished with exit code ${result.exitCode}.`;
+    logAgentEvent(this.db, threadTs, result.exitCode === 0 ? "command_success" : "command_failure", exitSummary);
 
     if (result.exitCode === 0 && isCloudflareApplyCommand(command)) {
       await this.deps.postSlackMessage(
