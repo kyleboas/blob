@@ -462,24 +462,68 @@ class Agent:
             snippets.append(f"## {path.relative_to(root)}\n{path.read_text()[:2000]}")
         return "\n\n".join(snippets)
 
-    def update_agent_knowledge(self, task: str, result: str, success: bool, agent_md_path: Path | None = None) -> None:
+    def _reflect_on_task(self, task: str, result: str) -> str | None:
+        """Make a cheap LLM call to extract a reusable learning from a completed task."""
+        prompt = (
+            f"You just completed this task: {task}\n\n"
+            f"Result summary: {result[:1000]}\n\n"
+            "Did you discover any new permanent rules, patterns, or gotchas about this codebase that "
+            "future sessions should know? If yes, output a SINGLE concise bullet point (starting with '- '). "
+            "Focus on reusable, codebase-specific knowledge — not task-specific details. "
+            "If there is no new learning worth persisting, output exactly: NONE"
+        )
+        try:
+            response = self.llm_client.create_message(
+                model=config.MODEL_ROUTING["routine"],
+                system="You are a coding agent reviewing your own completed task to extract reusable learnings.",
+                messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+            )
+            self._record_llm_usage(
+                f"reflect: {task[:60]}",
+                config.MODEL_ROUTING["routine"],
+                response.usage.input_tokens,
+                response.usage.output_tokens,
+            )
+            text = "\n".join(
+                block.get("text", "") for block in response.content if block.get("type") == "text"
+            ).strip()
+            if text and text.upper() != "NONE" and text.startswith("- "):
+                return text
+        except Exception:
+            pass
+        return None
+
+    def update_agent_knowledge(
+        self, task: str, result: str, success: bool, learning: str | None = None, agent_md_path: Path | None = None
+    ) -> None:
         agent_md = agent_md_path or (config.WORKSPACE_ROOT / "AGENT.md")
         timestamp = datetime.now(timezone.utc).isoformat()
         status = "SUCCESS" if success else "FAILED"
-        discovered = [
-            line.strip("- ")
-            for line in result.splitlines()
-            if any(k in line.lower() for k in ("pattern", "gotcha", "learned", "note"))
-        ]
-        patterns = discovered[:3] or ["No explicit patterns recorded."]
+        learning_text = learning or "No new patterns recorded."
         entry = (
             f"\n- {timestamp} [{status}]\n"
             f"  - Task: {task}\n"
             f"  - What changed: {result[:500] or 'No summary returned.'}\n"
-            f"  - Patterns/Gotchas: {' | '.join(patterns)}\n"
+            f"  - Learning: {learning_text}\n"
         )
-        with agent_md.open("a", encoding="utf-8") as f:
-            f.write(entry)
+
+        if not agent_md.exists():
+            agent_md.write_text(entry, encoding="utf-8")
+            return
+
+        content = agent_md.read_text(encoding="utf-8")
+        log_header = "\n## Session Log\n"
+        if log_header in content:
+            base, _, log_section = content.partition(log_header)
+            raw_entries = re.split(r"\n(?=- \d{4}-)", log_section)
+            entries = [e for e in raw_entries if e.strip()]
+            entries = entries[-9:]
+            entries.append(entry.lstrip("\n"))
+            new_log = "\n".join(entries)
+            agent_md.write_text(base + log_header + "\n" + new_log, encoding="utf-8")
+        else:
+            with agent_md.open("a", encoding="utf-8") as f:
+                f.write(entry)
 
     def run_self_improvement_cycle(self, tasks_path: Path | None = None) -> list[str]:
         queue_path = tasks_path or (config.WORKSPACE_ROOT / "tasks.json")
@@ -500,7 +544,8 @@ class Agent:
             test_result = self.sandbox.execute("pytest tests/", timeout=config.COMMAND_TIMEOUT)
             if test_result.exit_code == 0:
                 git_auto_commit(f"self-improve: {next_task.title}")
-                self.update_agent_knowledge(next_task.title, result, success=True)
+                learning = self._reflect_on_task(next_task.title, result)
+                self.update_agent_knowledge(next_task.title, result, success=True, learning=learning)
                 self._set_task_status(queue_path, next_task.id, "completed")
                 summaries.append(f"completed: {next_task.title}")
             else:
