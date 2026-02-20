@@ -85,8 +85,8 @@ export async function postMessage(
   const response = await fetchImpl(`${SLACK_API_BASE}/chat.postMessage`, {
     method: "POST",
     headers: {
-      "content-type": "application/json; charset=utf-8",
-      authorization: `Bearer ${token}`
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`
     },
     body: JSON.stringify({
       channel,
