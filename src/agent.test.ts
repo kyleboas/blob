@@ -115,6 +115,31 @@ describe("AgentDO runAgentLoop", () => {
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "All done", "thread-1");
   });
 
+  it("includes a new user message for follow-up thread replies", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const llmCall = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Done" }] });
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.runAgentLoop("first question", "C1", "thread-follow-up");
+    await agent.runAgentLoop("follow up question", "C1", "thread-follow-up");
+
+    expect(llmCall).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        messages: [
+          { role: "user", content: "first question" },
+          { role: "user", content: "follow up question" }
+        ]
+      })
+    );
+  });
+
   it("pauses and requests approval for dangerous commands", async () => {
     const sql = new FakeSql();
     const { env } = makeTestEnv();
