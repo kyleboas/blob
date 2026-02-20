@@ -35,3 +35,45 @@
 {"timestamp": "2026-02-20T16:09:50.790618+00:00", "task": "try edits", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
 {"timestamp": "2026-02-20T16:09:50.791442+00:00", "task": "try edits", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
 {"timestamp": "2026-02-20T16:09:50.792143+00:00", "task": "try edits", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.558336+00:00", "task": "say hi", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.587483+00:00", "task": "run echo", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.588077+00:00", "task": "run echo", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.609178+00:00", "task": "loop", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.609536+00:00", "task": "loop", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.631006+00:00", "task": "first", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.651539+00:00", "task": "second", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.675716+00:00", "task": "Improve X", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.676631+00:00", "task": "reflect: Improve X", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.682385+00:00", "task": "reflect: Refactor config loading", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.685076+00:00", "task": "reflect: Say hi", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.686896+00:00", "task": "reflect: task", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.893869+00:00", "task": "test retry", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.894633+00:00", "task": "test retry", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.916892+00:00", "task": "test max retries", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.917677+00:00", "task": "test max retries", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.941514+00:00", "task": "test policy rejection", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.941958+00:00", "task": "test policy rejection", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.969459+00:00", "task": "test backoff", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:58.970950+00:00", "task": "test backoff", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:41:59.003272+00:00", "task": "What can you learn from https://blog.cloudflare.com/code-mode-mcp/?x=1", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.171882+00:00", "task": "say hi", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.189872+00:00", "task": "run echo", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.190560+00:00", "task": "run echo", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.210124+00:00", "task": "loop", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.210513+00:00", "task": "loop", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.227778+00:00", "task": "first", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.245701+00:00", "task": "second", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.269881+00:00", "task": "Improve X", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.270720+00:00", "task": "reflect: Improve X", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.275999+00:00", "task": "reflect: Refactor config loading", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.277834+00:00", "task": "reflect: Say hi", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.279884+00:00", "task": "reflect: task", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.311976+00:00", "task": "test retry", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.313051+00:00", "task": "test retry", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.332331+00:00", "task": "test max retries", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.333259+00:00", "task": "test max retries", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.351854+00:00", "task": "test policy rejection", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.352481+00:00", "task": "test policy rejection", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.372016+00:00", "task": "test backoff", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.372865+00:00", "task": "test backoff", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+{"timestamp": "2026-02-20T20:42:25.398664+00:00", "task": "What can you learn from https://blog.cloudflare.com/code-mode-mcp/?x=1", "model": "claude-haiku-4-5", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2}

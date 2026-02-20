@@ -93,7 +93,8 @@ def test_task_queue_and_self_improve(tmp_path: Path) -> None:
     agent_md.write_text("# AGENT\n\n## Session Log\n")
 
     llm = MockLLM([
-        LLMResponse(content=[{"type": "text", "text": "did work"}], stop_reason="end_turn", usage=LLMUsage(1, 1))
+        LLMResponse(content=[{"type": "text", "text": "did work"}], stop_reason="end_turn", usage=LLMUsage(1, 1)),
+        LLMResponse(content=[{"type": "text", "text": "NONE"}], stop_reason="end_turn", usage=LLMUsage(1, 1)),
     ])
     sandbox = DummySandbox()
     agent = Agent(llm_client=llm, sandbox=sandbox, approval_gate=DummyApproval())
@@ -106,6 +107,60 @@ def test_task_queue_and_self_improve(tmp_path: Path) -> None:
     assert summary == ["completed: Improve X"]
     assert '"status": "completed"' in tasks_path.read_text()
     assert "[SUCCESS]" in agent_md.read_text()
+
+
+def test_reflect_on_task_returns_learning() -> None:
+    llm = MockLLM([
+        LLMResponse(
+            content=[{"type": "text", "text": "- Always check git status before committing"}],
+            stop_reason="end_turn",
+            usage=LLMUsage(1, 1),
+        )
+    ])
+    agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
+    learning = agent._reflect_on_task("Refactor config loading", "Updated config.py to use absolute paths")
+    assert learning == "- Always check git status before committing"
+
+
+def test_reflect_on_task_returns_none_when_no_learning() -> None:
+    llm = MockLLM([
+        LLMResponse(content=[{"type": "text", "text": "NONE"}], stop_reason="end_turn", usage=LLMUsage(1, 1))
+    ])
+    agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
+    learning = agent._reflect_on_task("Say hi", "Greeted the user")
+    assert learning is None
+
+
+def test_reflect_on_task_returns_none_for_malformed_output() -> None:
+    llm = MockLLM([
+        LLMResponse(content=[{"type": "text", "text": "something without a dash prefix"}], stop_reason="end_turn", usage=LLMUsage(1, 1))
+    ])
+    agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
+    learning = agent._reflect_on_task("task", "result")
+    assert learning is None
+
+
+def test_session_log_rotation(tmp_path: Path) -> None:
+    """Session log is capped at 10 entries; oldest entries are dropped."""
+    import re as _re
+
+    agent_md = tmp_path / "AGENT.md"
+    agent_md.write_text("# AGENT\n\n## Session Log\n")
+
+    llm = MockLLM([])
+    agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
+
+    with patch("agent.config.WORKSPACE_ROOT", tmp_path):
+        for i in range(12):
+            agent.update_agent_knowledge(f"task-{i}", f"result-{i}", success=True)
+
+    content = agent_md.read_text()
+    log_section = content.split("## Session Log\n", 1)[1]
+    entry_count = len(_re.findall(r"- \d{4}-", log_section))
+    assert entry_count == 10
+    assert "  - Task: task-0\n" not in content
+    assert "  - Task: task-1\n" not in content
+    assert "  - Task: task-11\n" in content
 
 
 def test_tool_retry_on_transient_failure() -> None:
