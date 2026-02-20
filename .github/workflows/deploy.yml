@@ -45,6 +45,19 @@ jobs:
       - name: Verify Wrangler authentication
         run: npx wrangler whoami
 
+      - name: Check Cloudflare Containers access
+        run: |
+          echo "Verifying Cloudflare Containers access..."
+          if ! npx wrangler containers images list 2>&1; then
+            echo ""
+            echo "ERROR: Cannot access Cloudflare Containers."
+            echo "Cloudflare Containers requires:"
+            echo "  1. A paid Cloudflare Workers plan"
+            echo "  2. An API token with 'Workers Scripts: Edit' and 'Cloudflare Containers: Edit' permissions"
+            echo "  See: https://developers.cloudflare.com/containers/get-started/"
+            exit 1
+          fi
+
       - name: Deploy sandbox worker
         run: npx wrangler deploy --config sandbox/wrangler.toml
 
