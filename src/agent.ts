@@ -1,5 +1,5 @@
 import { Agent } from "@cloudflare/agents";
-import { MAX_STEPS } from "./config";
+import { MAX_STEPS, TOOL_RETRY_MAX, TOOL_RETRY_BACKOFF_BASE_MS } from "./config";
 import { callLLM, type LLMResponse } from "./llm";
 import { enforceSafety } from "./safety";
 import { SandboxClient, type SandboxBinding } from "./sandbox-client";
@@ -238,13 +238,29 @@ export class AgentDO extends Agent {
     };
   }
 
+  private async executeWithRetry(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    let lastResult: { stdout: string; stderr: string; exitCode: number } | undefined;
+    for (let attempt = 0; attempt <= TOOL_RETRY_MAX; attempt++) {
+      const result = await this.sandbox.exec(command);
+      if (result.exitCode === 0) {
+        return result;
+      }
+      lastResult = result;
+      if (attempt < TOOL_RETRY_MAX) {
+        const waitMs = TOOL_RETRY_BACKOFF_BASE_MS * Math.pow(1.5, attempt);
+        await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+      }
+    }
+    return lastResult!;
+  }
+
   private async executeWithGitSafety(command: string) {
     const risky = /git\s+reset|rm\s+-rf|git\s+clean|-D\b/.test(command);
     if (risky) {
       await this.sandbox.exec('git add -A && git commit -m "checkpoint"');
     }
 
-    const result = await this.sandbox.exec(command);
+    const result = await this.executeWithRetry(command);
 
     if (result.exitCode !== 0 && risky) {
       await this.sandbox.exec("git reset --hard HEAD~1 || git reset --hard HEAD");
