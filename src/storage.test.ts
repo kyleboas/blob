@@ -11,7 +11,8 @@ import {
   saveRepoSnapshot,
   syncKnowledgeFromSandbox,
   syncKnowledgeToSandbox,
-  type SqlStorage
+  type SqlStorage,
+  __testables
 } from "./storage";
 
 type Row = Record<string, unknown>;
@@ -112,6 +113,7 @@ describe("R2 snapshot helpers", () => {
     const r2 = { put } as unknown as R2Bucket;
 
     const sandbox = {
+      exec: vi.fn().mockResolvedValue({ stdout: " M src/agent.ts\n?? src/new-file.ts\n", stderr: "", exitCode: 0 }),
       fileExists: vi.fn().mockResolvedValue(true),
       readFile: vi.fn().mockResolvedValue("file-content")
     };
@@ -121,7 +123,9 @@ describe("R2 snapshot helpers", () => {
     expect(put).toHaveBeenCalledTimes(1);
     const [key, body] = put.mock.calls[0] as [string, string];
     expect(key).toBe("snapshots/session-1.json");
-    expect(JSON.parse(body)).toHaveLength(4);
+    const files = JSON.parse(body) as Array<{ path: string; content: string }>;
+    expect(files.length).toBeGreaterThanOrEqual(4);
+    expect(files.some((file) => file.path === "src/new-file.ts")).toBe(true);
   });
 
   it("restores snapshot into sandbox", async () => {
@@ -136,6 +140,19 @@ describe("R2 snapshot helpers", () => {
 
     expect(restored).toBe(true);
     expect(sandbox.writeFile).toHaveBeenCalledWith("AGENT.md", "knowledge");
+  });
+});
+
+
+describe("git status parser", () => {
+  it("parses changed paths from git status output", () => {
+    const output = " M src/agent.ts\nR  old-name.ts -> src/new-name.ts\nD  removed.ts\n?? src/new-file.ts\n";
+
+    expect(__testables.parseChangedPaths(output)).toEqual([
+      "src/agent.ts",
+      "src/new-name.ts",
+      "src/new-file.ts"
+    ]);
   });
 });
 

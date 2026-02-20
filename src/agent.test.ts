@@ -181,6 +181,30 @@ describe("AgentDO runAgentLoop", () => {
     );
   });
 
+
+  it("persists snapshot even if runAgentLoop throws after a tool step", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({ content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "ls" } }] })
+      .mockRejectedValueOnce(new Error("LLM follow-up failed"));
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await expect(agent.runAgentLoop("list files", "C1", "thread-persist-on-error")).rejects.toThrow("LLM follow-up failed");
+
+    const putMock = env.REPO_STORE.put as unknown as ReturnType<typeof vi.fn>;
+    expect(putMock).toHaveBeenCalledWith(
+      "snapshots/thread-persist-on-error.json",
+      expect.any(String)
+    );
+  });
+
   it("retries a failed tool call up to TOOL_RETRY_MAX times", async () => {
     vi.useFakeTimers();
     const sql = new FakeSql();
