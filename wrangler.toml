@@ -18,3 +18,7 @@ bucket_name = "blob-repo-store"
 [[services]]
 binding = "SANDBOX"
 service = "blob-agent-sandbox"
+environment = "production"
+
+[observability.logs]
+enabled = true
