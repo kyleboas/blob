@@ -45,9 +45,6 @@ jobs:
       - name: Verify Wrangler authentication
         run: npx wrangler whoami
 
-      - name: Login to Cloudflare container registry
-        run: echo "$CLOUDFLARE_API_TOKEN" | docker login registry.cloudflare.com -u $CLOUDFLARE_ACCOUNT_ID --password-stdin
-
       - name: Deploy sandbox worker
         run: npx wrangler deploy --config sandbox/wrangler.toml
 
