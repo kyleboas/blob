@@ -5,6 +5,7 @@ import { enforceSafety } from "./safety";
 import { SandboxClient, type SandboxBinding } from "./sandbox-client";
 import {
   getHistory,
+  getKnowledge,
   incrementRateLimit,
   initSchema,
   restoreRepoSnapshot,
@@ -52,12 +53,19 @@ const DEFAULT_DEPS: AgentDeps = {
   now: () => Date.now()
 };
 
-const SYSTEM_PROMPT = [
+const BASE_SYSTEM_PROMPT = [
   "You are Blob, a careful coding agent.",
-  "Use tools when needed.",
-  "When a user asks about content from a URL, use the bash tool to fetch the page first (for example with curl) before answering.",
-  "Do not claim a URL is inaccessible unless you have attempted a fetch command and observed an error."
+  "Use tools when needed."
 ].join(" ");
+
+function buildSystemPrompt(knowledge: string): string {
+  const trimmedKnowledge = knowledge.trim();
+  if (!trimmedKnowledge) {
+    return BASE_SYSTEM_PROMPT;
+  }
+
+  return `${BASE_SYSTEM_PROMPT}\n\nFollow this AGENT.md knowledge when relevant:\n${trimmedKnowledge}`;
+}
 
 const UNCONFIGURED_SANDBOX: SandboxBinding = {
   async exec() {
@@ -130,11 +138,14 @@ export class AgentDO extends Agent {
       conversation.push({ role: "user", content: task });
     }
 
+    await syncKnowledgeFromSandbox(this.db, this.sandbox);
+    const systemPrompt = buildSystemPrompt(getKnowledge(this.db));
+
     // Fire "Thinking..." and the first LLM call concurrently
     const [firstResponse] = await Promise.all([
       this.deps.llmCall({
         apiKey: this.env.ANTHROPIC_API_KEY,
-        systemPrompt: SYSTEM_PROMPT,
+        systemPrompt,
         messages: conversation,
         tools: [BASH_TOOL]
       }),
@@ -178,7 +189,7 @@ export class AgentDO extends Agent {
 
         llmResponse = await this.deps.llmCall({
           apiKey: this.env.ANTHROPIC_API_KEY,
-          systemPrompt: SYSTEM_PROMPT,
+          systemPrompt,
           messages: conversation,
           tools: [BASH_TOOL]
         });

@@ -79,6 +79,8 @@ Do not modify these files manually.
 
 - Always check `git log --since="24 hours ago" --oneline` to answer questions about recent changes
 - Use `git diff HEAD~1` to inspect the last change
+- For tasks that ask about a URL, fetch the URL content with bash first (for example `curl -L`) before summarizing it.
+- Never claim a URL is inaccessible unless you attempted a fetch command and captured the actual error output.
 - Run `pytest tests/` after any code modification to verify correctness
 - When editing non-constitution files, prefer targeted `sed -i` or `echo >>` over full rewrites
 - Check `tasks.json` for queued improvement tasks before starting new self-modification work

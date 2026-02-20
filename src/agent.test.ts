@@ -61,7 +61,8 @@ function makeTestEnv() {
   const sandbox = {
     exec: vi.fn().mockResolvedValue({ stdout: "ok", stderr: "", exitCode: 0 }),
     writeFile: vi.fn().mockResolvedValue(undefined),
-    readFile: vi.fn().mockResolvedValue("knowledge")
+    readFile: vi.fn().mockResolvedValue("knowledge"),
+    fileExists: vi.fn().mockResolvedValue(true)
   };
 
   const r2Store = new Map<string, string>();
@@ -108,7 +109,7 @@ describe("AgentDO runAgentLoop", () => {
     expect(sandbox.exec).toHaveBeenCalledWith("ls");
     expect(llmCall).toHaveBeenCalledWith(
       expect.objectContaining({
-        systemPrompt: expect.stringContaining("When a user asks about content from a URL")
+        systemPrompt: expect.stringContaining("Follow this AGENT.md knowledge when relevant:\nknowledge")
       })
     );
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "All done", "thread-1");
