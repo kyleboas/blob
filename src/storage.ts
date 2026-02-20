@@ -154,12 +154,15 @@ export async function saveRepoSnapshot(
   sessionId: string,
   sandbox: Pick<SandboxClient, "fileExists" | "readFile">
 ): Promise<void> {
-  const files: RepoSnapshotFile[] = [];
-  for (const path of SNAPSHOT_FILES) {
-    if (await sandbox.fileExists(path)) {
-      files.push({ path, content: await sandbox.readFile(path) });
-    }
-  }
+  const results = await Promise.all(
+    SNAPSHOT_FILES.map(async (path) => {
+      if (await sandbox.fileExists(path)) {
+        return { path, content: await sandbox.readFile(path) };
+      }
+      return null;
+    })
+  );
+  const files = results.filter((f): f is RepoSnapshotFile => f !== null);
 
   await r2.put(`snapshots/${sessionId}.json`, JSON.stringify(files));
 }
@@ -177,9 +180,7 @@ export async function restoreRepoSnapshot(
   const raw = await (object as { text(): Promise<string> }).text();
   const files = JSON.parse(raw) as RepoSnapshotFile[];
 
-  for (const file of files) {
-    await sandbox.writeFile(file.path, file.content);
-  }
+  await Promise.all(files.map((file) => sandbox.writeFile(file.path, file.content)));
 
   return true;
 }
