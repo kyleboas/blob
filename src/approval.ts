@@ -63,8 +63,7 @@ export async function resolveApprovalReaction(
     await deps.postSlackMessage(
       token,
       pending.channel,
-      `Approval received. Command finished with exit code ${result.exitCode}.`,
-      pending.threadTs
+      `Approval received. Command finished with exit code ${result.exitCode}.`
     );
     return;
   }
@@ -72,7 +71,7 @@ export async function resolveApprovalReaction(
   if (event.reaction === "thumbsdown") {
     pendingApprovals.delete(threadTs);
     saveApprovalDecision(sql, pending.sessionId, pending.command, "denied", event.user ?? null);
-    await deps.postSlackMessage(token, pending.channel, "Approval denied. I did not execute the command.", pending.threadTs);
+    await deps.postSlackMessage(token, pending.channel, "Approval denied. I did not execute the command.");
   }
 }
 
@@ -89,7 +88,7 @@ export async function expireTimedOutApprovals(
     if (now - pending.requestedAtMs > timeoutMs) {
       pendingApprovals.delete(threadTs);
       saveApprovalDecision(sql, pending.sessionId, pending.command, "timed_out", null);
-      await deps.postSlackMessage(token, pending.channel, "Approval timed out. Command was not executed.", pending.threadTs);
+      await deps.postSlackMessage(token, pending.channel, "Approval timed out. Command was not executed.");
     }
   }
 }

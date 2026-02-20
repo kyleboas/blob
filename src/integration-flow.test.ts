@@ -145,7 +145,7 @@ describe("integration flow", () => {
     expect(response.status).toBe(200);
     expect(doStub.fetch).toHaveBeenCalledTimes(1);
     expect(sandbox.exec).toHaveBeenCalledWith("echo hi");
-    expect(postSlackMessage).toHaveBeenCalledWith("token", "C111", "Command complete", threadTs);
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C111", "Command complete");
     expect(sql.getMessageCountForThread(threadTs)).toBeGreaterThan(0);
   });
 });

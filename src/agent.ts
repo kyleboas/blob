@@ -123,7 +123,7 @@ export class AgentDO extends Agent {
         const channel = event.channel;
         if (channel && threadTs) {
           const message = error instanceof Error ? error.message : "An unexpected error occurred.";
-          await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, `Error: ${message}`, threadTs);
+          await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, `Error: ${message}`);
         }
       }
       return new Response("accepted", { status: 202 });
@@ -154,7 +154,7 @@ export class AgentDO extends Agent {
         messages: conversation,
         tools: [BASH_TOOL]
       }),
-      this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, "Thinking...", threadTs)
+      this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, "Thinking...")
     ]);
     logAgentEvent(this.db, threadTs, "thinking", "Started reasoning loop.");
 
@@ -212,7 +212,7 @@ export class AgentDO extends Agent {
       finalText = `Stopped after reaching max steps (${MAX_STEPS}).`;
     }
 
-    await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, finalText, threadTs);
+    await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, finalText);
     logAgentEvent(this.db, threadTs, "completed", finalText);
 
     return { finalText, steps };
@@ -273,8 +273,7 @@ export class AgentDO extends Agent {
       await this.deps.postSlackMessage(
         this.env.SLACK_BOT_TOKEN,
         channel,
-        "✅ Cloudflare update applied successfully. Your latest changes should now be effective.",
-        threadTs
+        "✅ Cloudflare update applied successfully. Your latest changes should now be effective."
       );
     }
 

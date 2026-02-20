@@ -112,7 +112,7 @@ describe("AgentDO runAgentLoop", () => {
         systemPrompt: expect.stringContaining("Follow this AGENT.md knowledge when relevant:\nknowledge")
       })
     );
-    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "All done", "thread-1");
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "All done");
   });
 
   it("includes a new user message for follow-up thread replies", async () => {
@@ -207,8 +207,7 @@ describe("AgentDO runAgentLoop", () => {
     expect(postSlackMessage).toHaveBeenCalledWith(
       "token",
       "C1",
-      expect.stringContaining("LLM unavailable"),
-      "1711111111.7777"
+      expect.stringContaining("LLM unavailable")
     );
   });
 
@@ -372,8 +371,7 @@ describe("AgentDO runAgentLoop", () => {
     expect(postSlackMessage).toHaveBeenCalledWith(
       "token",
       "C1",
-      "✅ Cloudflare update applied successfully. Your latest changes should now be effective.",
-      "thread-deploy"
+      "✅ Cloudflare update applied successfully. Your latest changes should now be effective."
     );
   });
 });

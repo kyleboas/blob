@@ -114,7 +114,7 @@ export async function postApprovalRequest(
     "React with :thumbsup: to approve or :thumbsdown: to deny."
   ].join("\n");
 
-  await postMessage(token, channel, text, threadTs, fetchImpl);
+  await postMessage(token, channel, text, undefined, fetchImpl);
 }
 
 export function mapThreadToDO(threadTs: string): string {
