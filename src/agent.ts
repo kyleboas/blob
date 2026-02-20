@@ -64,6 +64,13 @@ const UNCONFIGURED_SANDBOX: SandboxBinding = {
   }
 };
 
+function isCloudflareApplyCommand(command: string): boolean {
+  const normalized = command.trim().toLowerCase();
+  return /\bwrangler\s+(deploy|publish)\b/.test(normalized)
+    || normalized.includes("api.cloudflare.com")
+    || /workers\/scripts/.test(normalized);
+}
+
 export class AgentDO extends Agent {
   private readonly db: SqlStorage;
   private readonly sandbox: SandboxClient;
@@ -229,6 +236,16 @@ export class AgentDO extends Agent {
 
     incrementRateLimit(this.db, "session", sessionId);
     const result = await this.executeWithGitSafety(command);
+
+    if (result.exitCode === 0 && isCloudflareApplyCommand(command)) {
+      await this.deps.postSlackMessage(
+        this.env.SLACK_BOT_TOKEN,
+        channel,
+        "✅ Cloudflare update applied successfully. Your latest changes should now be effective.",
+        threadTs
+      );
+    }
+
     const formatted = formatToolResult(toolBlock.id, [result.stdout, result.stderr].filter(Boolean).join("\n"));
 
     return {
