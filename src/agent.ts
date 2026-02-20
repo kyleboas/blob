@@ -140,10 +140,8 @@ export class AgentDO extends Agent {
   async runAgentLoop(task: string, channel: string, threadTs: string): Promise<{ finalText: string; steps: number }> {
     logAgentEvent(this.db, threadTs, "task_received", task);
     const conversation = getHistory(this.db, threadTs);
-    if (conversation.length === 0) {
-      saveMessage(this.db, threadTs, { role: "user", content: task });
-      conversation.push({ role: "user", content: task });
-    }
+    saveMessage(this.db, threadTs, { role: "user", content: task });
+    conversation.push({ role: "user", content: task });
 
     await syncKnowledgeFromSandbox(this.db, this.sandbox);
     const systemPrompt = buildSystemPrompt(getKnowledge(this.db));
