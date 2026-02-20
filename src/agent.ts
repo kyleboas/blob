@@ -79,6 +79,7 @@ export class AgentDO extends Agent {
   }
 
   async fetch(request: Request): Promise<Response> {
+    console.log(`${request.method} ${request.url}`);
     const body = await request.json() as { action?: string; event?: SlackEvent; task?: string };
 
     if (body.action === "reaction" && body.event) {
