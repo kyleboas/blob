@@ -52,6 +52,13 @@ const DEFAULT_DEPS: AgentDeps = {
   now: () => Date.now()
 };
 
+const SYSTEM_PROMPT = [
+  "You are Blob, a careful coding agent.",
+  "Use tools when needed.",
+  "When a user asks about content from a URL, use the bash tool to fetch the page first (for example with curl) before answering.",
+  "Do not claim a URL is inaccessible unless you have attempted a fetch command and observed an error."
+].join(" ");
+
 const UNCONFIGURED_SANDBOX: SandboxBinding = {
   async exec() {
     throw new Error("Sandbox binding is not configured. Set env.SANDBOX via a service binding before running commands.");
@@ -127,7 +134,7 @@ export class AgentDO extends Agent {
     const [firstResponse] = await Promise.all([
       this.deps.llmCall({
         apiKey: this.env.ANTHROPIC_API_KEY,
-        systemPrompt: "You are Blob, a careful coding agent. Use tools when needed.",
+        systemPrompt: SYSTEM_PROMPT,
         messages: conversation,
         tools: [BASH_TOOL]
       }),
@@ -171,7 +178,7 @@ export class AgentDO extends Agent {
 
         llmResponse = await this.deps.llmCall({
           apiKey: this.env.ANTHROPIC_API_KEY,
-          systemPrompt: "You are Blob, a careful coding agent. Use tools when needed.",
+          systemPrompt: SYSTEM_PROMPT,
           messages: conversation,
           tools: [BASH_TOOL]
         });

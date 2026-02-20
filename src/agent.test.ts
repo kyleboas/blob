@@ -106,6 +106,11 @@ describe("AgentDO runAgentLoop", () => {
 
     expect(result.finalText).toBe("All done");
     expect(sandbox.exec).toHaveBeenCalledWith("ls");
+    expect(llmCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemPrompt: expect.stringContaining("When a user asks about content from a URL")
+      })
+    );
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "All done", "thread-1");
   });
 
