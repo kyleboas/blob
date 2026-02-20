@@ -65,17 +65,17 @@ const UNCONFIGURED_SANDBOX: SandboxBinding = {
 };
 
 export class AgentDO extends Agent {
-  private readonly sql: SqlStorage;
+  private readonly db: SqlStorage;
   private readonly sandbox: SandboxClient;
   private readonly deps: AgentDeps;
   private pendingApprovals = new Map<string, PendingApproval>();
 
   constructor(private readonly ctx: DurableObjectStateLike, private readonly env: Env, deps: Partial<AgentDeps> = {}) {
     super(ctx, env);
-    this.sql = ctx.storage.sql;
+    this.db = ctx.storage.sql;
     this.sandbox = new SandboxClient((env.SANDBOX as unknown as SandboxBinding | undefined) ?? UNCONFIGURED_SANDBOX);
     this.deps = { ...DEFAULT_DEPS, ...deps };
-    initSchema(this.sql);
+    initSchema(this.db);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -112,9 +112,9 @@ export class AgentDO extends Agent {
   async runAgentLoop(task: string, channel: string, threadTs: string): Promise<{ finalText: string; steps: number }> {
     await this.startSession(threadTs);
 
-    const conversation = getHistory(this.sql, threadTs);
+    const conversation = getHistory(this.db, threadTs);
     if (conversation.length === 0) {
-      saveMessage(this.sql, threadTs, { role: "user", content: task });
+      saveMessage(this.db, threadTs, { role: "user", content: task });
       conversation.push({ role: "user", content: task });
     }
 
@@ -137,7 +137,7 @@ export class AgentDO extends Agent {
       }
 
       conversation.push({ role: "assistant", content: decision.observation });
-      saveMessage(this.sql, threadTs, { role: "assistant", content: decision.observation });
+      saveMessage(this.db, threadTs, { role: "assistant", content: decision.observation });
     }
 
     if (!finalText) {
@@ -169,7 +169,7 @@ export class AgentDO extends Agent {
     }
 
     const command = String(toolBlock.input.command ?? "");
-    const safety = enforceSafety(command, this.sql, sessionId, []);
+    const safety = enforceSafety(command, this.db, sessionId, []);
 
     if (!safety.allowed && safety.requiresApproval) {
       await createApprovalRequest(
@@ -195,7 +195,7 @@ export class AgentDO extends Agent {
       return { done: true, text: safety.reason ?? "Blocked by safety policy.", observation: "" };
     }
 
-    incrementRateLimit(this.sql, "session", sessionId);
+    incrementRateLimit(this.db, "session", sessionId);
     const result = await this.executeWithGitSafety(command);
     const formatted = formatToolResult(toolBlock.id, [result.stdout, result.stderr].filter(Boolean).join("\n"));
 
@@ -239,22 +239,22 @@ export class AgentDO extends Agent {
       this.pendingApprovals,
       this.deps,
       this.env.SLACK_BOT_TOKEN,
-      this.sql,
+      this.db,
       async (command) => this.executeWithGitSafety(command)
     );
   }
 
   private async startSession(sessionId: string): Promise<void> {
     await restoreRepoSnapshot(this.env.REPO_STORE, sessionId, this.sandbox);
-    await syncKnowledgeToSandbox(this.sql, this.sandbox);
+    await syncKnowledgeToSandbox(this.db, this.sandbox);
   }
 
   private async endSession(sessionId: string): Promise<void> {
     await saveRepoSnapshot(this.env.REPO_STORE, sessionId, this.sandbox);
-    await syncKnowledgeFromSandbox(this.sql, this.sandbox);
+    await syncKnowledgeFromSandbox(this.db, this.sandbox);
   }
 
   async alarm(): Promise<void> {
-    await expireTimedOutApprovals(this.pendingApprovals, this.deps, this.env.SLACK_BOT_TOKEN, this.sql);
+    await expireTimedOutApprovals(this.pendingApprovals, this.deps, this.env.SLACK_BOT_TOKEN, this.db);
   }
 }
