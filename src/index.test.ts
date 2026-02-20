@@ -131,6 +131,59 @@ describe("worker entry point", () => {
     expect(forwardedBody.action).toBe("message");
   });
 
+  it("ignores bot messages to prevent infinite loops", async () => {
+    const stub = { fetch: vi.fn().mockResolvedValue(new Response("ok")) };
+    const env = makeEnv(stub);
+    const { ctx, pending } = makeCtx();
+
+    const payload = {
+      type: "event_callback",
+      event: {
+        type: "message",
+        bot_id: "B123",
+        channel: "C1",
+        text: "I am a bot response",
+        ts: "1711111111.5555"
+      }
+    };
+
+    const response = await worker.fetch(
+      await signedRequest(JSON.stringify(payload), env.SLACK_SIGNING_SECRET),
+      env,
+      ctx
+    );
+    await Promise.all(pending);
+
+    expect(response.status).toBe(200);
+    expect(stub.fetch).not.toHaveBeenCalled();
+  });
+
+  it("ignores message subtype events like message_changed", async () => {
+    const stub = { fetch: vi.fn().mockResolvedValue(new Response("ok")) };
+    const env = makeEnv(stub);
+    const { ctx, pending } = makeCtx();
+
+    const payload = {
+      type: "event_callback",
+      event: {
+        type: "message",
+        subtype: "message_changed",
+        channel: "C1",
+        ts: "1711111111.6666"
+      }
+    };
+
+    const response = await worker.fetch(
+      await signedRequest(JSON.stringify(payload), env.SLACK_SIGNING_SECRET),
+      env,
+      ctx
+    );
+    await Promise.all(pending);
+
+    expect(response.status).toBe(200);
+    expect(stub.fetch).not.toHaveBeenCalled();
+  });
+
   it("forwards reaction events to resolve approvals", async () => {
     const stub = { fetch: vi.fn().mockResolvedValue(new Response("ok")) };
     const env = makeEnv(stub);

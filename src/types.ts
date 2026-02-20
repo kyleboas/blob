@@ -36,6 +36,8 @@ export interface AgentState {
 
 export interface SlackEvent {
   type: string;
+  subtype?: string;
+  bot_id?: string;
   user?: string;
   channel?: string;
   text?: string;

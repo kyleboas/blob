@@ -151,6 +151,36 @@ describe("AgentDO runAgentLoop", () => {
     expect(result.steps).toBe(25);
   });
 
+  it("posts error to Slack when agent loop throws", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: vi.fn().mockRejectedValue(new Error("LLM unavailable")) as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const response = await agent.fetch(
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "message",
+          event: { type: "message", text: "hello", channel: "C1", thread_ts: "1711111111.7777" }
+        })
+      })
+    );
+
+    expect(response.status).toBe(202);
+    expect(postSlackMessage).toHaveBeenCalledWith(
+      "token",
+      "C1",
+      expect.stringContaining("LLM unavailable"),
+      "1711111111.7777"
+    );
+  });
+
   it("handles approval reaction callbacks", async () => {
     const sql = new FakeSql();
     const { env, sandbox } = makeTestEnv();

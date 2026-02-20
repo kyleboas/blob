@@ -87,7 +87,17 @@ export class AgentDO extends Agent {
     }
 
     if (body.action === "message" && body.event) {
-      await this.handleTaskEvent(body.event);
+      const event = body.event;
+      try {
+        await this.handleTaskEvent(event);
+      } catch (error) {
+        const threadTs = event.thread_ts ?? event.ts;
+        const channel = event.channel;
+        if (channel && threadTs) {
+          const message = error instanceof Error ? error.message : "An unexpected error occurred.";
+          await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, `Error: ${message}`, threadTs);
+        }
+      }
       return new Response("accepted", { status: 202 });
     }
 

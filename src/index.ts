@@ -53,9 +53,13 @@ export default {
     }
 
     if (event.type === "message") {
-      const threadTs = event.thread_ts ?? event.ts;
-      if (threadTs) {
-        ctx.waitUntil(forwardToAgent(env, threadTs, { action: "message", event }));
+      // Skip bot messages (including own responses) and message subtypes
+      // (edited/deleted messages) to prevent infinite loops and noise
+      if (!event.subtype && !event.bot_id) {
+        const threadTs = event.thread_ts ?? event.ts;
+        if (threadTs) {
+          ctx.waitUntil(forwardToAgent(env, threadTs, { action: "message", event }));
+        }
       }
       return new Response("ok", { status: 200 });
     }
