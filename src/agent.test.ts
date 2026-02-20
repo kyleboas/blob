@@ -146,7 +146,7 @@ describe("AgentDO runAgentLoop", () => {
     const llmCall = vi
       .fn()
       .mockResolvedValueOnce({ content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "rm -rf tmp" } }] });
-    const postSlackApproval = vi.fn().mockResolvedValue(undefined);
+    const postSlackApproval = vi.fn().mockResolvedValue({ ts: "approval-ts" });
     const postSlackMessage = vi.fn().mockResolvedValue(undefined);
     const setAlarm = vi.fn();
 
@@ -324,7 +324,7 @@ describe("AgentDO runAgentLoop", () => {
     const agent = new AgentDO({ storage: { sql } }, env, {
       llmCall: vi.fn().mockResolvedValue({ content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "rm -rf tmp" } }] }) as never,
       postSlackMessage: postSlackMessage as never,
-      postSlackApproval: vi.fn().mockResolvedValue(undefined) as never
+      postSlackApproval: vi.fn().mockResolvedValue({ ts: "approval-msg-ts" }) as never
     });
 
     await agent.fetch(
@@ -342,7 +342,7 @@ describe("AgentDO runAgentLoop", () => {
         method: "POST",
         body: JSON.stringify({
           action: "reaction",
-          event: { type: "reaction_added", reaction: "thumbsup", thread_ts: "1711111111.1111" }
+          event: { type: "reaction_added", reaction: "thumbsup", item: { ts: "approval-msg-ts" } }
         })
       })
     );

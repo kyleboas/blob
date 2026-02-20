@@ -6,10 +6,12 @@ import { SandboxClient, type SandboxBinding } from "./sandbox-client";
 import {
   getHistory,
   getRecentAgentEvents,
+  getCurrentSession,
   getKnowledge,
   incrementRateLimit,
   initSchema,
   logAgentEvent,
+  resolveOrCreateSession,
   restoreRepoSnapshot,
   saveMessage,
   saveRepoSnapshot,
@@ -105,8 +107,9 @@ export class AgentDO extends Agent {
   async fetch(request: Request): Promise<Response> {
     const body = await request.json() as { action?: string; event?: SlackEvent; task?: string };
 
-    if (body.action === "logs_snapshot" && body.event?.thread_ts) {
-      return Response.json({ events: getRecentAgentEvents(this.db, body.event.thread_ts) });
+    if (body.action === "logs_snapshot") {
+      const sessionId = getCurrentSession(this.db);
+      return Response.json({ events: sessionId ? getRecentAgentEvents(this.db, sessionId) : [] });
     }
 
     if (body.action === "reaction" && body.event) {
@@ -119,9 +122,8 @@ export class AgentDO extends Agent {
       try {
         await this.handleTaskEvent(event);
       } catch (error) {
-        const threadTs = event.thread_ts ?? event.ts;
         const channel = event.channel;
-        if (channel && threadTs) {
+        if (channel) {
           const message = error instanceof Error ? error.message : "An unexpected error occurred.";
           await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, `Error: ${message}`);
         }
@@ -129,8 +131,9 @@ export class AgentDO extends Agent {
       return new Response("accepted", { status: 202 });
     }
 
-    if (body.task && body.event?.thread_ts && body.event.channel) {
-      await this.runAgentLoop(body.task, body.event.channel, body.event.thread_ts);
+    if (body.task && body.event?.channel) {
+      const sessionId = resolveOrCreateSession(this.db, this.deps.now());
+      await this.runAgentLoop(body.task, body.event.channel, sessionId);
       return new Response("accepted", { status: 202 });
     }
 
@@ -246,8 +249,7 @@ export class AgentDO extends Agent {
         {
           sessionId,
           command,
-          channel,
-          threadTs
+          channel
         },
         this.deps,
         this.env.SLACK_BOT_TOKEN,
@@ -319,14 +321,14 @@ export class AgentDO extends Agent {
 
   private async handleTaskEvent(event: SlackEvent): Promise<void> {
     const task = event.text ?? "";
-    const threadTs = event.thread_ts ?? event.ts;
     const channel = event.channel;
 
-    if (!threadTs || !channel || !task.trim()) {
+    if (!channel || !task.trim()) {
       return;
     }
 
-    await this.runAgentLoop(task, channel, threadTs);
+    const sessionId = resolveOrCreateSession(this.db, this.deps.now());
+    await this.runAgentLoop(task, channel, sessionId);
   }
 
   private async handleApprovalReaction(event: SlackEvent): Promise<void> {

@@ -9,6 +9,10 @@ class FakeSql implements SqlStorage {
   private knowledge = "";
   private nextId = 1;
 
+  getTotalMessageCount(): number {
+    return this.messages.length;
+  }
+
   exec(query: string, ...bindings: Array<string | number | null>) {
     const normalized = query.trim().replace(/\s+/g, " ");
     if (normalized.startsWith("CREATE TABLE")) return { toArray: () => [] };
@@ -146,6 +150,6 @@ describe("integration flow", () => {
     expect(doStub.fetch).toHaveBeenCalledTimes(1);
     expect(sandbox.exec).toHaveBeenCalledWith("echo hi");
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C111", "Command complete");
-    expect(sql.getMessageCountForThread(threadTs)).toBeGreaterThan(0);
+    expect(sql.getTotalMessageCount()).toBeGreaterThan(0);
   });
 });

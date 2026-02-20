@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  mapThreadToDO,
+  mapChannelToDO,
   parseSlackEvent,
   postApprovalRequest,
   postMessage,
@@ -89,7 +89,7 @@ describe("parseSlackEvent", () => {
 describe("posting helpers", () => {
   it("posts messages to chat.postMessage", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ok: true }), { status: 200 })
+      new Response(JSON.stringify({ ok: true, ts: "123.4" }), { status: 200 })
     );
 
     await postMessage("xoxb-token", "C123", "hello", "123.4", fetchImpl);
@@ -102,10 +102,10 @@ describe("posting helpers", () => {
 
   it("posts approval request text", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ok: true }), { status: 200 })
+      new Response(JSON.stringify({ ok: true, ts: "123.4" }), { status: 200 })
     );
 
-    await postApprovalRequest("xoxb-token", "C123", "123.4", "Run rm -rf?", fetchImpl);
+    await postApprovalRequest("xoxb-token", "C123", "Run rm -rf?", fetchImpl);
 
     const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(String(init.body)) as { text: string };
@@ -114,8 +114,8 @@ describe("posting helpers", () => {
   });
 });
 
-describe("mapThreadToDO", () => {
-  it("is deterministic for the same thread timestamp", () => {
-    expect(mapThreadToDO("1711111111.1111")).toBe(mapThreadToDO("1711111111.1111"));
+describe("mapChannelToDO", () => {
+  it("is deterministic for the same channel", () => {
+    expect(mapChannelToDO("C1")).toBe(mapChannelToDO("C1"));
   });
 });

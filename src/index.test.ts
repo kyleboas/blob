@@ -194,7 +194,7 @@ describe("worker entry point", () => {
       event: {
         type: "reaction_added",
         reaction: "thumbsup",
-        thread_ts: "1711111111.3333"
+        item: { ts: "1711111111.3333", channel: "C1" }
       }
     };
 
@@ -205,17 +205,17 @@ describe("worker entry point", () => {
     expect(forwardedBody.action).toBe("reaction");
   });
 
-  it("renders the live logs page for a thread", async () => {
+  it("renders the live logs page for a channel", async () => {
     const stub = { fetch: vi.fn() };
     const env = makeEnv(stub);
     const { ctx } = makeCtx();
 
-    const response = await worker.fetch(new Request("https://example.com/logs?thread_ts=1711111111.3333"), env, ctx);
+    const response = await worker.fetch(new Request("https://example.com/logs?channel=C1"), env, ctx);
     const html = await response.text();
 
     expect(response.status).toBe(200);
     expect(html).toContain("Blob Live Logs");
-    expect(html).toContain("1711111111.3333");
+    expect(html).toContain("C1");
   });
 
   it("proxies live log data through durable objects", async () => {
@@ -223,7 +223,7 @@ describe("worker entry point", () => {
     const env = makeEnv(stub);
     const { ctx } = makeCtx();
 
-    const response = await worker.fetch(new Request("https://example.com/logs/data?thread_ts=1711111111.4444"), env, ctx);
+    const response = await worker.fetch(new Request("https://example.com/logs/data?channel=C1"), env, ctx);
     const payload = await response.json() as { events: Array<{ eventType: string }> };
 
     expect(response.status).toBe(200);

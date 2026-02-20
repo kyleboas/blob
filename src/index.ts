@@ -1,10 +1,10 @@
-import { mapThreadToDO, parseSlackEvent, verifySlackSignature } from "./slack";
+import { mapChannelToDO, parseSlackEvent, verifySlackSignature } from "./slack";
 import type { Env, SlackEvent } from "./types";
 
 export { AgentDO } from "./agent";
 
-async function forwardToAgent(env: Env, threadTs: string, payload: { action: "message" | "reaction"; event: SlackEvent }): Promise<void> {
-  const id = env.AGENT_DO.idFromName(mapThreadToDO(threadTs));
+async function forwardToAgent(env: Env, channel: string, payload: { action: "message" | "reaction"; event: SlackEvent }): Promise<void> {
+  const id = env.AGENT_DO.idFromName(mapChannelToDO(channel));
   const stub = env.AGENT_DO.get(id);
 
   const response = await stub.fetch("https://agent.internal/event", {
@@ -18,7 +18,7 @@ async function forwardToAgent(env: Env, threadTs: string, payload: { action: "me
   }
 }
 
-function renderLiveLogPage(threadTs: string): string {
+function renderLiveLogPage(channel: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -34,15 +34,15 @@ function renderLiveLogPage(threadTs: string): string {
 </head>
 <body>
   <h1>Blob Live Logs</h1>
-  <div id="status">Thread: ${threadTs}</div>
+  <div id="status">Channel: ${channel}</div>
   <pre id="log">Waiting for events...</pre>
   <script>
-    const threadTs = ${JSON.stringify(threadTs)};
+    const channel = ${JSON.stringify(channel)};
     const logNode = document.getElementById('log');
     const statusNode = document.getElementById('status');
 
     async function refreshLogs() {
-      const response = await fetch('/logs/data?thread_ts=' + encodeURIComponent(threadTs), { cache: 'no-store' });
+      const response = await fetch('/logs/data?channel=' + encodeURIComponent(channel), { cache: 'no-store' });
       if (!response.ok) {
         statusNode.textContent = 'Failed to load logs: ' + response.status;
         return;
@@ -54,7 +54,7 @@ function renderLiveLogPage(threadTs: string): string {
         return '[' + when + '] [' + event.eventType + '] ' + event.message;
       });
       logNode.textContent = lines.length ? lines.join('\n') : 'No events yet.';
-      statusNode.textContent = 'Thread: ' + threadTs + ' • Last updated: ' + new Date().toLocaleTimeString();
+      statusNode.textContent = 'Channel: ' + channel + ' • Last updated: ' + new Date().toLocaleTimeString();
       logNode.scrollTop = logNode.scrollHeight;
     }
 
@@ -74,29 +74,29 @@ export default {
     }
 
     if (request.method === "GET" && (url.pathname === "/logs" || url.pathname === "/live-logs")) {
-      const threadTs = url.searchParams.get("thread_ts") ?? "";
-      if (!threadTs) {
-        return new Response("Missing query parameter: thread_ts", { status: 400 });
+      const channel = url.searchParams.get("channel") ?? "";
+      if (!channel) {
+        return new Response("Missing query parameter: channel", { status: 400 });
       }
 
-      return new Response(renderLiveLogPage(threadTs), {
+      return new Response(renderLiveLogPage(channel), {
         status: 200,
         headers: { "content-type": "text/html; charset=utf-8" }
       });
     }
 
     if (request.method === "GET" && (url.pathname === "/logs/data" || url.pathname === "/live-logs/data")) {
-      const threadTs = url.searchParams.get("thread_ts") ?? "";
-      if (!threadTs) {
-        return Response.json({ error: "missing thread_ts" }, { status: 400 });
+      const channel = url.searchParams.get("channel") ?? "";
+      if (!channel) {
+        return Response.json({ error: "missing channel" }, { status: 400 });
       }
 
-      const id = env.AGENT_DO.idFromName(mapThreadToDO(threadTs));
+      const id = env.AGENT_DO.idFromName(mapChannelToDO(channel));
       const stub = env.AGENT_DO.get(id);
       const response = await stub.fetch("https://agent.internal/event", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "logs_snapshot", event: { thread_ts: threadTs } })
+        body: JSON.stringify({ action: "logs_snapshot" })
       });
 
       if (!response.ok) {
@@ -137,18 +137,18 @@ export default {
       // Skip bot messages (including own responses) and message subtypes
       // (edited/deleted messages) to prevent infinite loops and noise
       if (!event.subtype && !event.bot_id) {
-        const threadTs = event.thread_ts ?? event.ts;
-        if (threadTs) {
-          ctx.waitUntil(forwardToAgent(env, threadTs, { action: "message", event }));
+        const channel = event.channel;
+        if (channel) {
+          ctx.waitUntil(forwardToAgent(env, channel, { action: "message", event }));
         }
       }
       return new Response("ok", { status: 200 });
     }
 
     if (event.type === "reaction_added") {
-      const threadTs = event.thread_ts ?? event.ts;
-      if (threadTs) {
-        ctx.waitUntil(forwardToAgent(env, threadTs, { action: "reaction", event }));
+      const channel = event.item?.channel ?? event.channel;
+      if (channel) {
+        ctx.waitUntil(forwardToAgent(env, channel, { action: "reaction", event }));
       }
       return new Response("ok", { status: 200 });
     }

@@ -23,31 +23,31 @@ describe("approval helpers", () => {
   it("creates approval requests and schedules alarm", async () => {
     const pending = new Map<string, PendingApproval>();
     const setAlarm = vi.fn();
-    const postSlackApproval = vi.fn().mockResolvedValue(undefined);
+    const postSlackApproval = vi.fn().mockResolvedValue({ ts: "approval-ts" });
 
     await createApprovalRequest(
       pending,
-      { sessionId: "s1", command: "rm -rf tmp", channel: "C1", threadTs: "t1" },
+      { sessionId: "s1", command: "rm -rf tmp", channel: "C1" },
       { postSlackApproval: postSlackApproval as never, postSlackMessage: vi.fn() as never, now: () => 1_000 },
       "token",
       { setAlarm }
     );
 
-    expect(pending.get("t1")?.requestedAtMs).toBe(1_000);
+    expect(pending.get("approval-ts")?.requestedAtMs).toBe(1_000);
     expect(setAlarm).toHaveBeenCalled();
     expect(postSlackApproval).toHaveBeenCalledTimes(1);
   });
 
   it("resolves approved reactions and records decisions", async () => {
     const pending = new Map<string, PendingApproval>([["t1", {
-      sessionId: "s1", command: "git reset --hard", channel: "C1", threadTs: "t1", requestedAtMs: 0
+      sessionId: "s1", command: "git reset --hard", channel: "C1", requestedAtMs: 0
     }]]);
     const sql = new FakeSql();
     const postSlackMessage = vi.fn().mockResolvedValue(undefined);
     const execApproved = vi.fn().mockResolvedValue({ exitCode: 0 });
 
     await resolveApprovalReaction(
-      { reaction: "thumbsup", thread_ts: "t1", user: "U1" },
+      { reaction: "thumbsup", item: { ts: "t1" }, user: "U1" },
       pending,
       { postSlackApproval: vi.fn() as never, postSlackMessage: postSlackMessage as never, now: () => 0 },
       "token",
@@ -61,7 +61,7 @@ describe("approval helpers", () => {
 
   it("expires timed out approvals", async () => {
     const pending = new Map<string, PendingApproval>([["t1", {
-      sessionId: "s1", command: "rm -rf tmp", channel: "C1", threadTs: "t1", requestedAtMs: 0
+      sessionId: "s1", command: "rm -rf tmp", channel: "C1", requestedAtMs: 0
     }]]);
     const sql = new FakeSql();
     const postSlackMessage = vi.fn().mockResolvedValue(undefined);

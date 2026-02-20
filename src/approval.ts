@@ -7,7 +7,6 @@ export interface PendingApproval {
   sessionId: string;
   command: string;
   channel: string;
-  threadTs: string;
   requestedAtMs: number;
 }
 
@@ -29,35 +28,35 @@ export async function createApprovalRequest(
   storage?: ApprovalStorage
 ): Promise<void> {
   const requestedAtMs = deps.now();
-  pendingApprovals.set(approval.threadTs, { ...approval, requestedAtMs });
+
+  const { ts: approvalMsgTs } = await deps.postSlackApproval(
+    token,
+    approval.channel,
+    `The agent wants to run:\n\`${approval.command}\``
+  );
+
+  pendingApprovals.set(approvalMsgTs, { ...approval, requestedAtMs });
 
   const timeoutMs = APPROVAL_TIMEOUT_MINUTES * 60 * 1000;
   await storage?.setAlarm?.(requestedAtMs + timeoutMs);
-
-  await deps.postSlackApproval(
-    token,
-    approval.channel,
-    approval.threadTs,
-    `The agent wants to run:\n\`${approval.command}\``
-  );
 }
 
 export async function resolveApprovalReaction(
-  event: { thread_ts?: string; ts?: string; reaction?: string; user?: string },
+  event: { item?: { ts?: string }; reaction?: string; user?: string },
   pendingApprovals: Map<string, PendingApproval>,
   deps: ApprovalDeps,
   token: string,
   sql: SqlStorage,
   executeApprovedCommand: (command: string) => Promise<{ exitCode: number }>
 ): Promise<void> {
-  const threadTs = event.thread_ts ?? event.ts;
-  if (!threadTs) return;
+  const approvalMsgTs = event.item?.ts;
+  if (!approvalMsgTs) return;
 
-  const pending = pendingApprovals.get(threadTs);
+  const pending = pendingApprovals.get(approvalMsgTs);
   if (!pending) return;
 
   if (event.reaction === "thumbsup") {
-    pendingApprovals.delete(threadTs);
+    pendingApprovals.delete(approvalMsgTs);
     saveApprovalDecision(sql, pending.sessionId, pending.command, "approved", event.user ?? null);
     const result = await executeApprovedCommand(pending.command);
     await deps.postSlackMessage(
@@ -69,7 +68,7 @@ export async function resolveApprovalReaction(
   }
 
   if (event.reaction === "thumbsdown") {
-    pendingApprovals.delete(threadTs);
+    pendingApprovals.delete(approvalMsgTs);
     saveApprovalDecision(sql, pending.sessionId, pending.command, "denied", event.user ?? null);
     await deps.postSlackMessage(token, pending.channel, "Approval denied. I did not execute the command.");
   }
@@ -84,9 +83,9 @@ export async function expireTimedOutApprovals(
   const timeoutMs = APPROVAL_TIMEOUT_MINUTES * 60 * 1000;
   const now = deps.now();
 
-  for (const [threadTs, pending] of pendingApprovals.entries()) {
+  for (const [approvalKey, pending] of pendingApprovals.entries()) {
     if (now - pending.requestedAtMs > timeoutMs) {
-      pendingApprovals.delete(threadTs);
+      pendingApprovals.delete(approvalKey);
       saveApprovalDecision(sql, pending.sessionId, pending.command, "timed_out", null);
       await deps.postSlackMessage(token, pending.channel, "Approval timed out. Command was not executed.");
     }

@@ -1,5 +1,6 @@
 import type { ConversationMessage } from "./types";
 import type { SandboxClient } from "./sandbox-client";
+import { CONVERSATION_TIMEOUT_MINUTES } from "./config";
 
 const KNOWLEDGE_KEY = "knowledge";
 
@@ -118,6 +119,49 @@ export function initSchema(sql: SqlStorage): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     )
   `);
+
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS session_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      current_session_id TEXT NOT NULL,
+      last_message_at INTEGER NOT NULL
+    )
+  `);
+}
+
+export function resolveOrCreateSession(sql: SqlStorage, nowMs: number): string {
+  const rows = sql
+    .exec(`SELECT current_session_id, last_message_at FROM session_state WHERE id = 1`)
+    .toArray();
+
+  const existing = rows[0];
+  const timeoutMs = CONVERSATION_TIMEOUT_MINUTES * 60 * 1000;
+
+  let sessionId: string;
+  if (!existing || (nowMs - Number(existing.last_message_at)) > timeoutMs) {
+    sessionId = `session:${nowMs}`;
+  } else {
+    sessionId = String(existing.current_session_id);
+  }
+
+  sql.exec(
+    `INSERT INTO session_state (id, current_session_id, last_message_at)
+     VALUES (1, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       current_session_id = excluded.current_session_id,
+       last_message_at = excluded.last_message_at`,
+    sessionId,
+    nowMs
+  );
+
+  return sessionId;
+}
+
+export function getCurrentSession(sql: SqlStorage): string | null {
+  const rows = sql
+    .exec(`SELECT current_session_id FROM session_state WHERE id = 1`)
+    .toArray();
+  return rows[0] ? String(rows[0].current_session_id) : null;
 }
 
 export interface AgentEvent {

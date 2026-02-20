@@ -44,4 +44,5 @@ export interface SlackEvent {
   thread_ts?: string;
   ts?: string;
   reaction?: string;
+  item?: { ts?: string; channel?: string };
 }
