@@ -37,10 +37,9 @@ def classify_action(command: str, target_files: list[str]) -> str:
 
 
 class SlackApprovalGate:
-    def __init__(self, client: object, channel: str, thread_ts: str, timeout_minutes: int = config.APPROVAL_TIMEOUT_MINUTES) -> None:
+    def __init__(self, client: object, channel: str, timeout_minutes: int = config.APPROVAL_TIMEOUT_MINUTES) -> None:
         self.client = client
         self.channel = channel
-        self.thread_ts = thread_ts
         self.timeout_seconds = timeout_minutes * 60
         self._decisions: dict[str, bool] = {}
         self._events: dict[str, threading.Event] = {}
@@ -51,7 +50,6 @@ class SlackApprovalGate:
 
         response = self.client.chat_postMessage(
             channel=self.channel,
-            thread_ts=self.thread_ts,
             text=(
                 f"Approval required ({tier}): {action_description}\n"
                 "React with :white_check_mark: to approve or :x: to reject."
