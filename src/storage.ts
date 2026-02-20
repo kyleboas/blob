@@ -189,13 +189,19 @@ export async function syncKnowledgeToSandbox(
   sandbox: Pick<SandboxClient, "writeFile">
 ): Promise<void> {
   const knowledge = getKnowledge(sql);
+  if (!knowledge) {
+    return;
+  }
   await sandbox.writeFile("AGENT.md", knowledge);
 }
 
 export async function syncKnowledgeFromSandbox(
   sql: SqlStorage,
-  sandbox: Pick<SandboxClient, "readFile">
+  sandbox: Pick<SandboxClient, "readFile" | "fileExists">
 ): Promise<void> {
+  if (!(await sandbox.fileExists("AGENT.md"))) {
+    return;
+  }
   const knowledge = await sandbox.readFile("AGENT.md");
   saveKnowledge(sql, knowledge);
 }
