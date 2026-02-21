@@ -27,7 +27,7 @@ from safety import (
     git_revert_to_checkpoint,
 )
 from sandbox import SandboxExecutor
-from tools import BASH_TOOL, format_tool_result
+from tools import BASH_TOOL, MAKE_PR_TOOL, PUSH_BRANCH_TOOL, format_tool_result
 
 
 class _HTMLToTextParser(HTMLParser):
@@ -69,6 +69,14 @@ def _extract_urls(text: str) -> list[str]:
         if normalized not in cleaned:
             cleaned.append(normalized)
     return cleaned
+
+
+def _parse_github_repo(remote_url: str) -> str | None:
+    cleaned = remote_url.strip()
+    https_match = re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$", cleaned)
+    if https_match:
+        return https_match.group(1)
+    return None
 
 
 @dataclass(slots=True)
@@ -122,6 +130,156 @@ class Agent:
             },
         )
 
+    def _push_branch_to_remote(self, tool_input: dict[str, object]) -> str:
+        remote = str(tool_input.get("remote", "origin")).strip() or "origin"
+
+        branch = str(tool_input.get("branch", "")).strip()
+        if not branch:
+            branch_cmd = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=config.WORKSPACE_ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if branch_cmd.returncode != 0:
+                return "error: unable to determine current branch"
+            branch = branch_cmd.stdout.strip()
+
+        if branch == "HEAD":
+            return "error: detached HEAD is not supported; checkout a branch first"
+
+        set_upstream = bool(tool_input.get("set_upstream", True))
+        push_command = ["git", "push"]
+        if set_upstream:
+            push_command.append("-u")
+        push_command.extend([remote, branch])
+
+        push = subprocess.run(
+            push_command,
+            cwd=config.WORKSPACE_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if push.returncode != 0:
+            return f"error: failed to push branch\n{push.stderr.strip()}"
+
+        return f"ok: pushed {branch} to {remote}"
+
+    def _create_github_pr(self, tool_input: dict[str, object]) -> str:
+        token = subprocess.run(
+            ["bash", "-lc", "printf %s \"${GITHUB_TOKEN:-${GH_TOKEN:-}}\""],
+            cwd=config.WORKSPACE_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if not token:
+            return "error: missing GITHUB_TOKEN (or GH_TOKEN) in environment"
+
+        title = str(tool_input.get("title", "")).strip()
+        body = str(tool_input.get("body", "")).strip()
+        if not title:
+            return "error: pull request title is required"
+
+        repo = str(tool_input.get("repo", "")).strip()
+        if not repo:
+            remote = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                cwd=config.WORKSPACE_ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if remote.returncode != 0:
+                return "error: unable to resolve origin remote"
+            parsed_repo = _parse_github_repo(remote.stdout)
+            if not parsed_repo:
+                return "error: origin remote is not a GitHub repository; provide repo as owner/name"
+            repo = parsed_repo
+
+        head = str(tool_input.get("head", "")).strip()
+        if not head:
+            branch_cmd = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=config.WORKSPACE_ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if branch_cmd.returncode != 0:
+                return "error: unable to determine current branch"
+            head = branch_cmd.stdout.strip()
+        if head == "HEAD":
+            return "error: detached HEAD is not supported; checkout a branch first"
+
+        base = str(tool_input.get("base", "")).strip()
+        if not base:
+            default_base = subprocess.run(
+                ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
+                cwd=config.WORKSPACE_ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if default_base.returncode == 0 and default_base.stdout.strip().startswith("refs/remotes/origin/"):
+                base = default_base.stdout.strip().removeprefix("refs/remotes/origin/")
+            else:
+                base = "main"
+
+        push = subprocess.run(
+            ["git", "push", "-u", "origin", head],
+            cwd=config.WORKSPACE_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if push.returncode != 0:
+            return f"error: failed to push branch\n{push.stderr.strip()}"
+
+        payload = {
+            "title": title,
+            "body": body,
+            "head": head,
+            "base": base,
+            "draft": bool(tool_input.get("draft", False)),
+        }
+
+        create_pr = subprocess.run(
+            [
+                "curl",
+                "-fsSL",
+                "-X",
+                "POST",
+                "https://api.github.com/repos/{}/pulls".format(repo),
+                "-H",
+                "Accept: application/vnd.github+json",
+                "-H",
+                f"Authorization: Bearer {token}",
+                "-H",
+                "X-GitHub-Api-Version: 2022-11-28",
+                "-d",
+                json.dumps(payload),
+            ],
+            cwd=config.WORKSPACE_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if create_pr.returncode != 0:
+            return f"error: failed to create pull request\n{create_pr.stderr.strip()}"
+
+        try:
+            response = json.loads(create_pr.stdout)
+        except json.JSONDecodeError:
+            return f"error: unexpected GitHub response\n{create_pr.stdout.strip()}"
+        pr_url = response.get("html_url", "")
+        pr_number = response.get("number", "")
+        if not pr_url:
+            return f"error: GitHub response missing html_url\n{create_pr.stdout.strip()}"
+        return f"ok: opened PR #{pr_number} {pr_url}"
+
     def run_task(self, task: str, extra_context: str = "") -> str:
         messages = list(self._base_messages)
         auto_docs: list[str] = []
@@ -156,7 +314,7 @@ class Agent:
                 model=model,
                 system=self._system_prompt,
                 messages=messages,
-                tools=[BASH_TOOL],
+                tools=[BASH_TOOL, MAKE_PR_TOOL, PUSH_BRANCH_TOOL],
             )
             self._record_llm_usage(task, model, response.usage.input_tokens, response.usage.output_tokens)
             messages.append({"role": "assistant", "content": response.content})
@@ -170,9 +328,40 @@ class Agent:
                 break
 
             for tool_use in tool_uses:
+                tool_name = tool_use.get("name", "bash")
                 command = tool_use.get("input", {}).get("command", "")
                 target_files = _extract_target_files(command)
                 is_modification = _is_modification_command(command, target_files)
+
+                if tool_name == "push_branch":
+                    tier = "conditional"
+                    allowed = self.approval_gate.request_approval("push branch to github", tier)
+                    if not allowed:
+                        result_text = "Blocked: approval denied or timed out."
+                    else:
+                        result_text = self._push_branch_to_remote(tool_use.get("input", {}))
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": [format_tool_result(tool_use_id=tool_use["id"], output=result_text)],
+                        }
+                    )
+                    continue
+
+                if tool_name == "make_pr":
+                    tier = "conditional"
+                    allowed = self.approval_gate.request_approval("create github pull request", tier)
+                    if not allowed:
+                        result_text = "Blocked: approval denied or timed out."
+                    else:
+                        result_text = self._create_github_pr(tool_use.get("input", {}))
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": [format_tool_result(tool_use_id=tool_use["id"], output=result_text)],
+                        }
+                    )
+                    continue
 
                 if is_modification and not self.rate_limiter.can_modify():
                     result_text = "Blocked: self-modification rate limit reached."

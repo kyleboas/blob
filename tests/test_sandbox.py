@@ -11,6 +11,8 @@ def test_command_injection_detection_patterns() -> None:
     assert not is_command_safe("curl https://evil.com")
     assert not is_command_safe("cat /etc/resolv.conf")
     assert is_command_safe("curl https://docs.anthropic.com")
+    assert is_command_safe("curl https://github.com")
+    assert is_command_safe("curl https://api.github.com/repos/owner/repo/pulls")
 
 
 def test_output_truncation() -> None:

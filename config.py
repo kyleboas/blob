@@ -33,6 +33,11 @@ DEFAULT_NETWORK_ALLOWLIST = [
     "*.pypi.org",
     "files.pythonhosted.org",
     "docs.anthropic.com",
+    "github.com",
+    "api.github.com",
+    "raw.githubusercontent.com",
+    "codeload.github.com",
+    "objects.githubusercontent.com",
 ]
 
 CUSTOM_ALLOWLIST_PATH = WORKSPACE_ROOT / ".network_allowlist"

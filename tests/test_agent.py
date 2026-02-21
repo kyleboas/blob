@@ -1,7 +1,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
-from agent import Agent, _extract_urls
+from agent import Agent, _extract_urls, _parse_github_repo
 from llm_client import LLMResponse, LLMUsage
 from sandbox import ExecutionResult
 
@@ -62,6 +62,64 @@ def test_tool_dispatch_and_on_status_callback() -> None:
     assert result == "ok"
     assert sandbox.called == 1
     assert statuses
+
+
+def test_parse_github_repo() -> None:
+    assert _parse_github_repo("git@github.com:octo/example.git") == "octo/example"
+    assert _parse_github_repo("https://github.com/octo/example.git") == "octo/example"
+    assert _parse_github_repo("https://gitlab.com/octo/example.git") is None
+
+
+def test_make_pr_tool_path() -> None:
+    llm = MockLLM([
+        LLMResponse(
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "tool1",
+                    "name": "make_pr",
+                    "input": {"title": "T", "body": "B", "repo": "octo/example", "head": "work", "base": "main"},
+                }
+            ],
+            stop_reason="tool_use",
+            usage=LLMUsage(1, 1),
+        ),
+        LLMResponse(content=[{"type": "text", "text": "ok"}], stop_reason="end_turn", usage=LLMUsage(1, 1)),
+    ])
+
+    agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
+    with patch.object(agent, "_create_github_pr", return_value="ok: opened PR") as mock_make_pr:
+        result = agent.run_task("open pr")
+
+    assert result == "ok"
+    mock_make_pr.assert_called_once()
+
+
+
+
+def test_push_branch_tool_path() -> None:
+    llm = MockLLM([
+        LLMResponse(
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "tool1",
+                    "name": "push_branch",
+                    "input": {"remote": "origin", "branch": "work"},
+                }
+            ],
+            stop_reason="tool_use",
+            usage=LLMUsage(1, 1),
+        ),
+        LLMResponse(content=[{"type": "text", "text": "ok"}], stop_reason="end_turn", usage=LLMUsage(1, 1)),
+    ])
+
+    agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
+    with patch.object(agent, "_push_branch_to_remote", return_value="ok: pushed work to origin") as mock_push:
+        result = agent.run_task("push fix")
+
+    assert result == "ok"
+    mock_push.assert_called_once()
 
 
 def test_step_limit_enforcement() -> None:
