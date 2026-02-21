@@ -1,4 +1,3 @@
-import { Agent } from "@cloudflare/agents";
 import {
   MAX_STEPS,
   TOOL_RETRY_MAX,
@@ -155,14 +154,13 @@ function extractTextContent(response: LLMResponse): string {
     .trim();
 }
 
-export class AgentDO extends Agent {
+export class AgentDO {
   private readonly db: SqlStorage;
   private readonly sandbox: SandboxClient;
   private readonly deps: AgentDeps;
   private pendingApprovals = new Map<string, PendingApproval>();
 
   constructor(private readonly ctx: DurableObjectStateLike, private readonly env: Env, deps: Partial<AgentDeps> = {}) {
-    super(ctx, env);
     this.db = ctx.storage.sql;
     this.sandbox = new SandboxClient((env.SANDBOX as unknown as SandboxBinding | undefined) ?? UNCONFIGURED_SANDBOX);
     this.deps = { ...DEFAULT_DEPS, ...deps };
