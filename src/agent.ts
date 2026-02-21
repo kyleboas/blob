@@ -79,6 +79,7 @@ const DEFAULT_DEPS: AgentDeps = {
 
 // DO name for the global logs channel – matches mapChannelToDO("__global__")
 const GLOBAL_LOGS_DO_NAME = "slack-channel:__global__";
+const SLOW_OPERATION_WARN_MS = 15_000;
 
 const BASE_SYSTEM_PROMPT = [
   "You are Blob, a careful coding agent.",
@@ -165,6 +166,36 @@ export class AgentDO {
     this.sandbox = new SandboxClient((env.SANDBOX as unknown as SandboxBinding | undefined) ?? UNCONFIGURED_SANDBOX);
     this.deps = { ...DEFAULT_DEPS, ...deps };
     initSchema(this.db);
+  }
+
+  private logDiagnostic(sessionId: string, eventType: string, message: string, channel?: string): void {
+    logAgentEvent(this.db, sessionId, eventType, message);
+    if (channel) {
+      this.forwardToGlobalLogs(eventType, `[#${channel}] ${message}`);
+    }
+  }
+
+  private async traceOperation<T>(
+    sessionId: string,
+    label: string,
+    operation: () => Promise<T>,
+    channel?: string
+  ): Promise<T> {
+    const startedAt = this.deps.now();
+    this.logDiagnostic(sessionId, "trace", `${label}: start`, channel);
+
+    try {
+      const result = await operation();
+      const elapsedMs = this.deps.now() - startedAt;
+      const eventType = elapsedMs >= SLOW_OPERATION_WARN_MS ? "trace_warning" : "trace";
+      this.logDiagnostic(sessionId, eventType, `${label}: done in ${elapsedMs}ms`, channel);
+      return result;
+    } catch (error) {
+      const elapsedMs = this.deps.now() - startedAt;
+      const message = error instanceof Error ? error.message : String(error);
+      this.logDiagnostic(sessionId, "trace_error", `${label}: failed after ${elapsedMs}ms (${message})`, channel);
+      throw error;
+    }
   }
 
   private runInBackground(work: Promise<void>): void {
@@ -281,12 +312,17 @@ export class AgentDO {
       });
     }, THINKING_MESSAGE_DELAY_MS);
 
-    const firstResponse = await this.deps.llmCall({
-      apiKey: this.env.ANTHROPIC_API_KEY,
-      systemPrompt,
-      messages: conversation,
-      tools: [BASH_TOOL]
-    });
+    const firstResponse = await this.traceOperation(
+      sessionId,
+      "llm_call_initial",
+      () => this.deps.llmCall({
+        apiKey: this.env.ANTHROPIC_API_KEY,
+        systemPrompt,
+        messages: conversation,
+        tools: [BASH_TOOL]
+      }),
+      channel
+    );
 
     let finalText = "";
     let steps = 0;
@@ -310,7 +346,7 @@ export class AgentDO {
         }
 
         if (!sandboxStarted) {
-          await this.startSandboxSession(sessionId);
+          await this.traceOperation(sessionId, "sandbox_start", () => this.startSandboxSession(sessionId), channel);
           sandboxStarted = true;
           logAgentEvent(this.db, sessionId, "session", "Sandbox session started.");
         }
@@ -324,16 +360,21 @@ export class AgentDO {
         conversation.push({ role: "assistant", content: decision.observation });
         saveMessage(this.db, sessionId, { role: "assistant", content: decision.observation });
 
-        llmResponse = await this.deps.llmCall({
-          apiKey: this.env.ANTHROPIC_API_KEY,
-          systemPrompt,
-          messages: conversation,
-          tools: [BASH_TOOL]
-        });
+        llmResponse = await this.traceOperation(
+          sessionId,
+          "llm_call_follow_up",
+          () => this.deps.llmCall({
+            apiKey: this.env.ANTHROPIC_API_KEY,
+            systemPrompt,
+            messages: conversation,
+            tools: [BASH_TOOL]
+          }),
+          channel
+        );
       }
     } finally {
       if (sandboxStarted) {
-        await this.endSandboxSession(sessionId);
+        await this.traceOperation(sessionId, "sandbox_end", () => this.endSandboxSession(sessionId), channel);
         logAgentEvent(this.db, sessionId, "session", "Sandbox session ended.");
       }
     }
@@ -415,7 +456,7 @@ export class AgentDO {
     }
 
     incrementRateLimit(this.db, "session", sessionId);
-    const result = await this.executeWithGitSafety(command);
+    const result = await this.traceOperation(sessionId, "command_exec", () => this.executeWithGitSafety(command), channel);
     if (result.stdout.trim()) {
       const stdoutMessage = result.stdout.length > 4000 ? `${result.stdout.slice(0, 4000)}\n...[truncated]` : result.stdout;
       logAgentEvent(this.db, sessionId, "command_output", stdoutMessage);
@@ -499,7 +540,7 @@ export class AgentDO {
     // When a new conversation starts, summarize the previous one and extract
     // any long-term learnings into AGENT.md before the new session runs
     if (previousSessionId) {
-      await this.summarizePreviousSession(previousSessionId);
+      await this.traceOperation(sessionId, "session_summary", () => this.summarizePreviousSession(previousSessionId), channel);
     }
 
     await this.runAgentLoop(task, channel, sessionId);
