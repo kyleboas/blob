@@ -45,6 +45,7 @@ import { createApprovalRequest, expireTimedOutApprovals, resolveApprovalReaction
 import type { ConversationMessage, Env, SlackEvent } from "./types";
 
 interface DurableObjectStateLike {
+  waitUntil?: (promise: Promise<unknown>) => void;
   storage: {
     sql: SqlStorage;
     setAlarm?: (scheduledTime: number | Date) => Promise<void> | void;
@@ -168,6 +169,14 @@ export class AgentDO extends Agent {
     initSchema(this.db);
   }
 
+  private async runInBackground(work: Promise<void>): Promise<void> {
+    if (this.ctx.waitUntil) {
+      this.ctx.waitUntil(work);
+      return;
+    }
+    await work;
+  }
+
   async fetch(request: Request): Promise<Response> {
     const body = await request.json() as {
       action?: string;
@@ -206,15 +215,17 @@ export class AgentDO extends Agent {
 
     if (body.action === "message" && body.event) {
       const event = body.event;
-      try {
-        await this.handleTaskEvent(event);
-      } catch (error) {
-        const channel = event.channel;
-        if (channel) {
-          const message = error instanceof Error ? error.message : "An unexpected error occurred.";
-          await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, `Error: ${message}`);
+      await this.runInBackground((async () => {
+        try {
+          await this.handleTaskEvent(event);
+        } catch (error) {
+          const channel = event.channel;
+          if (channel) {
+            const message = error instanceof Error ? error.message : "An unexpected error occurred.";
+            await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, `Error: ${message}`);
+          }
         }
-      }
+      })());
       return new Response("accepted", { status: 202 });
     }
 
@@ -229,11 +240,13 @@ export class AgentDO extends Agent {
     }
 
     if (body.task && body.event?.channel) {
-      const { sessionId, previousSessionId } = resolveOrCreateSession(this.db, this.deps.now());
-      if (previousSessionId) {
-        await this.summarizePreviousSession(previousSessionId);
-      }
-      await this.runAgentLoop(body.task, body.event.channel, sessionId);
+      await this.runInBackground((async () => {
+        const { sessionId, previousSessionId } = resolveOrCreateSession(this.db, this.deps.now());
+        if (previousSessionId) {
+          await this.summarizePreviousSession(previousSessionId);
+        }
+        await this.runAgentLoop(body.task!, body.event!.channel!, sessionId);
+      })());
       return new Response("accepted", { status: 202 });
     }
 
