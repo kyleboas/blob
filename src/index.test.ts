@@ -226,6 +226,32 @@ describe("worker entry point", () => {
   });
 
 
+
+  it("renders the live logs shell with real-time stream support", async () => {
+    const stub = { fetch: vi.fn() };
+    const env = makeEnv(stub);
+    const { ctx } = makeCtx();
+
+    const response = await worker.fetch(new Request("https://example.com/logs"), env, ctx);
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).toContain("/logs/stream");
+    expect(html).toContain("line-command_error");
+  });
+
+
+  it("serves an SSE endpoint for live log streaming", async () => {
+    const stub = { fetch: vi.fn().mockResolvedValue(Response.json({ events: [] })) };
+    const env = makeEnv(stub);
+    const { ctx } = makeCtx();
+
+    const response = await worker.fetch(new Request("https://example.com/logs/stream"), env, ctx);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+  });
+
   it("proxies live log data from the global stream", async () => {
     const stub = { fetch: vi.fn().mockResolvedValue(Response.json({ events: [{ eventType: "thinking", message: "Started", createdAt: 1700000000 }] })) };
     const env = makeEnv(stub);

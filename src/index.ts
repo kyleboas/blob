@@ -54,6 +54,8 @@ function renderLiveLogPage(): string {
     .line-command { color: #e2e8f0; }
     .line-command_success { color: #4ade80; }
     .line-command_failure { color: #f87171; }
+    .line-command_output { color: #93c5fd; }
+    .line-command_error { color: #fca5a5; }
     .line-completed { color: #a78bfa; }
     .line-message { color: #fbbf24; }
     .line-thinking, .line-session { color: #94a3b8; }
@@ -68,7 +70,24 @@ function renderLiveLogPage(): string {
     const logNode = document.getElementById('log');
     const statusNode = document.getElementById('status');
     const dotNode = document.getElementById('live-dot');
-    let lastCount = -1;
+    let lastSnapshotSig = '';
+
+    function renderEvents(events) {
+      if (events.length === 0) {
+        logNode.innerHTML = '<span class="empty">No events yet. Send a message to Blob in Slack to see activity here.</span>';
+        return;
+      }
+
+      const atBottom = logNode.scrollHeight - logNode.scrollTop <= logNode.clientHeight + 50;
+      logNode.innerHTML = events.map((event) => {
+        const when = new Date(event.createdAt * 1000).toISOString().replace('T', ' ').replace('Z', '');
+        const cls = 'line-' + event.eventType;
+        const text = when + '  [' + event.eventType + ']  ' + event.message;
+        return '<span class="' + cls + '">' + text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</span>';
+      }).join('\\n');
+
+      if (atBottom) logNode.scrollTop = logNode.scrollHeight;
+    }
 
     async function refreshLogs() {
       let payload;
@@ -94,30 +113,55 @@ function renderLiveLogPage(): string {
       const events = payload.events || [];
       statusNode.textContent = 'Live across all channels • ' + events.length + ' event' + (events.length === 1 ? '' : 's') + ' • updated ' + new Date().toLocaleTimeString();
 
-      if (events.length === lastCount) return;
-      lastCount = events.length;
-
-      if (events.length === 0) {
-        logNode.innerHTML = '<span class="empty">No events yet. Send a message to Blob in Slack to see activity here.</span>';
-        return;
-      }
-
-      const atBottom = logNode.scrollHeight - logNode.scrollTop <= logNode.clientHeight + 50;
-      logNode.innerHTML = events.map((event) => {
-        const when = new Date(event.createdAt * 1000).toISOString().replace('T', ' ').replace('Z', '');
-        const cls = 'line-' + event.eventType;
-        const text = when + '  [' + event.eventType + ']  ' + event.message;
-        return '<span class="' + cls + '">' + text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</span>';
-      }).join('\\n');
-
-      if (atBottom) logNode.scrollTop = logNode.scrollHeight;
+      const snapshotSig = JSON.stringify(events.map((event) => [event.createdAt, event.eventType, event.message]));
+      if (snapshotSig === lastSnapshotSig) return;
+      lastSnapshotSig = snapshotSig;
+      renderEvents(events);
     }
 
     refreshLogs();
-    setInterval(refreshLogs, 2000);
+    const source = new EventSource('/logs/stream');
+    source.addEventListener('snapshot', (event) => {
+      try {
+        const payload = JSON.parse(event.data || '{}');
+        const events = payload.events || [];
+        statusNode.textContent = 'Live across all channels • ' + events.length + ' event' + (events.length === 1 ? '' : 's') + ' • updated ' + new Date().toLocaleTimeString();
+        statusNode.className = '';
+        dotNode.className = '';
+        lastSnapshotSig = JSON.stringify(events.map((item) => [item.createdAt, item.eventType, item.message]));
+        renderEvents(events);
+      } catch {
+        statusNode.textContent = 'Error: failed to parse live stream event';
+        statusNode.className = 'error';
+        dotNode.className = 'error';
+      }
+    });
+    source.onerror = () => {
+      statusNode.textContent = 'Live stream interrupted; retrying...';
+      statusNode.className = 'error';
+      dotNode.className = 'error';
+    };
+
+    setInterval(refreshLogs, 10000);
   </script>
 </body>
 </html>`;
+}
+
+async function fetchGlobalLogsSnapshot(env: Env): Promise<Response> {
+  const id = env.AGENT_DO.idFromName(mapChannelToDO(GLOBAL_LOGS_CHANNEL));
+  const stub = env.AGENT_DO.get(id);
+  const response = await stub.fetch("https://agent.internal/event", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "logs_snapshot" })
+  });
+
+  if (!response.ok) {
+    throw new Error("failed to read logs");
+  }
+
+  return response;
 }
 
 export default {
@@ -136,20 +180,49 @@ export default {
     }
 
     if (request.method === "GET" && (url.pathname === "/logs/data" || url.pathname === "/live-logs/data")) {
-      const id = env.AGENT_DO.idFromName(mapChannelToDO(GLOBAL_LOGS_CHANNEL));
-      const stub = env.AGENT_DO.get(id);
-      const response = await stub.fetch("https://agent.internal/event", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "logs_snapshot" })
-      });
-
-      if (!response.ok) {
+      let response: Response;
+      try {
+        response = await fetchGlobalLogsSnapshot(env);
+      } catch {
         return Response.json({ error: "failed to read logs" }, { status: 500 });
       }
 
       const payload = await response.text();
       return new Response(payload, { status: 200, headers: { "content-type": "application/json" } });
+    }
+
+    if (request.method === "GET" && (url.pathname === "/logs/stream" || url.pathname === "/live-logs/stream")) {
+      let closed = false;
+      const stream = new ReadableStream({
+        async start(controller) {
+          const encoder = new TextEncoder();
+          controller.enqueue(encoder.encode(": connected\n\n"));
+
+          while (!closed) {
+            try {
+              const response = await fetchGlobalLogsSnapshot(env);
+              const payload = await response.text();
+              controller.enqueue(encoder.encode(`event: snapshot\ndata: ${payload}\n\n`));
+            } catch {
+              controller.enqueue(encoder.encode("event: error\ndata: {\"error\":\"failed to read logs\"}\n\n"));
+            }
+
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
+        },
+        cancel() {
+          closed = true;
+        }
+      });
+
+      return new Response(stream, {
+        status: 200,
+        headers: {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache, no-transform",
+          connection: "keep-alive"
+        }
+      });
     }
 
     // Heartbeat API – enqueue background tasks for Blob to work on proactively
