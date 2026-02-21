@@ -144,7 +144,21 @@ export class AgentDO extends Agent {
 
     if (body.action === "logs_snapshot") {
       const sessionId = getCurrentSession(this.db);
-      return Response.json({ events: sessionId ? getRecentAgentEvents(this.db, sessionId) : [] });
+      const threadId = sessionId ?? "global";
+      return Response.json({ events: getRecentAgentEvents(this.db, threadId) });
+    }
+
+    if (body.action === "logs_mirror" && body.event) {
+      const event = body.event;
+      if (event.type === "message") {
+        const messageText = event.text?.trim() || "(no text)";
+        logAgentEvent(this.db, "global", "message", `[${event.channel ?? "unknown"}] ${messageText}`);
+      } else if (event.type === "reaction_added") {
+        const reaction = event.reaction ?? "unknown";
+        const channel = event.item?.channel ?? event.channel ?? "unknown";
+        logAgentEvent(this.db, "global", "reaction", `[${channel}] :${reaction}:`);
+      }
+      return new Response("ok");
     }
 
     if (body.action === "reaction" && body.event) {
