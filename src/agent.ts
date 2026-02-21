@@ -635,8 +635,10 @@ export class AgentDO {
   }
 
   async alarm(): Promise<void> {
-    await expireTimedOutApprovals(this.pendingApprovals, this.deps, this.env.SLACK_BOT_TOKEN, this.db);
-    await this.processNextHeartbeat();
+    await this.runInBackground((async () => {
+      await expireTimedOutApprovals(this.pendingApprovals, this.deps, this.env.SLACK_BOT_TOKEN, this.db);
+      await this.processNextHeartbeat();
+    })());
   }
 
   private async processNextHeartbeat(): Promise<void> {
