@@ -18,7 +18,7 @@ async function forwardToAgent(env: Env, channel: string, payload: { action: "mes
   }
 }
 
-function renderLiveLogPage(channel: string): string {
+function renderLiveLogPage(defaultChannel: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -29,19 +29,53 @@ function renderLiveLogPage(channel: string): string {
     body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; padding: 1rem; background: #0f172a; color: #e2e8f0; }
     h1 { margin-top: 0; font-size: 1.2rem; }
     #status { color: #93c5fd; margin-bottom: 1rem; }
+    .channel-picker { margin-bottom: 1rem; }
+    .channel-picker input { background: #020617; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 0.4rem 0.5rem; min-width: 220px; }
+    .channel-picker button { margin-left: 0.5rem; background: #1d4ed8; color: #fff; border: none; border-radius: 6px; padding: 0.45rem 0.75rem; cursor: pointer; }
     pre { white-space: pre-wrap; background: #020617; border: 1px solid #1e293b; border-radius: 8px; padding: 1rem; min-height: 300px; }
   </style>
 </head>
 <body>
   <h1>Blob Live Logs</h1>
-  <div id="status">Channel: ${channel}</div>
+  <div class="channel-picker">
+    <label for="channel-input">Channel:</label>
+    <input id="channel-input" name="channel" placeholder="e.g. C123456" />
+    <button id="channel-apply" type="button">Apply</button>
+  </div>
+  <div id="status">Loading logs...</div>
   <pre id="log">Waiting for events...</pre>
   <script>
-    const channel = ${JSON.stringify(channel)};
+    const defaultChannel = ${JSON.stringify(defaultChannel)};
     const logNode = document.getElementById('log');
     const statusNode = document.getElementById('status');
+    const input = document.getElementById('channel-input');
+    const applyButton = document.getElementById('channel-apply');
+
+    const params = new URLSearchParams(window.location.search);
+    let channel = (params.get('channel') || defaultChannel || localStorage.getItem('blob_logs_channel') || '').trim();
+    input.value = channel;
+
+    function persistChannel(nextChannel) {
+      channel = nextChannel.trim();
+      input.value = channel;
+      if (channel) {
+        localStorage.setItem('blob_logs_channel', channel);
+        params.set('channel', channel);
+      } else {
+        localStorage.removeItem('blob_logs_channel');
+        params.delete('channel');
+      }
+      const query = params.toString();
+      history.replaceState({}, '', query ? ('?' + query) : window.location.pathname);
+    }
 
     async function refreshLogs() {
+      if (!channel) {
+        statusNode.textContent = 'No channel selected. Enter a Slack channel ID above to start viewing logs.';
+        logNode.textContent = 'Waiting for channel selection...';
+        return;
+      }
+
       const response = await fetch('/logs/data?channel=' + encodeURIComponent(channel), { cache: 'no-store' });
       if (!response.ok) {
         statusNode.textContent = 'Failed to load logs: ' + response.status;
@@ -58,11 +92,27 @@ function renderLiveLogPage(channel: string): string {
       logNode.scrollTop = logNode.scrollHeight;
     }
 
+    applyButton.addEventListener('click', () => {
+      persistChannel(input.value);
+      refreshLogs();
+    });
+
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        persistChannel(input.value);
+        refreshLogs();
+      }
+    });
+
     refreshLogs();
     setInterval(refreshLogs, 2000);
   </script>
 </body>
 </html>`;
+}
+
+function resolveLogChannel(url: URL, env: Env): string {
+  return (url.searchParams.get("channel") ?? env.LOGS_CHANNEL ?? "").trim();
 }
 
 export default {
@@ -74,21 +124,16 @@ export default {
     }
 
     if (request.method === "GET" && (url.pathname === "/logs" || url.pathname === "/live-logs")) {
-      const channel = url.searchParams.get("channel") ?? "";
-      if (!channel) {
-        return new Response("Missing query parameter: channel", { status: 400 });
-      }
-
-      return new Response(renderLiveLogPage(channel), {
+      return new Response(renderLiveLogPage(resolveLogChannel(url, env)), {
         status: 200,
         headers: { "content-type": "text/html; charset=utf-8" }
       });
     }
 
     if (request.method === "GET" && (url.pathname === "/logs/data" || url.pathname === "/live-logs/data")) {
-      const channel = url.searchParams.get("channel") ?? "";
+      const channel = resolveLogChannel(url, env);
       if (!channel) {
-        return Response.json({ error: "missing channel" }, { status: 400 });
+        return Response.json({ error: "missing logs channel" }, { status: 400 });
       }
 
       const id = env.AGENT_DO.idFromName(mapChannelToDO(channel));
