@@ -1,4 +1,4 @@
-import type { ConversationMessage } from "./types";
+import type { ConversationMessage, SlackEvent } from "./types";
 import type { SandboxClient } from "./sandbox-client";
 import { CONVERSATION_TIMEOUT_MINUTES } from "./config";
 
@@ -136,6 +136,33 @@ export function initSchema(sql: SqlStorage): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     )
   `);
+
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS background_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )
+  `);
+
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS heartbeat_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      channel TEXT NOT NULL,
+      goal TEXT NOT NULL,
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )
+  `);
+
+  if (!hasColumn(sql, "background_tasks", "event_json")) {
+    sql.exec(`ALTER TABLE background_tasks ADD COLUMN event_json TEXT`);
+    sql.exec(`
+      UPDATE background_tasks
+      SET event_json = json_object('type', 'message', 'channel', channel, 'text', task)
+      WHERE event_json IS NULL
+    `);
+  }
 }
 
 export function resolveOrCreateSession(
@@ -183,6 +210,21 @@ export interface SessionSummary {
   sessionId: string;
   summary: string;
   createdAt: number;
+}
+
+export interface BackgroundTask {
+  id: number;
+  event: SlackEvent;
+}
+
+export interface HeartbeatGoal {
+  channel: string;
+  goal: string;
+}
+
+function hasColumn(sql: SqlStorage, tableName: string, columnName: string): boolean {
+  const columns = sql.exec(`PRAGMA table_info(${tableName})`).toArray();
+  return columns.some((column) => String(column.name) === columnName);
 }
 
 export function saveSessionSummary(sql: SqlStorage, sessionId: string, summary: string): void {
@@ -405,4 +447,59 @@ export async function syncKnowledgeFromSandbox(
   }
   const knowledge = await sandbox.readFile("AGENT.md");
   saveKnowledge(sql, knowledge);
+}
+
+
+export function saveHeartbeatGoal(sql: SqlStorage, channel: string, goal: string): void {
+  sql.exec(
+    `INSERT INTO heartbeat_state (id, channel, goal, updated_at)
+     VALUES (1, ?, ?, unixepoch())
+     ON CONFLICT(id) DO UPDATE SET
+       channel = excluded.channel,
+       goal = excluded.goal,
+       updated_at = excluded.updated_at`,
+    channel,
+    goal
+  );
+}
+
+export function getHeartbeatGoal(sql: SqlStorage): HeartbeatGoal | null {
+  const rows = sql.exec(`SELECT channel, goal FROM heartbeat_state WHERE id = 1`).toArray();
+  if (!rows[0]) {
+    return null;
+  }
+  return { channel: String(rows[0].channel), goal: String(rows[0].goal) };
+}
+
+export function enqueueBackgroundTask(sql: SqlStorage, event: SlackEvent): void {
+  sql.exec(`INSERT INTO background_tasks (event_json, status) VALUES (?, 'queued')`, JSON.stringify(event));
+}
+
+export function claimNextBackgroundTask(sql: SqlStorage): BackgroundTask | null {
+  const rows = sql
+    .exec(
+      `SELECT id, event_json
+       FROM background_tasks
+       WHERE status = 'queued'
+       ORDER BY id ASC
+       LIMIT 1`
+    )
+    .toArray();
+
+  if (!rows[0]) {
+    return null;
+  }
+
+  const id = Number(rows[0].id);
+  sql.exec(`UPDATE background_tasks SET status = 'running' WHERE id = ?`, id);
+
+  return { id, event: JSON.parse(String(rows[0].event_json)) as SlackEvent };
+}
+
+export function completeBackgroundTask(sql: SqlStorage, id: number): void {
+  sql.exec(`UPDATE background_tasks SET status = 'done' WHERE id = ?`, id);
+}
+
+export function failBackgroundTask(sql: SqlStorage, id: number): void {
+  sql.exec(`UPDATE background_tasks SET status = 'failed' WHERE id = ?`, id);
 }
