@@ -1,5 +1,12 @@
 import { Agent } from "@cloudflare/agents";
-import { MAX_STEPS, TOOL_RETRY_MAX, TOOL_RETRY_BACKOFF_BASE_MS, COMPACTION_TOKEN_THRESHOLD, SESSION_SUMMARY_RECENT_COUNT } from "./config";
+import {
+  MAX_STEPS,
+  TOOL_RETRY_MAX,
+  TOOL_RETRY_BACKOFF_BASE_MS,
+  COMPACTION_TOKEN_THRESHOLD,
+  SESSION_SUMMARY_RECENT_COUNT,
+  THINKING_MESSAGE_DELAY_MS
+} from "./config";
 import { callLLM, type LLMResponse } from "./llm";
 import { enforceSafety } from "./safety";
 import { SandboxClient, type SandboxBinding } from "./sandbox-client";
@@ -177,17 +184,20 @@ export class AgentDO extends Agent {
     const summaries = getRecentSessionSummaries(this.db, SESSION_SUMMARY_RECENT_COUNT);
     const systemPrompt = buildSystemPrompt(getKnowledge(this.db), summaries);
 
-    // Fire "Thinking..." and the first LLM call concurrently
-    const [firstResponse] = await Promise.all([
-      this.deps.llmCall({
-        apiKey: this.env.ANTHROPIC_API_KEY,
-        systemPrompt,
-        messages: conversation,
-        tools: [BASH_TOOL]
-      }),
-      this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, "Thinking...")
-    ]);
-    logAgentEvent(this.db, sessionId, "thinking", "Started reasoning loop.");
+    let thinkingTimer: ReturnType<typeof setTimeout> | undefined;
+    let thinkingMessagePromise: Promise<void> | null = null;
+    thinkingTimer = setTimeout(() => {
+      thinkingMessagePromise = this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, "Thinking...").then(() => {
+        logAgentEvent(this.db, sessionId, "thinking", "Posted delayed thinking status.");
+      });
+    }, THINKING_MESSAGE_DELAY_MS);
+
+    const firstResponse = await this.deps.llmCall({
+      apiKey: this.env.ANTHROPIC_API_KEY,
+      systemPrompt,
+      messages: conversation,
+      tools: [BASH_TOOL]
+    });
 
     let finalText = "";
     let steps = 0;
@@ -241,6 +251,13 @@ export class AgentDO extends Agent {
 
     if (!finalText) {
       finalText = `Stopped after reaching max steps (${MAX_STEPS}).`;
+    }
+
+    if (thinkingTimer) {
+      clearTimeout(thinkingTimer);
+    }
+    if (thinkingMessagePromise) {
+      await thinkingMessagePromise;
     }
 
     await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, finalText);

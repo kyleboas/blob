@@ -392,6 +392,52 @@ describe("AgentDO runAgentLoop", () => {
     expect(postSlackMessage).toHaveBeenCalled();
   });
 
+
+  it("posts a delayed thinking message only when processing exceeds threshold", async () => {
+    vi.useFakeTimers();
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+    const llmCall = vi.fn().mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve({ content: [{ type: "text", text: "Done" }] }), 6_100))
+    );
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const loopPromise = agent.runAgentLoop("slow request", "C1", "thread-slow-thinking");
+    await vi.advanceTimersByTimeAsync(6_000);
+
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Thinking...");
+
+    await vi.runAllTimersAsync();
+    await loopPromise;
+
+    vi.useRealTimers();
+  });
+
+  it("does not post a thinking message for fast responses", async () => {
+    vi.useFakeTimers();
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+    const llmCall = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Done" }] });
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.runAgentLoop("fast request", "C1", "thread-fast-thinking");
+
+    expect(postSlackMessage).not.toHaveBeenCalledWith("token", "C1", "Thinking...");
+    vi.useRealTimers();
+  });
+
   it("posts a confirmation when a Cloudflare deploy command succeeds", async () => {
     const sql = new FakeSql();
     const { env } = makeTestEnv();
