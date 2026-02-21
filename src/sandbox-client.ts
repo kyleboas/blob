@@ -1,6 +1,8 @@
 import { COMMAND_TIMEOUT } from "./config";
 
 const DEFAULT_MAX_OUTPUT_CHARS = 10_000;
+const TRANSIENT_SANDBOX_MAX_ATTEMPTS = 3;
+const TRANSIENT_SANDBOX_RETRY_DELAY_MS = 500;
 
 export interface SandboxExecResponse {
   stdout?: string;
@@ -75,8 +77,45 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 export class SandboxClient {
   constructor(
     private readonly sandbox: SandboxBinding,
-    private readonly maxOutputChars = DEFAULT_MAX_OUTPUT_CHARS
+    private readonly maxOutputChars = DEFAULT_MAX_OUTPUT_CHARS,
+    private readonly retryDelayMs = TRANSIENT_SANDBOX_RETRY_DELAY_MS
   ) {}
+
+  private isTransientSandboxError(error: unknown): boolean {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+
+    const message = error.message.toLowerCase();
+    return message.includes("blockconcurrencywhile")
+      || (message.includes("durable object") && message.includes("reset"))
+      || message.includes("durable object is overloaded")
+      || message.includes("durable object request failed");
+  }
+
+  private async sleep(delayMs: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+
+  private async withTransientRetry<T>(operation: () => Promise<T>): Promise<T> {
+    let attempt = 0;
+    let lastError: unknown;
+
+    while (attempt < TRANSIENT_SANDBOX_MAX_ATTEMPTS) {
+      attempt += 1;
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error;
+        if (!this.isTransientSandboxError(error) || attempt >= TRANSIENT_SANDBOX_MAX_ATTEMPTS) {
+          throw error;
+        }
+        await this.sleep(this.retryDelayMs * attempt);
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error("Sandbox execution failed");
+  }
 
   async exec(command: string, timeoutSeconds = COMMAND_TIMEOUT): Promise<ExecResult> {
     const commandValidation = validateCommand(command);
@@ -90,7 +129,9 @@ export class SandboxClient {
     }
 
     try {
-      const response = await withTimeout(this.sandbox.exec(command), timeoutSeconds * 1000);
+      const response = await this.withTransientRetry(
+        () => withTimeout(this.sandbox.exec(command), timeoutSeconds * 1000)
+      );
       return {
         stdout: truncateOutput(response.stdout ?? "", this.maxOutputChars),
         stderr: truncateOutput(response.stderr ?? "", this.maxOutputChars),
@@ -117,11 +158,11 @@ export class SandboxClient {
   }
 
   async writeFile(path: string, content: string): Promise<void> {
-    await this.sandbox.writeFile(path, content);
+    await this.withTransientRetry(() => this.sandbox.writeFile(path, content));
   }
 
   async readFile(path: string): Promise<string> {
-    return this.sandbox.readFile(path);
+    return this.withTransientRetry(() => this.sandbox.readFile(path));
   }
 
   async fileExists(path: string): Promise<boolean> {

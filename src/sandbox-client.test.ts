@@ -88,4 +88,33 @@ describe("SandboxClient", () => {
     expect(exists).toBe(true);
     expect(missing).toBe(false);
   });
+
+  it("retries transient durable object startup errors on read", async () => {
+    const sandbox = {
+      exec: vi.fn(),
+      writeFile: vi.fn(),
+      readFile: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("A call to blockConcurrencyWhile() in a Durable Object waited for too long."))
+        .mockResolvedValueOnce("content")
+    };
+
+    const client = new SandboxClient(sandbox, 10_000, 0);
+    const result = await client.readFile("AGENT.md");
+
+    expect(result).toBe("content");
+    expect(sandbox.readFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry non-transient read errors", async () => {
+    const sandbox = {
+      exec: vi.fn(),
+      writeFile: vi.fn(),
+      readFile: vi.fn().mockRejectedValue(new Error("not found"))
+    };
+
+    const client = new SandboxClient(sandbox, 10_000, 0);
+    await expect(client.readFile("missing.txt")).rejects.toThrow("not found");
+    expect(sandbox.readFile).toHaveBeenCalledTimes(1);
+  });
 });
