@@ -164,12 +164,14 @@ export class SandboxClient {
   // Polls the sandbox with a generous retry budget until the container is
   // warm and accepting requests. Called before file writes during sandbox_start
   // to handle the cold-start window where the container returns HTTP 500.
+  // Uses writeFile (not exec) as the probe because exec and the file-system
+  // layer can initialise independently; we must confirm file I/O is ready.
   async warmUp(): Promise<void> {
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= WARM_UP_MAX_ATTEMPTS; attempt++) {
       try {
-        await withTimeout(this.sandbox.exec("true"), WARM_UP_TIMEOUT_MS);
+        await withTimeout(this.sandbox.writeFile("/tmp/.blob-warmup", "ok"), WARM_UP_TIMEOUT_MS);
         return;
       } catch (error) {
         lastError = error;
