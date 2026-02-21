@@ -16,7 +16,7 @@ from typing import Callable
 from urllib.parse import quote, urlparse
 
 import config
-from approval import ApprovalGate, classify_action
+from approval import ApprovalGate, AutonomousApprovalGate, classify_action
 from llm_client import LLMClient
 from safety import (
     ModificationRateLimiter,
@@ -745,6 +745,136 @@ class Agent:
 
         return summaries
 
+    def generate_improvement_tasks(self, tasks_path: Path) -> list[str]:
+        """Scan the codebase for issues and generate new pending improvement tasks."""
+        test_result = self.sandbox.execute(
+            "pytest tests/ --tb=short -q 2>&1 | head -60", timeout=config.COMMAND_TIMEOUT
+        )
+        todo_result = self.sandbox.execute(
+            "grep -rn 'TODO\\|FIXME\\|HACK\\|XXX' --include='*.py' . 2>/dev/null | head -30",
+            timeout=config.COMMAND_TIMEOUT,
+        )
+        history = git_history()
+        context = (
+            f"Pytest output:\n{test_result.stdout[:2000]}\n\n"
+            f"TODOs/FIXMEs in codebase:\n{todo_result.stdout[:1000]}\n\n"
+            f"Recent git history:\n{history}\n"
+        )
+        prompt = (
+            "You are analyzing a codebase to identify the next most valuable self-improvement tasks.\n\n"
+            f"{context}\n\n"
+            "Generate exactly 3 specific, actionable improvement tasks. For each, output a line:\n"
+            "TASK: <one-line description>\n\n"
+            "Focus on fixing failing tests, resolving TODOs, improving error handling, adding missing "
+            "functionality, or refactoring complex code. Do NOT suggest modifying: agent.py, "
+            "sandbox.py, approval.py, safety.py, config.py, or slack_bot.py."
+        )
+        response = self.llm_client.create_message(
+            model=config.MODEL_ROUTING["routine"],
+            system="You are a coding agent identifying self-improvement tasks.",
+            messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+        )
+        self._record_llm_usage(
+            "generate_tasks",
+            config.MODEL_ROUTING["routine"],
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+        )
+        text = "\n".join(
+            block.get("text", "") for block in response.content if block.get("type") == "text"
+        )
+        new_titles = [m.strip() for m in re.findall(r"TASK:\s*(.+)", text) if m.strip()]
+        if not new_titles:
+            return []
+
+        existing = self._load_task_queue(tasks_path)
+        existing_titles = {t.get("title", "") for t in existing}
+        max_id = max(
+            (
+                int(t.get("id", "0").split("-")[-1])
+                for t in existing
+                if t.get("id", "").split("-")[-1].isdigit()
+            ),
+            default=0,
+        )
+        new_tasks = [
+            {"id": f"auto-{max_id + i}", "title": title, "status": "pending"}
+            for i, title in enumerate(new_titles, start=1)
+            if title not in existing_titles
+        ]
+        if new_tasks:
+            self._write_task_queue(tasks_path, existing + new_tasks)
+        return [t["title"] for t in new_tasks]
+
+    def _autonomous_tasks_today(self) -> tuple[str, int]:
+        """Return (today_iso, count) of tasks run today in autonomous mode."""
+        count_file = config.WORKSPACE_ROOT / ".autonomous_daily_count"
+        today = datetime.now(timezone.utc).date().isoformat()
+        if not count_file.exists():
+            return today, 0
+        raw = count_file.read_text().strip()
+        if not raw or ":" not in raw:
+            return today, 0
+        day_str, count_str = raw.split(":", 1)
+        if day_str != today:
+            return today, 0
+        return today, int(count_str)
+
+    def _record_autonomous_task(self) -> None:
+        count_file = config.WORKSPACE_ROOT / ".autonomous_daily_count"
+        today, count = self._autonomous_tasks_today()
+        count_file.write_text(f"{today}:{count + 1}")
+
+    def run_autonomous_loop(self, tasks_path: Path | None = None) -> None:
+        """Run a continuous self-improvement loop.
+
+        Processes all pending tasks, then generates new ones from codebase
+        signals (failing tests, TODOs, git history) when the queue runs dry.
+        Respects AUTONOMOUS_DAILY_TASK_LIMIT (default 10) to control API costs.
+        Runs until interrupted with Ctrl-C.
+        """
+        queue_path = tasks_path or (config.WORKSPACE_ROOT / "tasks.json")
+        self._emit_status(
+            f"Autonomous loop started (daily task limit: {config.AUTONOMOUS_DAILY_TASK_LIMIT})"
+        )
+        try:
+            while True:
+                today, tasks_today = self._autonomous_tasks_today()
+                remaining = config.AUTONOMOUS_DAILY_TASK_LIMIT - tasks_today
+                if remaining <= 0:
+                    # Sleep until midnight UTC then reset
+                    now = datetime.now(timezone.utc)
+                    midnight = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+                    from datetime import timedelta
+                    seconds_until_midnight = (midnight + timedelta(days=1) - now).seconds
+                    self._emit_status(
+                        f"Daily task limit ({config.AUTONOMOUS_DAILY_TASK_LIMIT}) reached "
+                        f"({tasks_today} tasks run today). Sleeping {seconds_until_midnight}s until midnight UTC."
+                    )
+                    time.sleep(seconds_until_midnight + 5)
+                    continue
+
+                summaries = self.run_self_improvement_cycle(queue_path)
+                for _ in summaries:
+                    self._record_autonomous_task()
+                if summaries:
+                    self._emit_status(f"Cycle complete: {summaries}")
+
+                tasks = self._load_task_queue(queue_path)
+                pending = [t for t in tasks if t.get("status") == "pending"]
+                if not pending:
+                    self._emit_status("Queue empty — scanning codebase for new improvement tasks")
+                    new_tasks = self.generate_improvement_tasks(queue_path)
+                    if new_tasks:
+                        self._emit_status(f"Generated {len(new_tasks)} new tasks: {new_tasks}")
+                    else:
+                        self._emit_status(
+                            f"No new tasks generated; sleeping {config.AUTONOMOUS_LOOP_INTERVAL}s"
+                        )
+                        time.sleep(config.AUTONOMOUS_LOOP_INTERVAL)
+        except KeyboardInterrupt:
+            self._emit_status("Autonomous loop stopped")
+
     def _execute_with_retry(self, command: str) -> "ExecutionResult":
         """Execute a command with exponential-backoff retries on transient failures.
 
@@ -778,7 +908,12 @@ class Agent:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the self-modifying agent")
     parser.add_argument("task", nargs="?", help="Task description to execute")
-    parser.add_argument("--self-improve", action="store_true", help="Run the self-improvement task queue")
+    parser.add_argument("--self-improve", action="store_true", help="Run the self-improvement task queue once")
+    parser.add_argument(
+        "--autonomous",
+        action="store_true",
+        help="Run continuous self-improvement loop (also enabled by AUTONOMOUS_MODE=true env var)",
+    )
     args = parser.parse_args()
 
     from llm_client import AnthropicClient
@@ -788,20 +923,25 @@ def main() -> None:
         def request_approval(self, action_description: str, tier: str) -> bool:
             return tier == "auto-approve"
 
+    autonomous = args.autonomous or config.AUTONOMOUS_MODE
+    approval_gate: ApprovalGate = AutonomousApprovalGate() if autonomous else AutoApprove()
+
     agent = Agent(
         llm_client=AnthropicClient(),
         sandbox=FlySpriteSandbox(),
-        approval_gate=AutoApprove(),
+        approval_gate=approval_gate,
     )
 
-    if args.self_improve:
+    if autonomous:
+        agent.run_autonomous_loop()
+    elif args.self_improve:
         result = {"summary": agent.run_self_improvement_cycle()}
+        print(json.dumps(result, indent=2))
     else:
         if not args.task:
-            raise SystemExit("task is required unless --self-improve is provided")
+            raise SystemExit("task is required unless --self-improve or --autonomous is provided")
         result = {"result": agent.run_task(args.task)}
-
-    print(json.dumps(result, indent=2))
+        print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

@@ -88,3 +88,15 @@ class SlackApprovalGate:
             {"message_ts": message_ts, "reaction": reaction, "decision": decision},
         )
         self._events[message_ts].set()
+
+
+class AutonomousApprovalGate:
+    """Approval gate for autonomous mode.
+
+    Approves all tiers except ``always-require-approval`` (constitution file
+    changes), which remain blocked to prevent the agent from rewriting its
+    own core safety boundaries without human review.
+    """
+
+    def request_approval(self, action_description: str, tier: str) -> bool:
+        return tier != "always-require-approval"

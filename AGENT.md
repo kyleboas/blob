@@ -239,6 +239,39 @@ python /home/user/blob/github_tools.py create-pr \
 - Never force-push to a branch that already has a PR open
 - Link the PR URL in the Slack thread or CLI output after creating it
 
+## User Preferences
+
+Users can configure Blob's behaviour in plain English. When a user makes a configuration request, parse their intent and run the appropriate `blob_config.py` command. The settings persist across sessions in `blob_settings.json`.
+
+**Configurable settings:**
+
+| Setting | What the user might say |
+|---------|------------------------|
+| `AUTONOMOUS_DAILY_TASK_LIMIT` | "limit daily tasks to 12", "keep costs under $20", "run at most 8 tasks a day" |
+| `MAX_STEPS` | "don't use more than 10 steps per task", "max 15 steps" |
+| `AUTONOMOUS_LOOP_INTERVAL` | "sleep 5 minutes between cycles", "check for tasks every 2 minutes" |
+| `SELF_MODIFY_LIMIT_SESSION` | "allow 5 self-edits per session" |
+| `SELF_MODIFY_LIMIT_DAY` | "max 20 self-modifications per day" |
+| `APPROVAL_TIMEOUT_MINUTES` | "auto-reject after 10 minutes", "wait 1 hour for approval" |
+| `COMMAND_TIMEOUT` | "commands can run for up to 60 seconds" |
+| `MODEL_ROUTINE` | "use haiku for everything", "use sonnet for all tasks" |
+| `MODEL_COMPLEX` | "use sonnet for complex tasks" |
+
+**Commands to use:**
+
+```bash
+python blob_config.py list                              # show all settings + current values
+python blob_config.py set AUTONOMOUS_DAILY_TASK_LIMIT 12  # update a setting
+python blob_config.py unset AUTONOMOUS_DAILY_TASK_LIMIT   # revert to default
+python blob_config.py get AUTONOMOUS_DAILY_TASK_LIMIT     # read a single value
+```
+
+**Precedence:** explicit env var > `blob_settings.json` > hardcoded default. So a user preference can always be overridden by an env var in deployment, but will win over the compiled-in default.
+
+**When a user says something like "I want to keep costs below $20":** look up the cost table (10 tasks/day ≈ $15/month, 15 tasks/day ≈ $22/month) and suggest and set an appropriate `AUTONOMOUS_DAILY_TASK_LIMIT`. Confirm the setting was saved.
+
+**When a user says "what are my current settings" or "show my preferences":** run `python blob_config.py list` and display the output.
+
 ## Entrypoints
 
 ```bash

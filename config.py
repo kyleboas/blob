@@ -13,6 +13,21 @@ except ImportError:  # pragma: no cover - optional during bootstrap
 
 load_dotenv()
 
+# Load user preferences from blob_settings.json (written by `python blob_config.py set KEY VALUE`).
+# Precedence: explicit env var > blob_settings.json > hardcoded default.
+def _apply_user_settings() -> None:
+    import json as _json
+    _settings_path = Path(__file__).resolve().parent / "blob_settings.json"
+    if not _settings_path.exists():
+        return
+    try:
+        for k, v in _json.loads(_settings_path.read_text()).items():
+            os.environ.setdefault(k, str(v))
+    except Exception:
+        pass
+
+_apply_user_settings()
+
 AGENT_ENV = os.getenv("AGENT_ENV", "dev").lower()
 if AGENT_ENV == "prod":
     WORKSPACE_ROOT = Path("/data")
@@ -27,6 +42,9 @@ TOOL_RETRY_BACKOFF_BASE = float(os.getenv("TOOL_RETRY_BACKOFF_BASE", "1.5"))
 SELF_MODIFY_LIMIT_SESSION = int(os.getenv("SELF_MODIFY_LIMIT_SESSION", "3"))
 SELF_MODIFY_LIMIT_DAY = int(os.getenv("SELF_MODIFY_LIMIT_DAY", "10"))
 APPROVAL_TIMEOUT_MINUTES = int(os.getenv("APPROVAL_TIMEOUT_MINUTES", "30"))
+AUTONOMOUS_MODE = os.getenv("AUTONOMOUS_MODE", "false").lower() == "true"
+AUTONOMOUS_LOOP_INTERVAL = int(os.getenv("AUTONOMOUS_LOOP_INTERVAL", "60"))
+AUTONOMOUS_DAILY_TASK_LIMIT = int(os.getenv("AUTONOMOUS_DAILY_TASK_LIMIT", "10"))
 
 DEFAULT_NETWORK_ALLOWLIST = [
     "api.anthropic.com",
