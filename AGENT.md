@@ -13,6 +13,7 @@ Your own source files:
 - `slack_bot.py` — Slack event handling
 - `llm_client.py` — Anthropic API abstraction
 - `tools.py` — tool schema definitions
+- `github_tools.py` — GitHub API client (create PRs, fork repos, get remote URLs)
 - `tasks.json` — self-improvement task queue
 - `AGENT.md` — this file (your knowledge base, injected as system prompt)
 
@@ -157,13 +158,86 @@ You have `tasks.json`, git history, audit logs, and this file. Use them.
 - **Constitution files have no exceptions**: even a one-character fix to `agent.py` requires approval
 - **Rate limit is not calendar-aware**: it resets at midnight UTC, not local midnight
 - **TypeScript agent requires Cloudflare Durable Objects** — it will not run locally without `wrangler dev`
-- **Network is restricted**: only `api.anthropic.com`, `*.pypi.org`, `files.pythonhosted.org`, and `docs.anthropic.com` are reachable from the sandbox
+- **Network is restricted**: only `api.anthropic.com`, `*.pypi.org`, `files.pythonhosted.org`, `docs.anthropic.com`, `api.github.com`, `github.com`, and `*.github.com` are reachable from the sandbox by default
 
 ## Files to Never Edit Manually
 
 - `.modify_count` — managed by rate limiter
 - `.audit/*.jsonl` — append-only audit logs
 - `AGENT.md` — updated automatically after self-improvement tasks via `update_agent_knowledge()`
+
+## GitHub Pull Request Workflow
+
+You can open pull requests on **any GitHub repository** — including your own source code — using `github_tools.py`. This requires `GITHUB_TOKEN` (a PAT with `repo` scope) to be set in the environment.
+
+### Tool: `python github_tools.py`
+
+| Subcommand | Description |
+|------------|-------------|
+| `whoami` | Confirm which GitHub account the token belongs to |
+| `create-pr --owner OWNER --repo REPO --title TITLE --head BRANCH [--body TEXT] [--base BASE] [--draft]` | Open a PR |
+| `fork --owner OWNER --repo REPO` | Fork a repo into your account (for repos you don't own) |
+| `remote-url --owner OWNER --repo REPO` | Print an authenticated git remote URL with token embedded |
+
+### Workflow: improving this repository (blob)
+
+```bash
+# 1. Create a feature branch
+git checkout -b blob/description-of-change
+
+# 2. Make changes, run tests
+pytest tests/
+
+# 3. Commit
+git add -A && git commit -m "short description"
+
+# 4. Push (token in URL so no interactive auth prompt)
+REMOTE=$(python github_tools.py remote-url --owner kyleboas --repo blob)
+git push -u "$REMOTE" blob/description-of-change
+
+# 5. Open PR
+python github_tools.py create-pr \
+  --owner kyleboas --repo blob \
+  --title "Short title" \
+  --body "What changed and why" \
+  --head blob/description-of-change
+```
+
+### Workflow: improving an external repository
+
+```bash
+# 1. Clone into a temp dir
+git clone https://github.com/owner/repo /tmp/repo-name
+cd /tmp/repo-name
+
+# 2. Create a feature branch
+git checkout -b blob/description-of-change
+
+# 3. Make changes, run tests if available
+
+# 4. Commit
+git add -A && git commit -m "short description"
+
+# 5. Push using authenticated URL
+REMOTE=$(python /home/user/blob/github_tools.py remote-url --owner owner --repo repo)
+git push -u "$REMOTE" blob/description-of-change
+
+# 6. Open PR
+python /home/user/blob/github_tools.py create-pr \
+  --owner owner --repo repo \
+  --title "Short title" \
+  --body "What changed and why" \
+  --head blob/description-of-change
+```
+
+> **Note**: If you don't have push access to the repo, fork it first with `python github_tools.py fork --owner owner --repo repo`, push to your fork, and use `your-username:blob/description-of-change` as the `--head` value.
+
+### PR quality guidelines
+
+- Write a clear `--title` (≤72 chars) that summarises the change
+- Include in `--body`: what problem was fixed, what was changed, and how to verify it
+- Never force-push to a branch that already has a PR open
+- Link the PR URL in the Slack thread or CLI output after creating it
 
 ## Entrypoints
 
