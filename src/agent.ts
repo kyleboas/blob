@@ -428,15 +428,36 @@ export class AgentDO extends Agent {
   }
 
   private async startSandboxSession(sessionId: string): Promise<void> {
-    await restoreRepoSnapshot(this.env.REPO_STORE, sessionId, this.sandbox);
-    await syncKnowledgeToSandbox(this.db, this.sandbox);
+    try {
+      await restoreRepoSnapshot(this.env.REPO_STORE, sessionId, this.sandbox);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown snapshot restore error";
+      logAgentEvent(this.db, sessionId, "snapshot_restore_failed", message);
+    }
+
+    try {
+      await syncKnowledgeToSandbox(this.db, this.sandbox);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown knowledge sync error";
+      logAgentEvent(this.db, sessionId, "knowledge_sync_to_sandbox_failed", message);
+    }
   }
 
   private async endSandboxSession(sessionId: string): Promise<void> {
-    await Promise.all([
-      saveRepoSnapshot(this.env.REPO_STORE, sessionId, this.sandbox),
+    const operations = [
+      saveRepoSnapshot(this.env.REPO_STORE, sessionId, this.sandbox)
+        .catch((error) => {
+          const message = error instanceof Error ? error.message : "Unknown snapshot save error";
+          logAgentEvent(this.db, sessionId, "snapshot_save_failed", message);
+        }),
       syncKnowledgeFromSandbox(this.db, this.sandbox)
-    ]);
+        .catch((error) => {
+          const message = error instanceof Error ? error.message : "Unknown knowledge sync error";
+          logAgentEvent(this.db, sessionId, "knowledge_sync_from_sandbox_failed", message);
+        })
+    ];
+
+    await Promise.all(operations);
   }
 
   // Mechanism 4: end-of-conversation episodic + semantic memory
@@ -578,7 +599,25 @@ export class AgentDO extends Agent {
           await this.handleTaskEvent(heartbeatEvent);
         } catch (error) {
           const message = error instanceof Error ? error.message : "An unexpected error occurred.";
-          await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, heartbeatGoal.channel, `Heartbeat error: ${message}`);
+          const remediationTask = [
+            "A scheduled heartbeat run failed.",
+            `Original goal: ${heartbeatGoal.goal}`,
+            `Failure: ${message}`,
+            "Please diagnose and fix the issue in the codebase, then report what changed."
+          ].join("\n");
+
+          enqueueBackgroundTask(this.db, {
+            type: "message",
+            channel: heartbeatGoal.channel,
+            text: remediationTask
+          });
+          logAgentEvent(this.db, heartbeatGoal.channel, "heartbeat_self_repair_queued", `Queued remediation for heartbeat failure: ${message}`);
+
+          await this.deps.postSlackMessage(
+            this.env.SLACK_BOT_TOKEN,
+            heartbeatGoal.channel,
+            `Heartbeat error: ${message}\nI noticed this failure and queued a self-repair task to investigate automatically.`
+          );
         }
       }
     }

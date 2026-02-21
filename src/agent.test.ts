@@ -356,6 +356,90 @@ describe("AgentDO runAgentLoop", () => {
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Heartbeat progress");
   });
 
+  it("continues heartbeat execution when snapshot restore fails", async () => {
+    const sql = new FakeSql();
+    const { env, sandbox } = makeTestEnv();
+    const setAlarm = vi.fn();
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({ content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "pwd" } }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Heartbeat recovered" }] });
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    env.REPO_STORE = {
+      put: vi.fn(async () => undefined),
+      get: vi.fn(async () => {
+        throw new Error("HTTP error! status: 500");
+      })
+    } as unknown as R2Bucket;
+
+    const agent = new AgentDO({ storage: { sql, setAlarm } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.fetch(
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "message",
+          event: { type: "message", text: "Ship milestone B", channel: "C1" }
+        })
+      })
+    );
+
+    await agent.alarm();
+
+    expect(sandbox.exec).toHaveBeenCalledWith("pwd");
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Heartbeat recovered");
+    expect(postSlackMessage).not.toHaveBeenCalledWith(
+      "token",
+      "C1",
+      expect.stringContaining("Heartbeat error")
+    );
+  });
+
+  it("queues a self-repair task after a heartbeat failure", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const setAlarm = vi.fn();
+    const llmCall = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("HTTP error! status: 500"))
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Self-repair completed" }] });
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql, setAlarm } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.fetch(
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "message",
+          event: { type: "message", text: "Ship milestone C", channel: "C1" }
+        })
+      })
+    );
+
+    await agent.alarm();
+
+    expect(postSlackMessage).toHaveBeenCalledWith(
+      "token",
+      "C1",
+      expect.stringContaining("queued a self-repair task")
+    );
+
+    await agent.alarm();
+
+    expect(llmCall).toHaveBeenCalledTimes(2);
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Self-repair completed");
+  });
+
   it("posts error to Slack when agent loop throws", async () => {
     const sql = new FakeSql();
     const { env } = makeTestEnv();
