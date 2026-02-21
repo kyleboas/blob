@@ -8,6 +8,7 @@ class FakeSql implements SqlStorage {
   private messages: Array<{ id: number; threadId: string; role: string; content: string }> = [];
   private knowledge = "";
   private nextId = 1;
+  private sessionState: { current_session_id: string; last_message_at: number } | null = null;
 
   getTotalMessageCount(): number {
     return this.messages.length;
@@ -27,6 +28,12 @@ class FakeSql implements SqlStorage {
       return { toArray: () => [] };
     }
 
+    if (normalized.startsWith("DELETE FROM conversation_messages")) {
+      const threadId = String(bindings[0]);
+      this.messages = this.messages.filter((m) => m.threadId !== threadId);
+      return { toArray: () => [] };
+    }
+
     if (normalized.includes("FROM conversation_messages")) {
       const threadId = String(bindings[0]);
       return { toArray: () => this.messages.filter((row) => row.threadId === threadId) };
@@ -43,6 +50,22 @@ class FakeSql implements SqlStorage {
 
     if (normalized.startsWith("INSERT INTO rate_limits") || normalized.startsWith("SELECT count FROM rate_limits")) {
       return { toArray: () => [{ count: 1 }] };
+    }
+
+    if (normalized.includes("FROM session_state")) {
+      return { toArray: () => this.sessionState ? [this.sessionState] : [] };
+    }
+
+    if (normalized.startsWith("INSERT INTO session_state")) {
+      this.sessionState = {
+        current_session_id: String(bindings[0]),
+        last_message_at: Number(bindings[1])
+      };
+      return { toArray: () => [] };
+    }
+
+    if (normalized.includes("FROM session_summaries")) {
+      return { toArray: () => [] };
     }
 
     return { toArray: () => [] };
@@ -106,7 +129,7 @@ describe("integration flow", () => {
     const agent = new AgentDO({ storage: { sql } }, env, {
       llmCall: llmCall as never,
       postSlackMessage: postSlackMessage as never,
-      postSlackApproval: vi.fn().mockResolvedValue(undefined) as never
+      postSlackApproval: vi.fn().mockResolvedValue({ ts: "approval-ts" }) as never
     });
 
     const doStub = {

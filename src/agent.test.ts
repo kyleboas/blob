@@ -8,6 +8,9 @@ class FakeSql implements SqlStorage {
   private rateLimits = new Map<string, number>();
   private knowledge = "";
   private nextId = 1;
+  private sessionState: { current_session_id: string; last_message_at: number } | null = null;
+  private sessionSummaries: Array<{ id: number; session_id: string; summary: string; created_at: number }> = [];
+  private summaryNextId = 1;
 
   exec(query: string, ...bindings: Array<string | number | null>) {
     const normalized = query.trim().replace(/\s+/g, " ");
@@ -22,6 +25,12 @@ class FakeSql implements SqlStorage {
         role: String(bindings[1]),
         content: String(bindings[2])
       });
+      return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("DELETE FROM conversation_messages")) {
+      const threadId = String(bindings[0]);
+      this.messages = this.messages.filter((m) => m.threadId !== threadId);
       return { toArray: () => [] };
     }
 
@@ -51,6 +60,38 @@ class FakeSql implements SqlStorage {
 
     if (normalized.startsWith("SELECT content FROM knowledge")) {
       return { toArray: () => (this.knowledge ? [{ content: this.knowledge }] : []) };
+    }
+
+    if (normalized.includes("FROM session_state")) {
+      return {
+        toArray: () => this.sessionState ? [this.sessionState] : []
+      };
+    }
+
+    if (normalized.startsWith("INSERT INTO session_state")) {
+      this.sessionState = {
+        current_session_id: String(bindings[0] ?? bindings[0]),
+        last_message_at: Number(bindings[1] ?? bindings[1])
+      };
+      return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("INSERT INTO session_summaries")) {
+      this.sessionSummaries.push({
+        id: this.summaryNextId++,
+        session_id: String(bindings[0]),
+        summary: String(bindings[1]),
+        created_at: Math.floor(Date.now() / 1000)
+      });
+      return { toArray: () => [] };
+    }
+
+    if (normalized.includes("FROM session_summaries")) {
+      const limit = Number(bindings[0] ?? 5);
+      const recent = this.sessionSummaries.slice(-limit);
+      return {
+        toArray: () => recent.map((s) => ({ session_id: s.session_id, summary: s.summary, created_at: s.created_at }))
+      };
     }
 
     return { toArray: () => [] };
