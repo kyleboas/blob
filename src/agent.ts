@@ -1,26 +1,33 @@
 import { Agent } from "@cloudflare/agents";
-import { MAX_STEPS, TOOL_RETRY_MAX, TOOL_RETRY_BACKOFF_BASE_MS } from "./config";
+import { MAX_STEPS, TOOL_RETRY_MAX, TOOL_RETRY_BACKOFF_BASE_MS, COMPACTION_TOKEN_THRESHOLD, SESSION_SUMMARY_RECENT_COUNT } from "./config";
 import { callLLM, type LLMResponse } from "./llm";
 import { enforceSafety } from "./safety";
 import { SandboxClient, type SandboxBinding } from "./sandbox-client";
 import {
+  compactMessagesInDB,
   getHistory,
-  getRecentAgentEvents,
   getKnowledge,
+  getRecentAgentEvents,
+  getRecentSessionSummaries,
+  getCurrentSession,
   incrementRateLimit,
   initSchema,
   logAgentEvent,
+  resolveOrCreateSession,
   restoreRepoSnapshot,
+  saveKnowledge,
   saveMessage,
   saveRepoSnapshot,
+  saveSessionSummary,
   syncKnowledgeFromSandbox,
   syncKnowledgeToSandbox,
+  type SessionSummary,
   type SqlStorage
 } from "./storage";
 import { BASH_TOOL, formatToolResult } from "./tools";
 import { postApprovalRequest, postMessage } from "./slack";
 import { createApprovalRequest, expireTimedOutApprovals, resolveApprovalReaction, type PendingApproval } from "./approval";
-import type { Env, SlackEvent } from "./types";
+import type { ConversationMessage, Env, SlackEvent } from "./types";
 
 interface DurableObjectStateLike {
   storage: {
@@ -60,13 +67,20 @@ const BASE_SYSTEM_PROMPT = [
   "Use tools when needed."
 ].join(" ");
 
-function buildSystemPrompt(knowledge: string): string {
+function buildSystemPrompt(knowledge: string, recentSummaries: SessionSummary[]): string {
+  let prompt = BASE_SYSTEM_PROMPT;
+
   const trimmedKnowledge = knowledge.trim();
-  if (!trimmedKnowledge) {
-    return BASE_SYSTEM_PROMPT;
+  if (trimmedKnowledge) {
+    prompt += `\n\nFollow this AGENT.md knowledge when relevant:\n${trimmedKnowledge}`;
   }
 
-  return `${BASE_SYSTEM_PROMPT}\n\nFollow this AGENT.md knowledge when relevant:\n${trimmedKnowledge}`;
+  if (recentSummaries.length > 0) {
+    const summariesText = recentSummaries.map((s) => s.summary).join("\n---\n");
+    prompt += `\n\nContext from recent past conversations:\n${summariesText}`;
+  }
+
+  return prompt;
 }
 
 const UNCONFIGURED_SANDBOX: SandboxBinding = {
@@ -88,6 +102,14 @@ function isCloudflareApplyCommand(command: string): boolean {
     || /workers\/scripts/.test(normalized);
 }
 
+function extractTextContent(response: LLMResponse): string {
+  return (response.content as Array<TextBlock | ToolUseBlock>)
+    .filter((b): b is TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("\n")
+    .trim();
+}
+
 export class AgentDO extends Agent {
   private readonly db: SqlStorage;
   private readonly sandbox: SandboxClient;
@@ -105,8 +127,9 @@ export class AgentDO extends Agent {
   async fetch(request: Request): Promise<Response> {
     const body = await request.json() as { action?: string; event?: SlackEvent; task?: string };
 
-    if (body.action === "logs_snapshot" && body.event?.thread_ts) {
-      return Response.json({ events: getRecentAgentEvents(this.db, body.event.thread_ts) });
+    if (body.action === "logs_snapshot") {
+      const sessionId = getCurrentSession(this.db);
+      return Response.json({ events: sessionId ? getRecentAgentEvents(this.db, sessionId) : [] });
     }
 
     if (body.action === "reaction" && body.event) {
@@ -119,32 +142,40 @@ export class AgentDO extends Agent {
       try {
         await this.handleTaskEvent(event);
       } catch (error) {
-        const threadTs = event.thread_ts ?? event.ts;
         const channel = event.channel;
-        if (channel && threadTs) {
+        if (channel) {
           const message = error instanceof Error ? error.message : "An unexpected error occurred.";
-          await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, `Error: ${message}`, threadTs);
+          await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, `Error: ${message}`);
         }
       }
       return new Response("accepted", { status: 202 });
     }
 
-    if (body.task && body.event?.thread_ts && body.event.channel) {
-      await this.runAgentLoop(body.task, body.event.channel, body.event.thread_ts);
+    if (body.task && body.event?.channel) {
+      const { sessionId, previousSessionId } = resolveOrCreateSession(this.db, this.deps.now());
+      if (previousSessionId) {
+        await this.summarizePreviousSession(previousSessionId);
+      }
+      await this.runAgentLoop(body.task, body.event.channel, sessionId);
       return new Response("accepted", { status: 202 });
     }
 
     return new Response("bad request", { status: 400 });
   }
 
-  async runAgentLoop(task: string, channel: string, threadTs: string): Promise<{ finalText: string; steps: number }> {
-    logAgentEvent(this.db, threadTs, "task_received", task);
-    const conversation = getHistory(this.db, threadTs);
-    saveMessage(this.db, threadTs, { role: "user", content: task });
+  async runAgentLoop(task: string, channel: string, sessionId: string): Promise<{ finalText: string; steps: number }> {
+    logAgentEvent(this.db, sessionId, "task_received", task);
+
+    // Load history and compact if the context is getting large
+    const rawConversation = getHistory(this.db, sessionId);
+    const conversation = await this.compactConversationIfNeeded(rawConversation, sessionId);
+
+    saveMessage(this.db, sessionId, { role: "user", content: task });
     conversation.push({ role: "user", content: task });
 
     await syncKnowledgeFromSandbox(this.db, this.sandbox);
-    const systemPrompt = buildSystemPrompt(getKnowledge(this.db));
+    const summaries = getRecentSessionSummaries(this.db, SESSION_SUMMARY_RECENT_COUNT);
+    const systemPrompt = buildSystemPrompt(getKnowledge(this.db), summaries);
 
     // Fire "Thinking..." and the first LLM call concurrently
     const [firstResponse] = await Promise.all([
@@ -154,13 +185,13 @@ export class AgentDO extends Agent {
         messages: conversation,
         tools: [BASH_TOOL]
       }),
-      this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, "Thinking...", threadTs)
+      this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, "Thinking...")
     ]);
-    logAgentEvent(this.db, threadTs, "thinking", "Started reasoning loop.");
+    logAgentEvent(this.db, sessionId, "thinking", "Started reasoning loop.");
 
     let finalText = "";
     let steps = 0;
-    let sessionStarted = false;
+    let sandboxStarted = false;
     let llmResponse = firstResponse;
 
     try {
@@ -179,20 +210,20 @@ export class AgentDO extends Agent {
           break;
         }
 
-        if (!sessionStarted) {
-          await this.startSession(threadTs);
-          sessionStarted = true;
-          logAgentEvent(this.db, threadTs, "session", "Sandbox session started.");
+        if (!sandboxStarted) {
+          await this.startSandboxSession(sessionId);
+          sandboxStarted = true;
+          logAgentEvent(this.db, sessionId, "session", "Sandbox session started.");
         }
 
-        const decision = await this.processLlmResponse(llmResponse, channel, threadTs, task);
+        const decision = await this.processLlmResponse(llmResponse, channel, sessionId);
         if (decision.done) {
           finalText = decision.text;
           break;
         }
 
         conversation.push({ role: "assistant", content: decision.observation });
-        saveMessage(this.db, threadTs, { role: "assistant", content: decision.observation });
+        saveMessage(this.db, sessionId, { role: "assistant", content: decision.observation });
 
         llmResponse = await this.deps.llmCall({
           apiKey: this.env.ANTHROPIC_API_KEY,
@@ -202,9 +233,9 @@ export class AgentDO extends Agent {
         });
       }
     } finally {
-      if (sessionStarted) {
-        await this.endSession(threadTs);
-        logAgentEvent(this.db, threadTs, "session", "Sandbox session ended.");
+      if (sandboxStarted) {
+        await this.endSandboxSession(sessionId);
+        logAgentEvent(this.db, sessionId, "session", "Sandbox session ended.");
       }
     }
 
@@ -212,8 +243,8 @@ export class AgentDO extends Agent {
       finalText = `Stopped after reaching max steps (${MAX_STEPS}).`;
     }
 
-    await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, finalText, threadTs);
-    logAgentEvent(this.db, threadTs, "completed", finalText);
+    await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, finalText);
+    logAgentEvent(this.db, sessionId, "completed", finalText);
 
     return { finalText, steps };
   }
@@ -221,7 +252,6 @@ export class AgentDO extends Agent {
   private async processLlmResponse(
     llmResponse: LLMResponse,
     channel: string,
-    threadTs: string,
     sessionId: string
   ): Promise<{ done: boolean; text: string; observation: string }> {
     const blocks = llmResponse.content as Array<ToolUseBlock | TextBlock>;
@@ -237,7 +267,7 @@ export class AgentDO extends Agent {
     }
 
     const command = String(toolBlock.input.command ?? "");
-    logAgentEvent(this.db, threadTs, "command", command);
+    logAgentEvent(this.db, sessionId, "command", command);
     const safety = enforceSafety(command, this.db, sessionId, []);
 
     if (!safety.allowed && safety.requiresApproval) {
@@ -246,8 +276,7 @@ export class AgentDO extends Agent {
         {
           sessionId,
           command,
-          channel,
-          threadTs
+          channel
         },
         this.deps,
         this.env.SLACK_BOT_TOKEN,
@@ -267,14 +296,13 @@ export class AgentDO extends Agent {
     incrementRateLimit(this.db, "session", sessionId);
     const result = await this.executeWithGitSafety(command);
     const exitSummary = `Command finished with exit code ${result.exitCode}.`;
-    logAgentEvent(this.db, threadTs, result.exitCode === 0 ? "command_success" : "command_failure", exitSummary);
+    logAgentEvent(this.db, sessionId, result.exitCode === 0 ? "command_success" : "command_failure", exitSummary);
 
     if (result.exitCode === 0 && isCloudflareApplyCommand(command)) {
       await this.deps.postSlackMessage(
         this.env.SLACK_BOT_TOKEN,
         channel,
-        "✅ Cloudflare update applied successfully. Your latest changes should now be effective.",
-        threadTs
+        "✅ Cloudflare update applied successfully. Your latest changes should now be effective."
       );
     }
 
@@ -320,14 +348,21 @@ export class AgentDO extends Agent {
 
   private async handleTaskEvent(event: SlackEvent): Promise<void> {
     const task = event.text ?? "";
-    const threadTs = event.thread_ts ?? event.ts;
     const channel = event.channel;
 
-    if (!threadTs || !channel || !task.trim()) {
+    if (!channel || !task.trim()) {
       return;
     }
 
-    await this.runAgentLoop(task, channel, threadTs);
+    const { sessionId, previousSessionId } = resolveOrCreateSession(this.db, this.deps.now());
+
+    // When a new conversation starts, summarize the previous one and extract
+    // any long-term learnings into AGENT.md before the new session runs
+    if (previousSessionId) {
+      await this.summarizePreviousSession(previousSessionId);
+    }
+
+    await this.runAgentLoop(task, channel, sessionId);
   }
 
   private async handleApprovalReaction(event: SlackEvent): Promise<void> {
@@ -341,16 +376,129 @@ export class AgentDO extends Agent {
     );
   }
 
-  private async startSession(sessionId: string): Promise<void> {
+  private async startSandboxSession(sessionId: string): Promise<void> {
     await restoreRepoSnapshot(this.env.REPO_STORE, sessionId, this.sandbox);
     await syncKnowledgeToSandbox(this.db, this.sandbox);
   }
 
-  private async endSession(sessionId: string): Promise<void> {
+  private async endSandboxSession(sessionId: string): Promise<void> {
     await Promise.all([
       saveRepoSnapshot(this.env.REPO_STORE, sessionId, this.sandbox),
       syncKnowledgeFromSandbox(this.db, this.sandbox)
     ]);
+  }
+
+  // Mechanism 4: end-of-conversation episodic + semantic memory
+  // Called at the start of a new conversation when a previous session timed out.
+  // Writes a summary to session_summaries (episodic) and merges any new facts
+  // into AGENT.md / the knowledge table (semantic).
+  private async summarizePreviousSession(previousSessionId: string): Promise<void> {
+    const messages = getHistory(this.db, previousSessionId);
+    if (messages.length === 0) return;
+
+    const history = messages
+      .map((m) => `${m.role === "user" ? "User" : "Blob"}: ${m.content}`)
+      .join("\n\n");
+
+    const currentKnowledge = getKnowledge(this.db);
+
+    const response = await this.deps.llmCall({
+      apiKey: this.env.ANTHROPIC_API_KEY,
+      taskComplexityHint: "routine",
+      systemPrompt: "You maintain concise memory between AI agent sessions.",
+      messages: [
+        {
+          role: "user",
+          content: [
+            "A conversation just ended. Please:",
+            "1. Write a SUMMARY (2-4 sentences) of what was accomplished.",
+            "2. Write UPDATED_AGENT_MD with the complete updated long-term memory,",
+            "   merging any important new facts (preferences, patterns, capabilities)",
+            "   into the existing content — or write exactly \"(unchanged)\" if nothing",
+            "   needs to be added. Do not duplicate existing content.",
+            "",
+            `Current AGENT.md:\n${currentKnowledge || "(empty)"}`,
+            "",
+            `Conversation:\n${history}`,
+            "",
+            "Respond in exactly this format:",
+            "SUMMARY: <your summary here>",
+            "UPDATED_AGENT_MD:",
+            "<full content or (unchanged)>"
+          ].join("\n")
+        }
+      ]
+    });
+
+    const text = extractTextContent(response);
+    const lines = text.split("\n");
+
+    const summaryStart = lines.findIndex((l) => l.startsWith("SUMMARY:"));
+    const mdStart = lines.findIndex((l) => l.startsWith("UPDATED_AGENT_MD:"));
+
+    const summary =
+      summaryStart >= 0
+        ? lines
+            .slice(summaryStart, mdStart >= 0 ? mdStart : undefined)
+            .join("\n")
+            .replace(/^SUMMARY:\s*/m, "")
+            .trim()
+        : text.slice(0, 400).trim();
+
+    if (summary) {
+      saveSessionSummary(this.db, previousSessionId, summary);
+    }
+
+    const updatedMd =
+      mdStart >= 0 ? lines.slice(mdStart + 1).join("\n").trim() : "";
+
+    if (updatedMd && updatedMd !== "(unchanged)") {
+      saveKnowledge(this.db, updatedMd);
+    }
+  }
+
+  // Mechanism 3: in-session context compaction
+  // When estimated token count of the conversation exceeds the threshold,
+  // the oldest messages are summarised and replaced with a single context
+  // message so the active window stays manageable.
+  private async compactConversationIfNeeded(
+    conversation: ConversationMessage[],
+    sessionId: string
+  ): Promise<ConversationMessage[]> {
+    const KEEP_RECENT = 6;
+    const estimatedTokens = conversation.reduce(
+      (sum, m) => sum + Math.ceil(m.content.length / 4),
+      0
+    );
+
+    if (estimatedTokens <= COMPACTION_TOKEN_THRESHOLD || conversation.length <= KEEP_RECENT) {
+      return conversation;
+    }
+
+    const toCompact = conversation.slice(0, -KEEP_RECENT);
+    const toKeep = conversation.slice(-KEEP_RECENT);
+
+    const history = toCompact
+      .map((m) => `${m.role === "user" ? "User" : "Blob"}: ${m.content}`)
+      .join("\n\n");
+
+    const response = await this.deps.llmCall({
+      apiKey: this.env.ANTHROPIC_API_KEY,
+      taskComplexityHint: "routine",
+      systemPrompt: "Summarise conversation history concisely, preserving key decisions, code changes, and context.",
+      messages: [{ role: "user", content: `Summarise:\n\n${history}` }]
+    });
+
+    const summaryText = extractTextContent(response) || "(context summarised)";
+    const summaryMessage: ConversationMessage = {
+      role: "user",
+      content: `[Earlier context, compacted]: ${summaryText}`
+    };
+
+    const compacted = [summaryMessage, ...toKeep];
+    compactMessagesInDB(this.db, sessionId, compacted);
+
+    return compacted;
   }
 
   async alarm(): Promise<void> {

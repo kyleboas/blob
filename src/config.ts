@@ -4,6 +4,9 @@ export const MEMORY_LIMIT_MB = 512;
 export const SELF_MODIFY_LIMIT_SESSION = 3;
 export const SELF_MODIFY_LIMIT_DAY = 10;
 export const APPROVAL_TIMEOUT_MINUTES = 30;
+export const CONVERSATION_TIMEOUT_MINUTES = 30;
+export const COMPACTION_TOKEN_THRESHOLD = 20_000;
+export const SESSION_SUMMARY_RECENT_COUNT = 5;
 
 export const MODEL_ROUTINE = "claude-haiku-4-5";
 export const MODEL_COMPLEX = "claude-sonnet-4-6";

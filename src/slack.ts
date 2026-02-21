@@ -81,7 +81,7 @@ export async function postMessage(
   text: string,
   threadTs?: string,
   fetchImpl: typeof fetch = fetch
-): Promise<void> {
+): Promise<{ ts: string }> {
   const response = await fetchImpl(`${SLACK_API_BASE}/chat.postMessage`, {
     method: "POST",
     headers: {
@@ -95,28 +95,28 @@ export async function postMessage(
     })
   });
 
-  const bodyJson = (await response.json()) as { ok?: boolean; error?: string };
+  const bodyJson = (await response.json()) as { ok?: boolean; error?: string; ts?: string };
   if (!response.ok || !bodyJson.ok) {
     throw new Error(`Slack API chat.postMessage failed: ${bodyJson.error ?? response.statusText}`);
   }
+  return { ts: bodyJson.ts ?? "" };
 }
 
 export async function postApprovalRequest(
   token: string,
   channel: string,
-  threadTs: string,
   description: string,
   fetchImpl: typeof fetch = fetch
-): Promise<void> {
+): Promise<{ ts: string }> {
   const text = [
     "⚠️ Approval required",
     description,
     "React with :thumbsup: to approve or :thumbsdown: to deny."
   ].join("\n");
 
-  await postMessage(token, channel, text, threadTs, fetchImpl);
+  return postMessage(token, channel, text, undefined, fetchImpl);
 }
 
-export function mapThreadToDO(threadTs: string): string {
-  return `slack-thread:${threadTs.trim()}`;
+export function mapChannelToDO(channel: string): string {
+  return `slack-channel:${channel.trim()}`;
 }
