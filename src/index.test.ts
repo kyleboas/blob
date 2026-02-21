@@ -14,7 +14,7 @@ function makeSignature(timestamp: string, body: string, secret: string): Promise
     .then((sig) => `v0=${Array.from(new Uint8Array(sig)).map((byte) => byte.toString(16).padStart(2, "0")).join("")}`);
 }
 
-function makeEnv(stub: DurableObjectStubLike): Env {
+function makeEnv(stub: DurableObjectStubLike, overrides: Partial<Env> = {}): Env {
   return {
     AGENT_DO: {
       idFromName: vi.fn((name: string) => `id:${name}`),
@@ -24,7 +24,8 @@ function makeEnv(stub: DurableObjectStubLike): Env {
     SANDBOX: {} as Fetcher,
     ANTHROPIC_API_KEY: "key",
     SLACK_BOT_TOKEN: "token",
-    SLACK_SIGNING_SECRET: "signing-secret"
+    SLACK_SIGNING_SECRET: "signing-secret",
+    ...overrides
   };
 }
 
@@ -216,6 +217,41 @@ describe("worker entry point", () => {
     expect(response.status).toBe(200);
     expect(html).toContain("Blob Live Logs");
     expect(html).toContain("C1");
+  });
+
+  it("renders the live logs shell without a channel parameter", async () => {
+    const stub = { fetch: vi.fn() };
+    const env = makeEnv(stub);
+    const { ctx } = makeCtx();
+
+    const response = await worker.fetch(new Request("https://example.com/logs"), env, ctx);
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).toContain("No channel selected");
+  });
+
+  it("renders the live logs page without a query parameter when LOGS_CHANNEL is configured", async () => {
+    const stub = { fetch: vi.fn() };
+    const env = makeEnv(stub, { LOGS_CHANNEL: "C_DEFAULT" });
+    const { ctx } = makeCtx();
+
+    const response = await worker.fetch(new Request("https://example.com/logs"), env, ctx);
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).toContain("C_DEFAULT");
+  });
+
+  it("proxies live log data without a query parameter when LOGS_CHANNEL is configured", async () => {
+    const stub = { fetch: vi.fn().mockResolvedValue(Response.json({ events: [{ eventType: "thinking", message: "Started", createdAt: 1700000000 }] })) };
+    const env = makeEnv(stub, { LOGS_CHANNEL: "C_DEFAULT" });
+    const { ctx } = makeCtx();
+
+    const response = await worker.fetch(new Request("https://example.com/logs/data"), env, ctx);
+
+    expect(response.status).toBe(200);
+    expect(stub.fetch).toHaveBeenCalledTimes(1);
   });
 
   it("proxies live log data through durable objects", async () => {
