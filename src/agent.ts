@@ -409,6 +409,18 @@ export class AgentDO {
 
     incrementRateLimit(this.db, "session", sessionId);
     const result = await this.executeWithGitSafety(command);
+    if (result.stdout.trim()) {
+      const stdoutMessage = result.stdout.length > 4000 ? `${result.stdout.slice(0, 4000)}\n...[truncated]` : result.stdout;
+      logAgentEvent(this.db, sessionId, "command_output", stdoutMessage);
+      this.forwardToGlobalLogs("command_output", `[#${channel}] ${stdoutMessage}`);
+    }
+
+    if (result.stderr.trim()) {
+      const stderrMessage = result.stderr.length > 4000 ? `${result.stderr.slice(0, 4000)}\n...[truncated]` : result.stderr;
+      logAgentEvent(this.db, sessionId, "command_error", stderrMessage);
+      this.forwardToGlobalLogs("command_error", `[#${channel}] ${stderrMessage}`);
+    }
+
     const exitSummary = `Command finished with exit code ${result.exitCode}.`;
     const exitEventType = result.exitCode === 0 ? "command_success" : "command_failure";
     logAgentEvent(this.db, sessionId, exitEventType, exitSummary);
