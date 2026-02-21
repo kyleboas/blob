@@ -11,10 +11,27 @@ class FakeSql implements SqlStorage {
   private sessionState: { current_session_id: string; last_message_at: number } | null = null;
   private sessionSummaries: Array<{ id: number; session_id: string; summary: string; created_at: number }> = [];
   private summaryNextId = 1;
+  private backgroundTasks: Array<{ id: number; event_json: string; status: string }> = [];
+  private backgroundTaskNextId = 1;
+  private heartbeatGoal: { channel: string; goal: string } | null = null;
 
   exec(query: string, ...bindings: Array<string | number | null>) {
     const normalized = query.trim().replace(/\s+/g, " ");
     if (normalized.startsWith("CREATE TABLE")) {
+      return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("PRAGMA table_info(background_tasks)")) {
+      return {
+        toArray: () => [{ name: "id" }, { name: "event_json" }, { name: "status" }, { name: "created_at" }]
+      };
+    }
+
+    if (normalized.startsWith("ALTER TABLE background_tasks ADD COLUMN event_json")) {
+      return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("UPDATE background_tasks SET event_json")) {
       return { toArray: () => [] };
     }
 
@@ -76,6 +93,17 @@ class FakeSql implements SqlStorage {
       return { toArray: () => [] };
     }
 
+    if (normalized.startsWith("INSERT INTO heartbeat_state")) {
+      this.heartbeatGoal = { channel: String(bindings[0]), goal: String(bindings[1]) };
+      return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("SELECT channel, goal FROM heartbeat_state")) {
+      return {
+        toArray: () => this.heartbeatGoal ? [{ channel: this.heartbeatGoal.channel, goal: this.heartbeatGoal.goal }] : []
+      };
+    }
+
     if (normalized.startsWith("INSERT INTO session_summaries")) {
       this.sessionSummaries.push({
         id: this.summaryNextId++,
@@ -92,6 +120,46 @@ class FakeSql implements SqlStorage {
       return {
         toArray: () => recent.map((s) => ({ session_id: s.session_id, summary: s.summary, created_at: s.created_at }))
       };
+    }
+
+    if (normalized.startsWith("INSERT INTO background_tasks")) {
+      this.backgroundTasks.push({
+        id: this.backgroundTaskNextId++,
+        event_json: String(bindings[0]),
+        status: "queued"
+      });
+      return { toArray: () => [] };
+    }
+
+    if (normalized.includes("FROM background_tasks")) {
+      const nextQueued = this.backgroundTasks.find((task) => task.status === "queued");
+      return {
+        toArray: () =>
+          nextQueued
+            ? [{ id: nextQueued.id, event_json: nextQueued.event_json }]
+            : []
+      };
+    }
+
+    if (normalized.startsWith("UPDATE background_tasks SET status = 'running'")) {
+      const id = Number(bindings[0]);
+      const task = this.backgroundTasks.find((row) => row.id === id);
+      if (task) task.status = "running";
+      return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("UPDATE background_tasks SET status = 'done'")) {
+      const id = Number(bindings[0]);
+      const task = this.backgroundTasks.find((row) => row.id === id);
+      if (task) task.status = "done";
+      return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("UPDATE background_tasks SET status = 'failed'")) {
+      const id = Number(bindings[0]);
+      const task = this.backgroundTasks.find((row) => row.id === id);
+      if (task) task.status = "failed";
+      return { toArray: () => [] };
     }
 
     return { toArray: () => [] };
@@ -221,6 +289,71 @@ describe("AgentDO runAgentLoop", () => {
 
     expect(result.finalText).toContain("max steps");
     expect(result.steps).toBe(25);
+  });
+
+
+  it("queues message tasks for background processing when alarms are available", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const setAlarm = vi.fn();
+    const llmCall = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Done in background" }] });
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql, setAlarm } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const response = await agent.fetch(
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "message",
+          event: { type: "message", text: "work on this goal", channel: "C1", thread_ts: "1711111111.1234" }
+        })
+      })
+    );
+
+    expect(response.status).toBe(202);
+    expect(setAlarm).toHaveBeenCalledTimes(1);
+    expect(llmCall).not.toHaveBeenCalled();
+
+    await agent.alarm();
+
+    expect(llmCall).toHaveBeenCalledTimes(1);
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Done in background");
+  });
+
+  it("runs heartbeat work every 15 minutes without a new human prompt", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const setAlarm = vi.fn();
+    const llmCall = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Heartbeat progress" }] });
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql, setAlarm } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.fetch(
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "message",
+          event: { type: "message", text: "Ship milestone A", channel: "C1" }
+        })
+      })
+    );
+
+    await agent.alarm();
+    expect(llmCall).toHaveBeenCalledTimes(1);
+
+    await agent.alarm();
+    expect(llmCall).toHaveBeenCalledTimes(2);
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Heartbeat progress");
   });
 
   it("posts error to Slack when agent loop throws", async () => {

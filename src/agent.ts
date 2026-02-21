@@ -12,6 +12,11 @@ import { enforceSafety } from "./safety";
 import { SandboxClient, type SandboxBinding } from "./sandbox-client";
 import {
   compactMessagesInDB,
+  completeBackgroundTask,
+  claimNextBackgroundTask,
+  enqueueBackgroundTask,
+  failBackgroundTask,
+  getHeartbeatGoal,
   getHistory,
   getKnowledge,
   getRecentAgentEvents,
@@ -21,6 +26,7 @@ import {
   initSchema,
   logAgentEvent,
   resolveOrCreateSession,
+  saveHeartbeatGoal,
   restoreRepoSnapshot,
   saveKnowledge,
   saveMessage,
@@ -68,6 +74,8 @@ const DEFAULT_DEPS: AgentDeps = {
   postSlackApproval: postApprovalRequest,
   now: () => Date.now()
 };
+
+const HEARTBEAT_INTERVAL_MS = 15 * 60 * 1000;
 
 const BASE_SYSTEM_PROMPT = [
   "You are Blob, a careful coding agent.",
@@ -146,13 +154,25 @@ export class AgentDO extends Agent {
 
     if (body.action === "message" && body.event) {
       const event = body.event;
-      try {
-        await this.handleTaskEvent(event);
-      } catch (error) {
+      if (this.ctx.storage.setAlarm) {
+        const task = event.text ?? "";
         const channel = event.channel;
-        if (channel) {
-          const message = error instanceof Error ? error.message : "An unexpected error occurred.";
-          await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, `Error: ${message}`);
+        if (channel && task.trim()) {
+          enqueueBackgroundTask(this.db, event);
+          saveHeartbeatGoal(this.db, channel, task);
+          const eventThreadId = event.thread_ts ?? event.ts ?? channel;
+          logAgentEvent(this.db, eventThreadId, "heartbeat_queued", "Task queued for heartbeat processing.");
+          await this.ctx.storage.setAlarm(this.deps.now());
+        }
+      } else {
+        try {
+          await this.handleTaskEvent(event);
+        } catch (error) {
+          const channel = event.channel;
+          if (channel) {
+            const message = error instanceof Error ? error.message : "An unexpected error occurred.";
+            await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, `Error: ${message}`);
+          }
         }
       }
       return new Response("accepted", { status: 202 });
@@ -519,6 +539,40 @@ export class AgentDO extends Agent {
   }
 
   async alarm(): Promise<void> {
+    const nextTask = claimNextBackgroundTask(this.db);
+    if (nextTask) {
+      try {
+        await this.handleTaskEvent(nextTask.event);
+        completeBackgroundTask(this.db, nextTask.id);
+      } catch (error) {
+        failBackgroundTask(this.db, nextTask.id);
+        const message = error instanceof Error ? error.message : "An unexpected error occurred.";
+        if (nextTask.event.channel) {
+          await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, nextTask.event.channel, `Error: ${message}`);
+        }
+      }
+    } else {
+      const heartbeatGoal = getHeartbeatGoal(this.db);
+      if (heartbeatGoal) {
+        const heartbeatEvent: SlackEvent = {
+          type: "message",
+          channel: heartbeatGoal.channel,
+          text: `Heartbeat: continue working toward this goal: ${heartbeatGoal.goal}`
+        };
+        logAgentEvent(this.db, heartbeatGoal.channel, "heartbeat", "Running scheduled heartbeat toward goal.");
+        try {
+          await this.handleTaskEvent(heartbeatEvent);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "An unexpected error occurred.";
+          await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, heartbeatGoal.channel, `Heartbeat error: ${message}`);
+        }
+      }
+    }
+
     await expireTimedOutApprovals(this.pendingApprovals, this.deps, this.env.SLACK_BOT_TOKEN, this.db);
+
+    if (this.ctx.storage.setAlarm) {
+      await this.ctx.storage.setAlarm(this.deps.now() + HEARTBEAT_INTERVAL_MS);
+    }
   }
 }
