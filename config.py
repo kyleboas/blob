@@ -33,6 +33,9 @@ DEFAULT_NETWORK_ALLOWLIST = [
     "*.pypi.org",
     "files.pythonhosted.org",
     "docs.anthropic.com",
+    "api.github.com",
+    "github.com",
+    "*.github.com",
 ]
 
 CUSTOM_ALLOWLIST_PATH = WORKSPACE_ROOT / ".network_allowlist"
@@ -57,6 +60,9 @@ CLOUDFLARE_WORKERS_AI_MARKDOWN_CONVERSION_URL = os.getenv("CLOUDFLARE_WORKERS_AI
 CLOUDFLARE_MARKDOWN_FETCH_URL = os.getenv("CLOUDFLARE_MARKDOWN_FETCH_URL", "")
 CLOUDFLARE_BROWSER_RENDER_MARKDOWN_URL = os.getenv("CLOUDFLARE_BROWSER_RENDER_MARKDOWN_URL", "")
 CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "")
+
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+GITHUB_USERNAME = os.getenv("GITHUB_USERNAME", "")
 
 CONSTITUTION_FILES = [
     "agent.py",
