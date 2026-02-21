@@ -20,7 +20,7 @@ async function forwardToAgent(env: Env, channel: string, payload: { action: "mes
   }
 }
 
-function renderLiveLogPage(defaultChannel: string): string {
+function renderLiveLogPage(): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -31,69 +31,19 @@ function renderLiveLogPage(defaultChannel: string): string {
     body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; padding: 1rem; background: #0f172a; color: #e2e8f0; }
     h1 { margin-top: 0; font-size: 1.2rem; }
     #status { color: #93c5fd; margin-bottom: 1rem; }
-    .channel-picker { margin-bottom: 1rem; }
-    .channel-picker input { background: #020617; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 0.4rem 0.5rem; min-width: 220px; }
-    .channel-picker button { margin-left: 0.5rem; background: #1d4ed8; color: #fff; border: none; border-radius: 6px; padding: 0.45rem 0.75rem; cursor: pointer; }
     pre { white-space: pre-wrap; background: #020617; border: 1px solid #1e293b; border-radius: 8px; padding: 1rem; min-height: 300px; }
   </style>
 </head>
 <body>
   <h1>Blob Live Logs</h1>
-  <div class="channel-picker">
-    <label for="channel-input">Channel:</label>
-    <input id="channel-input" name="channel" placeholder="e.g. C123456" />
-    <button id="channel-apply" type="button">Apply</button>
-  </div>
   <div id="status">Loading logs...</div>
   <pre id="log">Waiting for events...</pre>
   <script>
-    const defaultChannel = ${JSON.stringify(defaultChannel)};
     const logNode = document.getElementById('log');
     const statusNode = document.getElementById('status');
-    const input = document.getElementById('channel-input');
-    const applyButton = document.getElementById('channel-apply');
-
-    const params = new URLSearchParams(window.location.search);
-    function safeReadChannel() {
-      try {
-        return localStorage.getItem('blob_logs_channel') || '';
-      } catch {
-        return '';
-      }
-    }
-
-    function safeWriteChannel(value) {
-      try {
-        if (value) {
-          localStorage.setItem('blob_logs_channel', value);
-        } else {
-          localStorage.removeItem('blob_logs_channel');
-        }
-      } catch {
-        // Local storage can fail in private browsing or restricted contexts.
-      }
-    }
-
-    let channel = (params.get('channel') || defaultChannel || safeReadChannel() || '').trim();
-    input.value = channel;
-
-    function persistChannel(nextChannel) {
-      channel = nextChannel.trim();
-      input.value = channel;
-      if (channel) {
-        safeWriteChannel(channel);
-        params.set('channel', channel);
-      } else {
-        safeWriteChannel('');
-        params.delete('channel');
-      }
-      const query = params.toString();
-      history.replaceState({}, '', query ? ('?' + query) : window.location.pathname);
-    }
 
     async function refreshLogs() {
-      const query = channel ? ('?channel=' + encodeURIComponent(channel)) : '';
-      const response = await fetch('/logs/data' + query, { cache: 'no-store' });
+      const response = await fetch('/logs/data', { cache: 'no-store' });
       if (!response.ok) {
         statusNode.textContent = 'Failed to load logs: ' + response.status;
         return;
@@ -105,34 +55,15 @@ function renderLiveLogPage(defaultChannel: string): string {
         return '[' + when + '] [' + event.eventType + '] ' + event.message;
       });
       logNode.textContent = lines.length ? lines.join('\n') : 'No events yet.';
-      const channelLabel = channel && channel !== ${JSON.stringify(GLOBAL_LOGS_CHANNEL)}
-        ? channel
-        : 'all channels';
-      statusNode.textContent = 'Channel: ' + channelLabel + ' • Last updated: ' + new Date().toLocaleTimeString();
+      statusNode.textContent = 'Live across all channels • Last updated: ' + new Date().toLocaleTimeString();
       logNode.scrollTop = logNode.scrollHeight;
     }
-
-    applyButton.addEventListener('click', () => {
-      persistChannel(input.value);
-      refreshLogs();
-    });
-
-    input.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') {
-        persistChannel(input.value);
-        refreshLogs();
-      }
-    });
 
     refreshLogs();
     setInterval(refreshLogs, 2000);
   </script>
 </body>
 </html>`;
-}
-
-function resolveLogChannel(url: URL, env: Env): string {
-  return (url.searchParams.get("channel") ?? env.LOGS_CHANNEL ?? GLOBAL_LOGS_CHANNEL).trim();
 }
 
 export default {
@@ -144,16 +75,14 @@ export default {
     }
 
     if (request.method === "GET" && (url.pathname === "/logs" || url.pathname === "/live-logs")) {
-      return new Response(renderLiveLogPage(resolveLogChannel(url, env)), {
+      return new Response(renderLiveLogPage(), {
         status: 200,
         headers: { "content-type": "text/html; charset=utf-8" }
       });
     }
 
     if (request.method === "GET" && (url.pathname === "/logs/data" || url.pathname === "/live-logs/data")) {
-      const channel = resolveLogChannel(url, env);
-
-      const id = env.AGENT_DO.idFromName(mapChannelToDO(channel));
+      const id = env.AGENT_DO.idFromName(mapChannelToDO(GLOBAL_LOGS_CHANNEL));
       const stub = env.AGENT_DO.get(id);
       const response = await stub.fetch("https://agent.internal/event", {
         method: "POST",

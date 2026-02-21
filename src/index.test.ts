@@ -211,20 +211,8 @@ describe("worker entry point", () => {
     expect(mirroredBody.action).toBe("logs_mirror");
   });
 
-  it("renders the live logs page for a channel", async () => {
-    const stub = { fetch: vi.fn() };
-    const env = makeEnv(stub);
-    const { ctx } = makeCtx();
 
-    const response = await worker.fetch(new Request("https://example.com/logs?channel=C1"), env, ctx);
-    const html = await response.text();
-
-    expect(response.status).toBe(200);
-    expect(html).toContain("Blob Live Logs");
-    expect(html).toContain("C1");
-  });
-
-  it("renders the live logs shell in all-channel mode without a channel parameter", async () => {
+  it("renders the live logs shell without manual channel controls", async () => {
     const stub = { fetch: vi.fn() };
     const env = makeEnv(stub);
     const { ctx } = makeCtx();
@@ -233,22 +221,12 @@ describe("worker entry point", () => {
     const html = await response.text();
 
     expect(response.status).toBe(200);
-    expect(html).toContain("__global__");
+    expect(html).toContain("Live across all channels");
+    expect(html).not.toContain("channel-input");
   });
 
-  it("renders the live logs page without a query parameter when LOGS_CHANNEL is configured", async () => {
-    const stub = { fetch: vi.fn() };
-    const env = makeEnv(stub, { LOGS_CHANNEL: "C_DEFAULT" });
-    const { ctx } = makeCtx();
 
-    const response = await worker.fetch(new Request("https://example.com/logs"), env, ctx);
-    const html = await response.text();
-
-    expect(response.status).toBe(200);
-    expect(html).toContain("C_DEFAULT");
-  });
-
-  it("proxies live log data in all-channel mode without a query parameter", async () => {
+  it("proxies live log data from the global stream", async () => {
     const stub = { fetch: vi.fn().mockResolvedValue(Response.json({ events: [{ eventType: "thinking", message: "Started", createdAt: 1700000000 }] })) };
     const env = makeEnv(stub);
     const { ctx } = makeCtx();
@@ -261,17 +239,4 @@ describe("worker entry point", () => {
     expect(forwardedBody.action).toBe("logs_snapshot");
   });
 
-  it("proxies live log data through durable objects", async () => {
-    const stub = { fetch: vi.fn().mockResolvedValue(Response.json({ events: [{ eventType: "thinking", message: "Started", createdAt: 1700000000 }] })) };
-    const env = makeEnv(stub);
-    const { ctx } = makeCtx();
-
-    const response = await worker.fetch(new Request("https://example.com/logs/data?channel=C1"), env, ctx);
-    const payload = await response.json() as { events: Array<{ eventType: string }> };
-
-    expect(response.status).toBe(200);
-    expect(payload.events[0]?.eventType).toBe("thinking");
-    const forwardedBody = JSON.parse(stub.fetch.mock.calls[0][1].body as string);
-    expect(forwardedBody.action).toBe("logs_snapshot");
-  });
 });
