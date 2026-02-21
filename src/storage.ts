@@ -420,7 +420,11 @@ export async function restoreRepoSnapshot(
   const raw = await (object as { text(): Promise<string> }).text();
   const files = JSON.parse(raw) as RepoSnapshotFile[];
 
-  await Promise.all(files.map((file) => sandbox.writeFile(file.path, file.content)));
+  // Write files sequentially to avoid hammering a cold-starting sandbox with
+  // concurrent requests, which can cause blockConcurrencyWhile() timeouts.
+  for (const file of files) {
+    await sandbox.writeFile(file.path, file.content);
+  }
 
   return true;
 }
