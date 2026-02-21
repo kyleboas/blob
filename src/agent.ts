@@ -167,12 +167,19 @@ export class AgentDO {
     initSchema(this.db);
   }
 
-  private async runInBackground(work: Promise<void>): Promise<void> {
+  private runInBackground(work: Promise<void>): void {
     if (this.ctx.waitUntil) {
       this.ctx.waitUntil(work);
       return;
     }
-    await work;
+
+    // Durable Object runtimes should expose waitUntil. If it is unavailable
+    // (for example in local tests), do not block the request lifecycle.
+    // Capture failures to avoid unhandled promise rejections in fire-and-forget mode.
+    void work.catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      logAgentEvent(this.db, "global", "background_error", message);
+    });
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -213,7 +220,7 @@ export class AgentDO {
 
     if (body.action === "message" && body.event) {
       const event = body.event;
-      await this.runInBackground((async () => {
+      this.runInBackground((async () => {
         try {
           await this.handleTaskEvent(event);
         } catch (error) {
@@ -238,7 +245,7 @@ export class AgentDO {
     }
 
     if (body.task && body.event?.channel) {
-      await this.runInBackground((async () => {
+      this.runInBackground((async () => {
         const { sessionId, previousSessionId } = resolveOrCreateSession(this.db, this.deps.now());
         if (previousSessionId) {
           await this.summarizePreviousSession(previousSessionId);
