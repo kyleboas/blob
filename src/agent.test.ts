@@ -14,6 +14,8 @@ class FakeSql implements SqlStorage {
   private backgroundTasks: Array<{ id: number; event_json: string; status: string }> = [];
   private backgroundTaskNextId = 1;
   private heartbeatGoal: { channel: string; goal: string } | null = null;
+  private agentEvents: Array<{ id: number; thread_id: string; event_type: string; message: string; created_at: number }> = [];
+  private agentEventNextId = 1;
 
   exec(query: string, ...bindings: Array<string | number | null>) {
     const normalized = query.trim().replace(/\s+/g, " ");
@@ -96,6 +98,33 @@ class FakeSql implements SqlStorage {
     if (normalized.startsWith("INSERT INTO heartbeat_state")) {
       this.heartbeatGoal = { channel: String(bindings[0]), goal: String(bindings[1]) };
       return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("INSERT INTO agent_events")) {
+      this.agentEvents.push({
+        id: this.agentEventNextId++,
+        thread_id: String(bindings[0]),
+        event_type: String(bindings[1]),
+        message: String(bindings[2]),
+        created_at: Math.floor(Date.now() / 1000)
+      });
+      return { toArray: () => [] };
+    }
+
+    if (normalized.includes("FROM agent_events")) {
+      const threadId = String(bindings[0]);
+      const limit = Number(bindings[1] ?? 200);
+      const rows = this.agentEvents
+        .filter((event) => event.thread_id === threadId)
+        .slice(-limit)
+        .reverse();
+      return {
+        toArray: () => rows.map((row) => ({
+          event_type: row.event_type,
+          message: row.message,
+          created_at: row.created_at
+        }))
+      };
     }
 
     if (normalized.startsWith("SELECT channel, goal FROM heartbeat_state")) {
@@ -197,6 +226,48 @@ function makeTestEnv() {
 }
 
 describe("AgentDO runAgentLoop", () => {
+  it("returns mirrored global events for logs snapshots", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: vi.fn() as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.fetch(
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "logs_mirror",
+          event: { type: "message", channel: "C1", text: "hello logs" }
+        })
+      })
+    );
+
+    await agent.fetch(
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "message",
+          event: { type: "message", channel: "C1", text: "normal task" }
+        })
+      })
+    );
+
+    const response = await agent.fetch(
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify({ action: "logs_snapshot" })
+      })
+    );
+
+    const payload = await response.json() as { events: Array<{ eventType: string; message: string }> };
+    expect(payload.events).toEqual([
+      { eventType: "message", message: "[C1] hello logs" }
+    ]);
+  });
+
   it("runs tool call then final response", async () => {
     const sql = new FakeSql();
     const { env, sandbox } = makeTestEnv();

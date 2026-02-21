@@ -21,7 +21,6 @@ import {
   getKnowledge,
   getRecentAgentEvents,
   getRecentSessionSummaries,
-  getCurrentSession,
   incrementRateLimit,
   initSchema,
   logAgentEvent,
@@ -143,9 +142,7 @@ export class AgentDO extends Agent {
     const body = await request.json() as { action?: string; event?: SlackEvent; task?: string };
 
     if (body.action === "logs_snapshot") {
-      const sessionId = getCurrentSession(this.db);
-      const threadId = sessionId ?? "global";
-      return Response.json({ events: getRecentAgentEvents(this.db, threadId) });
+      return Response.json({ events: getRecentAgentEvents(this.db, "global") });
     }
 
     if (body.action === "logs_mirror" && body.event) {
