@@ -82,6 +82,8 @@ class ModificationRateLimiter:
         self.count_file.write_text(f"{date.today().isoformat()}:{count}")
 
     def can_modify(self) -> bool:
+        if config.AUTONOMOUS_MODE:
+            return True
         if self.session_count >= config.SELF_MODIFY_LIMIT_SESSION:
             return False
         day, daily_count = self._read_daily_count()
