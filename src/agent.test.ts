@@ -3,6 +3,16 @@ import { AgentDO } from "./agent";
 import type { Env } from "./types";
 import type { SqlStorage } from "./storage";
 
+interface HeartbeatRow {
+  id: number;
+  task: string;
+  channel: string;
+  status: string;
+  result: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 class FakeSql implements SqlStorage {
   private messages: Array<{ id: number; threadId: string; role: string; content: string }> = [];
   private rateLimits = new Map<string, number>();
@@ -11,6 +21,8 @@ class FakeSql implements SqlStorage {
   private sessionState: { current_session_id: string; last_message_at: number } | null = null;
   private sessionSummaries: Array<{ id: number; session_id: string; summary: string; created_at: number }> = [];
   private summaryNextId = 1;
+  private heartbeats: HeartbeatRow[] = [];
+  private nextHeartbeatId = 1;
 
   exec(query: string, ...bindings: Array<string | number | null>) {
     const normalized = query.trim().replace(/\s+/g, " ");
@@ -92,6 +104,67 @@ class FakeSql implements SqlStorage {
       return {
         toArray: () => recent.map((s) => ({ session_id: s.session_id, summary: s.summary, created_at: s.created_at }))
       };
+    }
+
+    // Heartbeat queries
+    if (normalized.startsWith("INSERT INTO heartbeats")) {
+      const id = this.nextHeartbeatId++;
+      this.heartbeats.push({
+        id,
+        task: String(bindings[0]),
+        channel: String(bindings[1]),
+        status: "pending",
+        result: null,
+        created_at: Math.floor(Date.now() / 1000),
+        updated_at: Math.floor(Date.now() / 1000)
+      });
+      return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("SELECT last_insert_rowid()")) {
+      const last = this.heartbeats.at(-1);
+      return { toArray: () => (last ? [{ id: last.id }] : [{ id: 0 }]) };
+    }
+
+    if (normalized.includes("FROM heartbeats") && normalized.includes("status = 'pending'") && normalized.includes("LIMIT 1")) {
+      const pending = this.heartbeats.find((h) => h.status === "pending");
+      if (!pending) return { toArray: () => [] };
+      pending.status = "running";
+      return { toArray: () => [{ ...pending }] };
+    }
+
+    if (normalized.startsWith("UPDATE heartbeats SET status = 'running'")) {
+      const id = Number(bindings[0]);
+      const h = this.heartbeats.find((hb) => hb.id === id);
+      if (h) h.status = "running";
+      return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("UPDATE heartbeats SET status = 'completed'")) {
+      const result = String(bindings[0]);
+      const id = Number(bindings[1]);
+      const h = this.heartbeats.find((hb) => hb.id === id);
+      if (h) { h.status = "completed"; h.result = result; }
+      return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("UPDATE heartbeats SET status = 'failed'")) {
+      const result = String(bindings[0]);
+      const id = Number(bindings[1]);
+      const h = this.heartbeats.find((hb) => hb.id === id);
+      if (h) { h.status = "failed"; h.result = result; }
+      return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("SELECT 1 FROM heartbeats WHERE status = 'pending'")) {
+      const hasPending = this.heartbeats.some((h) => h.status === "pending");
+      return { toArray: () => (hasPending ? [{ 1: 1 }] : []) };
+    }
+
+    if (normalized.includes("FROM heartbeats") && normalized.includes("ORDER BY id DESC")) {
+      const limit = Number(bindings[0] ?? 50);
+      const rows = [...this.heartbeats].reverse().slice(0, limit);
+      return { toArray: () => rows };
     }
 
     return { toArray: () => [] };
@@ -460,5 +533,131 @@ describe("AgentDO runAgentLoop", () => {
       "C1",
       "✅ Cloudflare update applied successfully. Your latest changes should now be effective."
     );
+  });
+
+  it("posts a milestone update when tests pass", async () => {
+    const sql = new FakeSql();
+    const { env, sandbox } = makeTestEnv();
+    sandbox.exec.mockResolvedValue({ stdout: "5 passed", stderr: "", exitCode: 0 });
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({ content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "pytest" } }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Tests OK" }] });
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.runAgentLoop("run tests", "C1", "thread-tests");
+
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Tests passed");
+  });
+
+  it("posts a milestone update when a git commit succeeds", async () => {
+    const sql = new FakeSql();
+    const { env, sandbox } = makeTestEnv();
+    sandbox.exec.mockResolvedValue({ stdout: "1 file changed", stderr: "", exitCode: 0 });
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "git commit -m 'add feature'" } }]
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Done" }] });
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.runAgentLoop("commit changes", "C1", "thread-commit");
+
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Committed: add feature");
+  });
+});
+
+describe("AgentDO heartbeat actions", () => {
+  it("enqueue_heartbeat action stores a heartbeat and schedules an alarm", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const setAlarm = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql, setAlarm } }, env, {
+      llmCall: vi.fn() as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const request = new Request("https://agent.internal/event", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "enqueue_heartbeat", task: "check for updates", channel: "C1" })
+    });
+
+    const response = await agent.fetch(request);
+    expect(response.status).toBe(200);
+
+    const body = await response.json() as { id: number };
+    expect(typeof body.id).toBe("number");
+    expect(setAlarm).toHaveBeenCalled();
+  });
+
+  it("list_heartbeats action returns the queue", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const setAlarm = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql, setAlarm } }, env, {
+      llmCall: vi.fn() as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    // Enqueue one item first
+    await agent.fetch(new Request("https://agent.internal/event", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "enqueue_heartbeat", task: "ping", channel: "C2" })
+    }));
+
+    const listReq = new Request("https://agent.internal/event", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "list_heartbeats" })
+    });
+
+    const resp = await agent.fetch(listReq);
+    const body = await resp.json() as { heartbeats: Array<{ task: string }> };
+    expect(body.heartbeats).toHaveLength(1);
+    expect(body.heartbeats[0].task).toBe("ping");
+  });
+
+  it("alarm processes the next pending heartbeat and posts result", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const setAlarm = vi.fn().mockResolvedValue(undefined);
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql, setAlarm } }, env, {
+      llmCall: vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Heartbeat done" }] }) as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    // Enqueue a heartbeat
+    await agent.fetch(new Request("https://agent.internal/event", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "enqueue_heartbeat", task: "run health checks", channel: "C-hb" })
+    }));
+
+    // Trigger the alarm
+    await agent.alarm();
+
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C-hb", "Heartbeat done");
   });
 });
