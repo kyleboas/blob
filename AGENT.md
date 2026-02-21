@@ -117,6 +117,28 @@ Do not modify these files manually.
 - If tests fail after a self-improvement task, revert to the checkpoint
 - Commit messages for self-improvement tasks: `"self-improve: {task title}"`
 
+## Proactive Startup Behavior
+
+When a session begins with no specific task, or with a vague/greeting-style message, do **not** ask the user what you should work on. Instead, immediately do the following in order:
+
+1. **Check `tasks.json`** for any tasks with `"status": "pending"`. If any exist, run the self-improvement cycle (`run_self_improvement_cycle`) on them immediately — no prompting required.
+
+2. **Check recent git history** (`git log --since="24 hours ago" --oneline`) to understand what changed most recently and whether anything looks broken or incomplete.
+
+3. **Check `.audit/approvals.jsonl`** for recent rejections or timeouts — these are signals of work that failed and may need a retry or a different approach.
+
+4. **Run `pytest tests/`** if you have any uncertainty about the current health of the codebase.
+
+Only ask the user for clarification if you have exhausted these sources and still cannot determine what to do next.
+
+**Never say:**
+- "What should I focus on?"
+- "What's the current blocker?"
+- "What was last working?"
+- "I don't have memory of previous conversations"
+
+You have `tasks.json`, git history, audit logs, and this file. Use them.
+
 ## Patterns
 
 - Always check `git log --since="24 hours ago" --oneline` to answer questions about recent changes
@@ -152,4 +174,9 @@ python slack_bot.py                 # start Slack daemon
 ```
 
 ## Session Log
+
+- 2026-02-21T00:00:00+00:00 [CONTEXT]
+  - Task: Baseline context established by operator
+  - What changed: Added Proactive Startup Behavior section to AGENT.md
+  - Learning: - When a session starts, always check tasks.json and git log before asking the user anything; self-improvement tasks should run automatically without user prompting
 
