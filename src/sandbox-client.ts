@@ -3,6 +3,9 @@ import { COMMAND_TIMEOUT } from "./config";
 const DEFAULT_MAX_OUTPUT_CHARS = 10_000;
 const TRANSIENT_SANDBOX_MAX_ATTEMPTS = 5;
 const TRANSIENT_SANDBOX_RETRY_DELAY_MS = 2_000;
+const WARM_UP_MAX_ATTEMPTS = 10;
+const WARM_UP_RETRY_DELAY_MS = 5_000;
+const WARM_UP_TIMEOUT_MS = 15_000;
 
 export interface SandboxExecResponse {
   stdout?: string;
@@ -156,6 +159,30 @@ export class SandboxClient {
         timedOut: false
       };
     }
+  }
+
+  // Polls the sandbox with a generous retry budget until the container is
+  // warm and accepting requests. Called before file writes during sandbox_start
+  // to handle the cold-start window where the container returns HTTP 500.
+  // Uses writeFile (not exec) as the probe because exec and the file-system
+  // layer can initialise independently; we must confirm file I/O is ready.
+  async warmUp(): Promise<void> {
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= WARM_UP_MAX_ATTEMPTS; attempt++) {
+      try {
+        await withTimeout(this.sandbox.writeFile("/tmp/.blob-warmup", "ok"), WARM_UP_TIMEOUT_MS);
+        return;
+      } catch (error) {
+        lastError = error;
+        if (!this.isTransientSandboxError(error) || attempt >= WARM_UP_MAX_ATTEMPTS) {
+          throw error;
+        }
+        await this.sleep(WARM_UP_RETRY_DELAY_MS);
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error("Sandbox failed to warm up");
   }
 
   async writeFile(path: string, content: string): Promise<void> {
