@@ -46,7 +46,7 @@ jobs:
         run: npx wrangler whoami
 
       - name: Deploy sandbox worker
-        run: npx wrangler deploy --config sandbox/wrangler.toml --keep-vars
+        run: npx wrangler deploy --config sandbox/wrangler.toml
 
       - name: Deploy main worker
         run: npx wrangler deploy --keep-vars
