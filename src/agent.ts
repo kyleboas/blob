@@ -16,6 +16,7 @@ import {
   completeHeartbeat,
   enqueueHeartbeat,
   failHeartbeat,
+  getAllRecentAgentEvents,
   getHistory,
   getKnowledge,
   getNextPendingHeartbeat,
@@ -75,6 +76,9 @@ const DEFAULT_DEPS: AgentDeps = {
   postSlackApproval: postApprovalRequest,
   now: () => Date.now()
 };
+
+// DO name for the global logs channel – matches mapChannelToDO("__global__")
+const GLOBAL_LOGS_DO_NAME = "slack-channel:__global__";
 
 const BASE_SYSTEM_PROMPT = [
   "You are Blob, a careful coding agent.",
@@ -165,11 +169,34 @@ export class AgentDO extends Agent {
   }
 
   async fetch(request: Request): Promise<Response> {
-    const body = await request.json() as { action?: string; event?: SlackEvent; task?: string; channel?: string };
+    const body = await request.json() as {
+      action?: string;
+      event?: SlackEvent;
+      task?: string;
+      channel?: string;
+      eventType?: string;
+      message?: string;
+    };
 
     if (body.action === "logs_snapshot") {
       const sessionId = getCurrentSession(this.db);
-      return Response.json({ events: sessionId ? getRecentAgentEvents(this.db, sessionId) : [] });
+      // Global DO has no session; return all stored events instead of filtering by session
+      const events = sessionId ? getRecentAgentEvents(this.db, sessionId) : getAllRecentAgentEvents(this.db);
+      return Response.json({ events });
+    }
+
+    if (body.action === "logs_mirror" && body.event) {
+      const { channel = "unknown", user = "", text = "" } = body.event;
+      const msg = user ? `[#${channel}] <${user}> ${text}` : `[#${channel}] ${text}`;
+      logAgentEvent(this.db, "global", "message", msg);
+      return new Response("ok");
+    }
+
+    if (body.action === "log_event") {
+      const eventType = body.eventType ?? "event";
+      const message = body.message ?? "";
+      logAgentEvent(this.db, "global", eventType, message);
+      return new Response("ok");
     }
 
     if (body.action === "reaction" && body.event) {
@@ -215,6 +242,7 @@ export class AgentDO extends Agent {
 
   async runAgentLoop(task: string, channel: string, sessionId: string): Promise<{ finalText: string; steps: number }> {
     logAgentEvent(this.db, sessionId, "task_received", task);
+    this.forwardToGlobalLogs("task_received", `[#${channel}] ${task}`);
 
     // Load history and compact if the context is getting large
     const rawConversation = getHistory(this.db, sessionId);
@@ -305,8 +333,22 @@ export class AgentDO extends Agent {
 
     await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, finalText);
     logAgentEvent(this.db, sessionId, "completed", finalText);
+    this.forwardToGlobalLogs("completed", `[#${channel}] ${finalText.slice(0, 300)}`);
 
     return { finalText, steps };
+  }
+
+  private forwardToGlobalLogs(eventType: string, message: string): void {
+    // Fire-and-forget: mirror key agent events to the global DO for the live logs page
+    const id = this.env.AGENT_DO.idFromName(GLOBAL_LOGS_DO_NAME);
+    const stub = this.env.AGENT_DO.get(id);
+    void stub.fetch("https://agent.internal/event", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "log_event", eventType, message })
+    }).catch(() => {
+      // Non-critical logging; silently discard errors
+    });
   }
 
   private async processLlmResponse(
@@ -328,6 +370,7 @@ export class AgentDO extends Agent {
 
     const command = String(toolBlock.input.command ?? "");
     logAgentEvent(this.db, sessionId, "command", command);
+    this.forwardToGlobalLogs("command", `[#${channel}] ${command}`);
     const safety = enforceSafety(command, this.db, sessionId, []);
 
     if (!safety.allowed && safety.requiresApproval) {
@@ -356,7 +399,9 @@ export class AgentDO extends Agent {
     incrementRateLimit(this.db, "session", sessionId);
     const result = await this.executeWithGitSafety(command);
     const exitSummary = `Command finished with exit code ${result.exitCode}.`;
-    logAgentEvent(this.db, sessionId, result.exitCode === 0 ? "command_success" : "command_failure", exitSummary);
+    const exitEventType = result.exitCode === 0 ? "command_success" : "command_failure";
+    logAgentEvent(this.db, sessionId, exitEventType, exitSummary);
+    this.forwardToGlobalLogs(exitEventType, `[#${channel}] ${exitSummary}`);
 
     if (result.exitCode === 0 && isCloudflareApplyCommand(command)) {
       await this.deps.postSlackMessage(

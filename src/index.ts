@@ -43,34 +43,74 @@ function renderLiveLogPage(): string {
   <title>Blob Live Logs</title>
   <style>
     body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; padding: 1rem; background: #0f172a; color: #e2e8f0; }
-    h1 { margin-top: 0; font-size: 1.2rem; }
-    #status { color: #93c5fd; margin-bottom: 1rem; }
-    pre { white-space: pre-wrap; background: #020617; border: 1px solid #1e293b; border-radius: 8px; padding: 1rem; min-height: 300px; }
+    h1 { margin-top: 0; font-size: 1.2rem; display: flex; align-items: center; gap: 0.5rem; }
+    #live-dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; display: inline-block; animation: pulse 2s ease-in-out infinite; }
+    #live-dot.error { background: #f87171; animation: none; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    #status { color: #94a3b8; margin-bottom: 0.75rem; font-size: 0.85rem; }
+    #status.error { color: #f87171; }
+    #log { white-space: pre-wrap; background: #020617; border: 1px solid #1e293b; border-radius: 8px; padding: 1rem; min-height: 300px; max-height: calc(100vh - 120px); overflow-y: auto; margin: 0; }
+    .line-task_received { color: #60a5fa; }
+    .line-command { color: #e2e8f0; }
+    .line-command_success { color: #4ade80; }
+    .line-command_failure { color: #f87171; }
+    .line-completed { color: #a78bfa; }
+    .line-message { color: #fbbf24; }
+    .line-thinking, .line-session { color: #94a3b8; }
+    .empty { color: #475569; font-style: italic; }
   </style>
 </head>
 <body>
-  <h1>Blob Live Logs</h1>
-  <div id="status">Loading logs...</div>
-  <pre id="log">Waiting for events...</pre>
+  <h1><span id="live-dot"></span>Blob Live Logs</h1>
+  <div id="status">Connecting...</div>
+  <pre id="log"><span class="empty">Waiting for events...</span></pre>
   <script>
     const logNode = document.getElementById('log');
     const statusNode = document.getElementById('status');
+    const dotNode = document.getElementById('live-dot');
+    let lastCount = -1;
 
     async function refreshLogs() {
-      const response = await fetch('/logs/data', { cache: 'no-store' });
-      if (!response.ok) {
-        statusNode.textContent = 'Failed to load logs: ' + response.status;
+      let payload;
+      try {
+        const response = await fetch('/logs/data', { cache: 'no-store' });
+        if (!response.ok) {
+          statusNode.textContent = 'Error: HTTP ' + response.status;
+          statusNode.className = 'error';
+          dotNode.className = 'error';
+          return;
+        }
+        payload = await response.json();
+      } catch (e) {
+        statusNode.textContent = 'Error: ' + (e.message || 'fetch failed');
+        statusNode.className = 'error';
+        dotNode.className = 'error';
         return;
       }
 
-      const payload = await response.json();
-      const lines = payload.events.map((event) => {
-        const when = new Date(event.createdAt * 1000).toISOString();
-        return '[' + when + '] [' + event.eventType + '] ' + event.message;
-      });
-      logNode.textContent = lines.length ? lines.join('\n') : 'No events yet.';
-      statusNode.textContent = 'Live across all channels • Last updated: ' + new Date().toLocaleTimeString();
-      logNode.scrollTop = logNode.scrollHeight;
+      dotNode.className = '';
+      statusNode.className = '';
+
+      const events = payload.events || [];
+      statusNode.textContent = 'Live across all channels • ' + events.length + ' event' + (events.length === 1 ? '' : 's') + ' • updated ' + new Date().toLocaleTimeString();
+
+      if (events.length === lastCount) return;
+      lastCount = events.length;
+
+      if (events.length === 0) {
+        logNode.innerHTML = '<span class="empty">No events yet. Send a message to Blob in Slack to see activity here.</span>';
+        return;
+      }
+
+      const atBottom = logNode.scrollHeight - logNode.scrollTop <= logNode.clientHeight + 50;
+      logNode.innerHTML = events.map((event) => {
+        const when = new Date(event.createdAt * 1000).toISOString().replace('T', ' ').replace('Z', '');
+        const cls = 'line-' + event.eventType;
+        const text = when + '  [' + event.eventType + ']  ' + event.message;
+        return '<span class="' + cls + '">' + text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</span>';
+      }).join('\\n');
+
+      if (atBottom) logNode.scrollTop = logNode.scrollHeight;
     }
 
     refreshLogs();

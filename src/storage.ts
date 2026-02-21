@@ -332,6 +332,24 @@ export function getRecentAgentEvents(sql: SqlStorage, threadId: string, limit = 
   }));
 }
 
+export function getAllRecentAgentEvents(sql: SqlStorage, limit = 200): AgentEvent[] {
+  const rows = sql
+    .exec(
+      `SELECT event_type, message, created_at
+       FROM agent_events
+       ORDER BY id DESC
+       LIMIT ?`,
+      limit
+    )
+    .toArray();
+
+  return rows.reverse().map((row) => ({
+    eventType: String(row.event_type),
+    message: String(row.message),
+    createdAt: Number(row.created_at)
+  }));
+}
+
 
 
 export function saveApprovalDecision(
