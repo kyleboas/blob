@@ -17,6 +17,16 @@ export interface RepoSnapshotFile {
   content: string;
 }
 
+export interface Heartbeat {
+  id: number;
+  task: string;
+  channel: string;
+  status: "pending" | "running" | "completed" | "failed";
+  result: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
 const SNAPSHOT_FILES = ["AGENT.md", "README.md", "package.json", "tsconfig.json"];
 
 function parseChangedPaths(gitStatusOutput: string): string[] {
@@ -134,6 +144,18 @@ export function initSchema(sql: SqlStorage): void {
       session_id TEXT NOT NULL,
       summary TEXT NOT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )
+  `);
+
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS heartbeats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      result TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )
   `);
 }
@@ -405,4 +427,93 @@ export async function syncKnowledgeFromSandbox(
   }
   const knowledge = await sandbox.readFile("AGENT.md");
   saveKnowledge(sql, knowledge);
+}
+
+// Heartbeat functions – background work items Blob processes proactively
+
+export function enqueueHeartbeat(sql: SqlStorage, task: string, channel: string): number {
+  sql.exec(
+    `INSERT INTO heartbeats (task, channel, status) VALUES (?, ?, 'pending')`,
+    task,
+    channel
+  );
+  const rows = sql.exec(`SELECT last_insert_rowid() AS id`).toArray();
+  return Number(rows[0]?.id ?? 0);
+}
+
+export function getNextPendingHeartbeat(sql: SqlStorage): Heartbeat | null {
+  const rows = sql
+    .exec(
+      `SELECT id, task, channel, status, result, created_at, updated_at
+       FROM heartbeats
+       WHERE status = 'pending'
+       ORDER BY id ASC
+       LIMIT 1`
+    )
+    .toArray();
+
+  if (rows.length === 0) return null;
+
+  const row = rows[0];
+  const id = Number(row.id);
+
+  sql.exec(
+    `UPDATE heartbeats SET status = 'running', updated_at = unixepoch() WHERE id = ?`,
+    id
+  );
+
+  return {
+    id,
+    task: String(row.task),
+    channel: String(row.channel),
+    status: "running",
+    result: null,
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at)
+  };
+}
+
+export function completeHeartbeat(sql: SqlStorage, id: number, result: string): void {
+  sql.exec(
+    `UPDATE heartbeats SET status = 'completed', result = ?, updated_at = unixepoch() WHERE id = ?`,
+    result,
+    id
+  );
+}
+
+export function failHeartbeat(sql: SqlStorage, id: number, error: string): void {
+  sql.exec(
+    `UPDATE heartbeats SET status = 'failed', result = ?, updated_at = unixepoch() WHERE id = ?`,
+    error,
+    id
+  );
+}
+
+export function hasPendingHeartbeats(sql: SqlStorage): boolean {
+  const rows = sql
+    .exec(`SELECT 1 FROM heartbeats WHERE status = 'pending' LIMIT 1`)
+    .toArray();
+  return rows.length > 0;
+}
+
+export function listHeartbeats(sql: SqlStorage, limit = 50): Heartbeat[] {
+  const rows = sql
+    .exec(
+      `SELECT id, task, channel, status, result, created_at, updated_at
+       FROM heartbeats
+       ORDER BY id DESC
+       LIMIT ?`,
+      limit
+    )
+    .toArray();
+
+  return rows.map((row) => ({
+    id: Number(row.id),
+    task: String(row.task),
+    channel: String(row.channel),
+    status: String(row.status) as Heartbeat["status"],
+    result: row.result != null ? String(row.result) : null,
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at)
+  }));
 }

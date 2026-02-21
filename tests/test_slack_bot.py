@@ -1,7 +1,10 @@
+import json
+from pathlib import Path
 from threading import Event
+from typing import Callable
 
-from approval import SlackApprovalGate
-from slack_bot import SessionContext, SlackBot
+from approval import ApprovalGate, SlackApprovalGate
+from slack_bot import BackgroundWorker, SessionContext, SlackBot
 
 
 class MockClient:
@@ -17,7 +20,7 @@ class MockClient:
 
 
 class StubAgent:
-    def __init__(self, gate: SlackApprovalGate, on_status):
+    def __init__(self, gate: ApprovalGate, on_status: Callable[[str], None]):
         self.gate = gate
         self.on_status = on_status
 
@@ -25,7 +28,7 @@ class StubAgent:
         self.on_status("Step 1/25: running")
         return f"handled: {text}"
 
-    def run_self_improvement_cycle(self) -> list[str]:
+    def run_self_improvement_cycle(self, tasks_path: Path | None = None) -> list[str]:
         self.on_status("Step 1/25: improving")
         return ["completed: task"]
 
@@ -76,3 +79,76 @@ def test_session_mapping_and_reaction_resolution() -> None:
     bot.handle_reaction_event({"reaction": "white_check_mark", "item": {"ts": "approval-ts"}})
 
     assert gate._decisions["approval-ts"] is True
+
+
+# ---------------------------------------------------------------------------
+# BackgroundWorker tests
+# ---------------------------------------------------------------------------
+
+def test_background_worker_runs_heartbeat_and_posts_result(tmp_path: Path) -> None:
+    """BackgroundWorker should run pending tasks and post results to Slack."""
+    tasks_path = tmp_path / "tasks.json"
+    tasks_path.write_text(json.dumps([
+        {"id": "hb-1", "title": "run health check", "status": "pending"}
+    ]))
+
+    posted: list[dict[str, str]] = []
+    ticked = Event()
+
+    def factory(gate: ApprovalGate, on_status: Callable[[str], None]) -> StubAgent:
+        class _Agent(StubAgent):
+            def run_self_improvement_cycle(self, tasks_path: Path | None = None) -> list[str]:
+                summaries = super().run_self_improvement_cycle(tasks_path=tasks_path)
+                ticked.set()
+                return summaries
+
+        return _Agent(gate, on_status)
+
+    worker = BackgroundWorker(
+        channel="C-bg",
+        agent_factory=factory,
+        post_fn=lambda ch, text: posted.append({"channel": ch, "text": text}),
+        tasks_path=tasks_path,
+        interval_seconds=0,
+    )
+    worker.start()
+
+    assert ticked.wait(timeout=2), "BackgroundWorker did not tick within 2 seconds"
+    worker.stop()
+
+    # Give the thread a moment to finish the current tick and post
+    import time; time.sleep(0.1)
+
+    assert any("Heartbeat complete" in p["text"] for p in posted), f"Expected heartbeat post, got {posted}"
+    assert all(p["channel"] == "C-bg" for p in posted)
+
+
+def test_background_worker_stop_prevents_further_ticks() -> None:
+    tick_count = 0
+
+    def factory(gate: ApprovalGate, on_status: Callable[[str], None]) -> StubAgent:
+        return StubAgent(gate, on_status)
+
+    posted: list[str] = []
+    worker = BackgroundWorker(
+        channel="C-stop",
+        agent_factory=factory,
+        post_fn=lambda ch, text: posted.append(text),
+        interval_seconds=5,  # long interval – should not tick again
+    )
+    worker.start()
+    worker.stop()  # stop immediately
+
+    import time; time.sleep(0.2)
+    # The worker was stopped before the first interval elapsed so no ticks
+    assert tick_count == 0
+
+
+def test_background_worker_uses_heartbeat_approval_gate() -> None:
+    """The gate passed to heartbeat agents should allow conditional ops but block constitution files."""
+    from slack_bot import _HeartbeatApprovalGate
+
+    gate = _HeartbeatApprovalGate()
+    assert gate.request_approval("cat file.py", "auto-approve") is True
+    assert gate.request_approval("echo hello > AGENT.md", "conditional") is True
+    assert gate.request_approval("sed -i 's/x/y/' agent.py", "always-require-approval") is False

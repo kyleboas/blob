@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from threading import Thread
+from pathlib import Path
+from threading import Event, Thread
 from typing import Callable
+import logging
 
 import os
 
 import config
 from agent import Agent
+from approval import ApprovalGate, classify_action
 from approval import SlackApprovalGate
 
 try:
@@ -19,6 +22,20 @@ try:
 except ImportError:  # pragma: no cover
     App = None
     SocketModeHandler = None
+
+logger = logging.getLogger(__name__)
+
+
+class _HeartbeatApprovalGate(ApprovalGate):
+    """Approval gate for background heartbeat tasks.
+
+    Auto-approves read-only and conditional (write) operations.
+    Always blocks commands targeting constitution files so heartbeats
+    never silently modify core agent source code.
+    """
+
+    def request_approval(self, action_description: str, tier: str) -> bool:
+        return tier in ("auto-approve", "conditional")
 
 
 
@@ -51,10 +68,18 @@ class SessionContext:
 
 
 class SlackBot:
-    def __init__(self, client: object, agent_factory: Callable[[SlackApprovalGate, Callable[[str], None]], Agent]) -> None:
+    def __init__(
+        self,
+        client: object,
+        agent_factory: Callable[[ApprovalGate, Callable[[str], None]], Agent],
+        background_worker: BackgroundWorker | None = None,
+    ) -> None:
         self.client = client
         self.agent_factory = agent_factory
         self.thread_sessions: dict[str, SessionContext] = {}
+        self._background_worker = background_worker
+        if background_worker is not None:
+            background_worker.start()
 
     def _post_status(self, channel: str, text: str) -> None:
         self.client.chat_postMessage(channel=channel, text=text)
@@ -105,7 +130,66 @@ class SlackBot:
             session.approval_gate.resolve_reaction(message_ts=ts, reaction=str(reaction))
 
 
-def _build_default_agent(approval_gate: SlackApprovalGate, on_status: Callable[[str], None]) -> Agent:
+class BackgroundWorker:
+    """Periodically checks tasks.json for pending heartbeats and runs them.
+
+    Each interval the worker picks the next pending task from ``tasks_path``,
+    runs the self-improvement cycle, and posts the outcome to ``channel``.
+    The worker runs as a daemon thread so it shuts down automatically when the
+    main process exits.
+    """
+
+    DEFAULT_INTERVAL_SECONDS = int(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "300"))  # 5 minutes
+
+    def __init__(
+        self,
+        channel: str,
+        agent_factory: Callable[[ApprovalGate, Callable[[str], None]], Agent],
+        post_fn: Callable[[str, str], None],
+        tasks_path: Path | None = None,
+        interval_seconds: int | None = None,
+    ) -> None:
+        self.channel = channel
+        self.agent_factory = agent_factory
+        self.post_fn = post_fn
+        self.tasks_path = tasks_path or (config.WORKSPACE_ROOT / "tasks.json")
+        self.interval_seconds = interval_seconds if interval_seconds is not None else self.DEFAULT_INTERVAL_SECONDS
+        self._stop = Event()
+        self._thread: Thread | None = None
+
+    def start(self) -> None:
+        self._thread = Thread(target=self._loop, daemon=True, name="blob-heartbeat")
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self.interval_seconds):
+            self._tick()
+
+    def _tick(self) -> None:
+        try:
+            self._run_pending_heartbeats()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.exception("Heartbeat tick failed: %s", exc)
+
+    def _run_pending_heartbeats(self) -> None:
+        gate = _HeartbeatApprovalGate()
+
+        statuses: list[str] = []
+
+        def on_status(msg: str) -> None:
+            statuses.append(msg)
+
+        agent = self.agent_factory(gate, on_status)
+        summaries = agent.run_self_improvement_cycle(tasks_path=self.tasks_path)
+        if summaries:
+            report = "\n".join(summaries)
+            self.post_fn(self.channel, f"Heartbeat complete:\n{report}")
+
+
+def _build_default_agent(approval_gate: ApprovalGate, on_status: Callable[[str], None]) -> Agent:
     from llm_client import AnthropicClient
     from sandbox import FlySpriteSandbox
 
@@ -122,7 +206,17 @@ def main() -> None:
         raise RuntimeError("slack-bolt is required to run slack_bot.py")
 
     app = App(token=os.getenv("SLACK_BOT_TOKEN"))
-    bot = SlackBot(client=app.client, agent_factory=_build_default_agent)
+
+    heartbeat_channel = os.getenv("HEARTBEAT_CHANNEL", "")
+    background_worker: BackgroundWorker | None = None
+    if heartbeat_channel:
+        background_worker = BackgroundWorker(
+            channel=heartbeat_channel,
+            agent_factory=_build_default_agent,
+            post_fn=lambda ch, text: app.client.chat_postMessage(channel=ch, text=text),
+        )
+
+    bot = SlackBot(client=app.client, agent_factory=_build_default_agent, background_worker=background_worker)
 
     @app.event("message")
     def on_message(event: dict[str, str], say: Callable[..., None]) -> None:  # noqa: ARG001

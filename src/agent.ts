@@ -5,20 +5,27 @@ import {
   TOOL_RETRY_BACKOFF_BASE_MS,
   COMPACTION_TOKEN_THRESHOLD,
   SESSION_SUMMARY_RECENT_COUNT,
-  THINKING_MESSAGE_DELAY_MS
+  THINKING_MESSAGE_DELAY_MS,
+  BACKGROUND_TASK_INTERVAL_MS
 } from "./config";
 import { callLLM, type LLMResponse } from "./llm";
 import { enforceSafety } from "./safety";
 import { SandboxClient, type SandboxBinding } from "./sandbox-client";
 import {
   compactMessagesInDB,
+  completeHeartbeat,
+  enqueueHeartbeat,
+  failHeartbeat,
   getHistory,
   getKnowledge,
+  getNextPendingHeartbeat,
   getRecentAgentEvents,
   getRecentSessionSummaries,
   getCurrentSession,
+  hasPendingHeartbeats,
   incrementRateLimit,
   initSchema,
+  listHeartbeats,
   logAgentEvent,
   resolveOrCreateSession,
   restoreRepoSnapshot,
@@ -109,6 +116,32 @@ function isCloudflareApplyCommand(command: string): boolean {
     || /workers\/scripts/.test(normalized);
 }
 
+interface MilestoneUpdate {
+  message: string;
+}
+
+function detectMilestone(command: string, exitCode: number, stdout: string): MilestoneUpdate | null {
+  const cmd = command.trim();
+
+  // Git commit succeeded
+  if (exitCode === 0 && /\bgit\s+commit\b/.test(cmd)) {
+    const msgMatch = /(-m\s+["']([^"']+)["']|commit:\s+(.+))/.exec(cmd);
+    const commitMsg = msgMatch?.[2] ?? msgMatch?.[3] ?? "changes";
+    return { message: `Committed: ${commitMsg}` };
+  }
+
+  // Test runner results
+  if (/\b(pytest|jest|vitest|npm\s+test|yarn\s+test)\b/.test(cmd)) {
+    if (exitCode === 0) {
+      return { message: `Tests passed` };
+    }
+    const failLine = stdout.split("\n").find((l) => /fail|error/i.test(l))?.trim() ?? "see output";
+    return { message: `Tests failed: ${failLine}` };
+  }
+
+  return null;
+}
+
 function extractTextContent(response: LLMResponse): string {
   return (response.content as Array<TextBlock | ToolUseBlock>)
     .filter((b): b is TextBlock => b.type === "text")
@@ -132,7 +165,7 @@ export class AgentDO extends Agent {
   }
 
   async fetch(request: Request): Promise<Response> {
-    const body = await request.json() as { action?: string; event?: SlackEvent; task?: string };
+    const body = await request.json() as { action?: string; event?: SlackEvent; task?: string; channel?: string };
 
     if (body.action === "logs_snapshot") {
       const sessionId = getCurrentSession(this.db);
@@ -156,6 +189,16 @@ export class AgentDO extends Agent {
         }
       }
       return new Response("accepted", { status: 202 });
+    }
+
+    if (body.action === "enqueue_heartbeat" && body.task && body.channel) {
+      const id = enqueueHeartbeat(this.db, body.task, body.channel);
+      await this.ctx.storage.setAlarm?.(this.deps.now() + BACKGROUND_TASK_INTERVAL_MS);
+      return Response.json({ id });
+    }
+
+    if (body.action === "list_heartbeats") {
+      return Response.json({ heartbeats: listHeartbeats(this.db) });
     }
 
     if (body.task && body.event?.channel) {
@@ -321,6 +364,11 @@ export class AgentDO extends Agent {
         channel,
         "✅ Cloudflare update applied successfully. Your latest changes should now be effective."
       );
+    }
+
+    const milestone = detectMilestone(command, result.exitCode, result.stdout);
+    if (milestone) {
+      await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, milestone.message);
     }
 
     const formatted = formatToolResult(toolBlock.id, [result.stdout, result.stderr].filter(Boolean).join("\n"));
@@ -520,5 +568,35 @@ export class AgentDO extends Agent {
 
   async alarm(): Promise<void> {
     await expireTimedOutApprovals(this.pendingApprovals, this.deps, this.env.SLACK_BOT_TOKEN, this.db);
+    await this.processNextHeartbeat();
+  }
+
+  private async processNextHeartbeat(): Promise<void> {
+    const heartbeat = getNextPendingHeartbeat(this.db);
+    if (!heartbeat) return;
+
+    logAgentEvent(this.db, heartbeat.id.toString(), "heartbeat_start", heartbeat.task);
+
+    try {
+      const { sessionId, previousSessionId } = resolveOrCreateSession(this.db, this.deps.now());
+      if (previousSessionId) {
+        await this.summarizePreviousSession(previousSessionId);
+      }
+      const { finalText } = await this.runAgentLoop(heartbeat.task, heartbeat.channel, sessionId);
+      completeHeartbeat(this.db, heartbeat.id, finalText);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      failHeartbeat(this.db, heartbeat.id, errorMessage);
+      await this.deps.postSlackMessage(
+        this.env.SLACK_BOT_TOKEN,
+        heartbeat.channel,
+        `Heartbeat failed: ${errorMessage}`
+      );
+    }
+
+    // Re-schedule the alarm if more heartbeats are queued
+    if (hasPendingHeartbeats(this.db)) {
+      await this.ctx.storage.setAlarm?.(this.deps.now() + BACKGROUND_TASK_INTERVAL_MS);
+    }
   }
 }
