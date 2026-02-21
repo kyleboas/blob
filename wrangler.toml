@@ -20,5 +20,8 @@ binding = "SANDBOX"
 service = "blob-agent-sandbox"
 environment = "production"
 
+[triggers]
+crons = ["*/15 * * * *"]
+
 [observability.logs]
 enabled = true

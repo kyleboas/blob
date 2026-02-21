@@ -5,6 +5,7 @@ export interface Env {
   ANTHROPIC_API_KEY: string;
   SLACK_BOT_TOKEN: string;
   SLACK_SIGNING_SECRET: string;
+  SLACK_BACKGROUND_CHANNEL?: string;
 }
 
 export type ConversationRole = "user" | "assistant";

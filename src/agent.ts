@@ -132,11 +132,17 @@ export class AgentDO extends Agent {
   }
 
   async fetch(request: Request): Promise<Response> {
-    const body = await request.json() as { action?: string; event?: SlackEvent; task?: string };
+    const body = await request.json() as { action?: string; event?: SlackEvent; task?: string; channel?: string };
 
     if (body.action === "logs_snapshot") {
       const sessionId = getCurrentSession(this.db);
       return Response.json({ events: sessionId ? getRecentAgentEvents(this.db, sessionId) : [] });
+    }
+
+    if (body.action === "run_background_tasks") {
+      const channel = typeof body.channel === "string" ? body.channel : "";
+      await this.runBackgroundTaskCycle(channel);
+      return new Response("ok");
     }
 
     if (body.action === "reaction" && body.event) {
@@ -186,11 +192,13 @@ export class AgentDO extends Agent {
 
     let thinkingTimer: ReturnType<typeof setTimeout> | undefined;
     let thinkingMessagePromise: Promise<void> | null = null;
-    thinkingTimer = setTimeout(() => {
-      thinkingMessagePromise = this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, "Thinking...").then(() => {
-        logAgentEvent(this.db, sessionId, "thinking", "Posted delayed thinking status.");
-      });
-    }, THINKING_MESSAGE_DELAY_MS);
+    if (channel) {
+      thinkingTimer = setTimeout(() => {
+        thinkingMessagePromise = this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, "Thinking...").then(() => {
+          logAgentEvent(this.db, sessionId, "thinking", "Posted delayed thinking status.");
+        });
+      }, THINKING_MESSAGE_DELAY_MS);
+    }
 
     const firstResponse = await this.deps.llmCall({
       apiKey: this.env.ANTHROPIC_API_KEY,
@@ -260,7 +268,9 @@ export class AgentDO extends Agent {
       await thinkingMessagePromise;
     }
 
-    await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, finalText);
+    if (channel) {
+      await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, finalText);
+    }
     logAgentEvent(this.db, sessionId, "completed", finalText);
 
     return { finalText, steps };
@@ -516,6 +526,44 @@ export class AgentDO extends Agent {
     compactMessagesInDB(this.db, sessionId, compacted);
 
     return compacted;
+  }
+
+  async runBackgroundTaskCycle(channel: string): Promise<{ processed: number }> {
+    const catResult = await this.sandbox.exec("cat tasks.json");
+    if (catResult.exitCode !== 0) return { processed: 0 };
+
+    let tasks: Array<{ id: string; title: string; status: string }>;
+    try {
+      tasks = JSON.parse(catResult.stdout);
+    } catch {
+      return { processed: 0 };
+    }
+
+    const task = tasks.find((t) => t.status === "pending");
+    if (!task) return { processed: 0 };
+
+    task.status = "in-progress";
+    await this.sandbox.writeFile("tasks.json", JSON.stringify(tasks, null, 2) + "\n");
+
+    if (channel) {
+      await this.deps.postSlackMessage(
+        this.env.SLACK_BOT_TOKEN,
+        channel,
+        `Starting background task: ${task.title}`
+      );
+    }
+
+    const { sessionId } = resolveOrCreateSession(this.db, this.deps.now());
+
+    try {
+      await this.runAgentLoop(task.title, channel, sessionId);
+      task.status = "completed";
+    } catch {
+      task.status = "pending";
+    }
+
+    await this.sandbox.writeFile("tasks.json", JSON.stringify(tasks, null, 2) + "\n");
+    return { processed: 1 };
   }
 
   async alarm(): Promise<void> {

@@ -66,6 +66,21 @@ function renderLiveLogPage(channel: string): string {
 }
 
 export default {
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    const id = env.AGENT_DO.idFromName("background");
+    const stub = env.AGENT_DO.get(id);
+    ctx.waitUntil(
+      stub.fetch("https://agent.internal/event", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "run_background_tasks",
+          channel: env.SLACK_BACKGROUND_CHANNEL ?? ""
+        })
+      })
+    );
+  },
+
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 

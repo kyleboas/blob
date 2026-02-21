@@ -438,6 +438,24 @@ describe("AgentDO runAgentLoop", () => {
     vi.useRealTimers();
   });
 
+  it("does not post a final slack message when channel is empty", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+    const llmCall = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Done silently" }] });
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runAgentLoop("task", "", "thread-silent");
+
+    expect(result.finalText).toBe("Done silently");
+    expect(postSlackMessage).not.toHaveBeenCalled();
+  });
+
   it("posts a confirmation when a Cloudflare deploy command succeeds", async () => {
     const sql = new FakeSql();
     const { env } = makeTestEnv();
@@ -460,5 +478,171 @@ describe("AgentDO runAgentLoop", () => {
       "C1",
       "✅ Cloudflare update applied successfully. Your latest changes should now be effective."
     );
+  });
+});
+
+describe("AgentDO runBackgroundTaskCycle", () => {
+  const TASKS_JSON = JSON.stringify([
+    { id: "t1", title: "Add hello-world tool", status: "pending" },
+    { id: "t2", title: "Write tests", status: "pending" }
+  ]);
+
+  it("picks the first pending task, runs it, and marks it completed", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+
+    const sandbox = {
+      exec: vi.fn()
+        .mockResolvedValueOnce({ stdout: TASKS_JSON, stderr: "", exitCode: 0 }),
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      readFile: vi.fn().mockResolvedValue(""),
+      fileExists: vi.fn().mockResolvedValue(false)
+    };
+    const envWithSandbox = { ...env, SANDBOX: sandbox as unknown as Fetcher };
+    const llmCall = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Done" }] });
+
+    const agent = new AgentDO({ storage: { sql } }, envWithSandbox, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runBackgroundTaskCycle("");
+
+    expect(result.processed).toBe(1);
+    const finalWrite = sandbox.writeFile.mock.calls.at(-1);
+    const written = JSON.parse(finalWrite![1]);
+    expect(written[0].status).toBe("completed");
+    expect(written[1].status).toBe("pending");
+  });
+
+  it("returns early with processed=0 when no pending tasks exist", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const noTasks = JSON.stringify([{ id: "t1", title: "Done task", status: "completed" }]);
+
+    const sandbox = {
+      exec: vi.fn().mockResolvedValueOnce({ stdout: noTasks, stderr: "", exitCode: 0 }),
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      readFile: vi.fn().mockResolvedValue(""),
+      fileExists: vi.fn().mockResolvedValue(false)
+    };
+    const envWithSandbox = { ...env, SANDBOX: sandbox as unknown as Fetcher };
+
+    const agent = new AgentDO({ storage: { sql } }, envWithSandbox, {
+      llmCall: vi.fn() as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runBackgroundTaskCycle("");
+
+    expect(result.processed).toBe(0);
+    expect(sandbox.writeFile).not.toHaveBeenCalled();
+  });
+
+  it("returns early with processed=0 when tasks.json is missing", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+
+    const sandbox = {
+      exec: vi.fn().mockResolvedValueOnce({ stdout: "", stderr: "No such file", exitCode: 1 }),
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      readFile: vi.fn().mockResolvedValue(""),
+      fileExists: vi.fn().mockResolvedValue(false)
+    };
+    const envWithSandbox = { ...env, SANDBOX: sandbox as unknown as Fetcher };
+
+    const agent = new AgentDO({ storage: { sql } }, envWithSandbox, {
+      llmCall: vi.fn() as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runBackgroundTaskCycle("");
+
+    expect(result.processed).toBe(0);
+    expect(sandbox.writeFile).not.toHaveBeenCalled();
+  });
+
+  it("reverts task to pending when runAgentLoop throws", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+
+    const sandbox = {
+      exec: vi.fn().mockResolvedValueOnce({ stdout: TASKS_JSON, stderr: "", exitCode: 0 }),
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      readFile: vi.fn().mockResolvedValue(""),
+      fileExists: vi.fn().mockResolvedValue(false)
+    };
+    const envWithSandbox = { ...env, SANDBOX: sandbox as unknown as Fetcher };
+    const llmCall = vi.fn().mockRejectedValue(new Error("LLM failure"));
+
+    const agent = new AgentDO({ storage: { sql } }, envWithSandbox, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runBackgroundTaskCycle("");
+
+    expect(result.processed).toBe(1);
+    const finalWrite = sandbox.writeFile.mock.calls.at(-1);
+    const written = JSON.parse(finalWrite![1]);
+    expect(written[0].status).toBe("pending");
+  });
+
+  it("posts start notification to Slack channel when channel is provided", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+
+    const sandbox = {
+      exec: vi.fn().mockResolvedValueOnce({ stdout: TASKS_JSON, stderr: "", exitCode: 0 }),
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      readFile: vi.fn().mockResolvedValue(""),
+      fileExists: vi.fn().mockResolvedValue(false)
+    };
+    const envWithSandbox = { ...env, SANDBOX: sandbox as unknown as Fetcher };
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+    const llmCall = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Done" }] });
+
+    const agent = new AgentDO({ storage: { sql } }, envWithSandbox, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.runBackgroundTaskCycle("C-background");
+
+    expect(postSlackMessage).toHaveBeenCalledWith(
+      "token",
+      "C-background",
+      "Starting background task: Add hello-world tool"
+    );
+  });
+
+  it("skips Slack notification when no channel is configured", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+
+    const sandbox = {
+      exec: vi.fn().mockResolvedValueOnce({ stdout: TASKS_JSON, stderr: "", exitCode: 0 }),
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      readFile: vi.fn().mockResolvedValue(""),
+      fileExists: vi.fn().mockResolvedValue(false)
+    };
+    const envWithSandbox = { ...env, SANDBOX: sandbox as unknown as Fetcher };
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+    const llmCall = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Done" }] });
+
+    const agent = new AgentDO({ storage: { sql } }, envWithSandbox, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.runBackgroundTaskCycle("");
+
+    expect(postSlackMessage).not.toHaveBeenCalled();
   });
 });
