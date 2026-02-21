@@ -7,6 +7,7 @@ export const APPROVAL_TIMEOUT_MINUTES = 30;
 export const CONVERSATION_TIMEOUT_MINUTES = 30;
 export const COMPACTION_TOKEN_THRESHOLD = 20_000;
 export const SESSION_SUMMARY_RECENT_COUNT = 5;
+export const THINKING_MESSAGE_DELAY_MS = 6_000;
 
 export const MODEL_ROUTINE = "claude-haiku-4-5";
 export const MODEL_COMPLEX = "claude-sonnet-4-6";
