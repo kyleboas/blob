@@ -806,18 +806,57 @@ class Agent:
             self._write_task_queue(tasks_path, existing + new_tasks)
         return [t["title"] for t in new_tasks]
 
+    def _autonomous_tasks_today(self) -> tuple[str, int]:
+        """Return (today_iso, count) of tasks run today in autonomous mode."""
+        count_file = config.WORKSPACE_ROOT / ".autonomous_daily_count"
+        today = datetime.now(timezone.utc).date().isoformat()
+        if not count_file.exists():
+            return today, 0
+        raw = count_file.read_text().strip()
+        if not raw or ":" not in raw:
+            return today, 0
+        day_str, count_str = raw.split(":", 1)
+        if day_str != today:
+            return today, 0
+        return today, int(count_str)
+
+    def _record_autonomous_task(self) -> None:
+        count_file = config.WORKSPACE_ROOT / ".autonomous_daily_count"
+        today, count = self._autonomous_tasks_today()
+        count_file.write_text(f"{today}:{count + 1}")
+
     def run_autonomous_loop(self, tasks_path: Path | None = None) -> None:
         """Run a continuous self-improvement loop.
 
         Processes all pending tasks, then generates new ones from codebase
         signals (failing tests, TODOs, git history) when the queue runs dry.
+        Respects AUTONOMOUS_DAILY_TASK_LIMIT (default 10) to control API costs.
         Runs until interrupted with Ctrl-C.
         """
         queue_path = tasks_path or (config.WORKSPACE_ROOT / "tasks.json")
-        self._emit_status("Autonomous loop started")
+        self._emit_status(
+            f"Autonomous loop started (daily task limit: {config.AUTONOMOUS_DAILY_TASK_LIMIT})"
+        )
         try:
             while True:
+                today, tasks_today = self._autonomous_tasks_today()
+                remaining = config.AUTONOMOUS_DAILY_TASK_LIMIT - tasks_today
+                if remaining <= 0:
+                    # Sleep until midnight UTC then reset
+                    now = datetime.now(timezone.utc)
+                    midnight = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+                    from datetime import timedelta
+                    seconds_until_midnight = (midnight + timedelta(days=1) - now).seconds
+                    self._emit_status(
+                        f"Daily task limit ({config.AUTONOMOUS_DAILY_TASK_LIMIT}) reached "
+                        f"({tasks_today} tasks run today). Sleeping {seconds_until_midnight}s until midnight UTC."
+                    )
+                    time.sleep(seconds_until_midnight + 5)
+                    continue
+
                 summaries = self.run_self_improvement_cycle(queue_path)
+                for _ in summaries:
+                    self._record_autonomous_task()
                 if summaries:
                     self._emit_status(f"Cycle complete: {summaries}")
 
