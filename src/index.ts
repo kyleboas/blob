@@ -3,7 +3,9 @@ import type { Env, SlackEvent } from "./types";
 
 export { AgentDO } from "./agent";
 
-async function forwardToAgent(env: Env, channel: string, payload: { action: "message" | "reaction"; event: SlackEvent }): Promise<void> {
+const GLOBAL_LOGS_CHANNEL = "__global__";
+
+async function forwardToAgent(env: Env, channel: string, payload: { action: "message" | "reaction" | "logs_mirror"; event: SlackEvent }): Promise<void> {
   const id = env.AGENT_DO.idFromName(mapChannelToDO(channel));
   const stub = env.AGENT_DO.get(id);
 
@@ -52,17 +54,37 @@ function renderLiveLogPage(defaultChannel: string): string {
     const applyButton = document.getElementById('channel-apply');
 
     const params = new URLSearchParams(window.location.search);
-    let channel = (params.get('channel') || defaultChannel || localStorage.getItem('blob_logs_channel') || '').trim();
+    function safeReadChannel() {
+      try {
+        return localStorage.getItem('blob_logs_channel') || '';
+      } catch {
+        return '';
+      }
+    }
+
+    function safeWriteChannel(value) {
+      try {
+        if (value) {
+          localStorage.setItem('blob_logs_channel', value);
+        } else {
+          localStorage.removeItem('blob_logs_channel');
+        }
+      } catch {
+        // Local storage can fail in private browsing or restricted contexts.
+      }
+    }
+
+    let channel = (params.get('channel') || defaultChannel || safeReadChannel() || '').trim();
     input.value = channel;
 
     function persistChannel(nextChannel) {
       channel = nextChannel.trim();
       input.value = channel;
       if (channel) {
-        localStorage.setItem('blob_logs_channel', channel);
+        safeWriteChannel(channel);
         params.set('channel', channel);
       } else {
-        localStorage.removeItem('blob_logs_channel');
+        safeWriteChannel('');
         params.delete('channel');
       }
       const query = params.toString();
@@ -70,13 +92,8 @@ function renderLiveLogPage(defaultChannel: string): string {
     }
 
     async function refreshLogs() {
-      if (!channel) {
-        statusNode.textContent = 'No channel selected. Enter a Slack channel ID above to start viewing logs.';
-        logNode.textContent = 'Waiting for channel selection...';
-        return;
-      }
-
-      const response = await fetch('/logs/data?channel=' + encodeURIComponent(channel), { cache: 'no-store' });
+      const query = channel ? ('?channel=' + encodeURIComponent(channel)) : '';
+      const response = await fetch('/logs/data' + query, { cache: 'no-store' });
       if (!response.ok) {
         statusNode.textContent = 'Failed to load logs: ' + response.status;
         return;
@@ -88,7 +105,10 @@ function renderLiveLogPage(defaultChannel: string): string {
         return '[' + when + '] [' + event.eventType + '] ' + event.message;
       });
       logNode.textContent = lines.length ? lines.join('\n') : 'No events yet.';
-      statusNode.textContent = 'Channel: ' + channel + ' • Last updated: ' + new Date().toLocaleTimeString();
+      const channelLabel = channel && channel !== ${JSON.stringify(GLOBAL_LOGS_CHANNEL)}
+        ? channel
+        : 'all channels';
+      statusNode.textContent = 'Channel: ' + channelLabel + ' • Last updated: ' + new Date().toLocaleTimeString();
       logNode.scrollTop = logNode.scrollHeight;
     }
 
@@ -112,7 +132,7 @@ function renderLiveLogPage(defaultChannel: string): string {
 }
 
 function resolveLogChannel(url: URL, env: Env): string {
-  return (url.searchParams.get("channel") ?? env.LOGS_CHANNEL ?? "").trim();
+  return (url.searchParams.get("channel") ?? env.LOGS_CHANNEL ?? GLOBAL_LOGS_CHANNEL).trim();
 }
 
 export default {
@@ -132,9 +152,6 @@ export default {
 
     if (request.method === "GET" && (url.pathname === "/logs/data" || url.pathname === "/live-logs/data")) {
       const channel = resolveLogChannel(url, env);
-      if (!channel) {
-        return Response.json({ error: "missing logs channel" }, { status: 400 });
-      }
 
       const id = env.AGENT_DO.idFromName(mapChannelToDO(channel));
       const stub = env.AGENT_DO.get(id);
@@ -185,6 +202,7 @@ export default {
         const channel = event.channel;
         if (channel) {
           ctx.waitUntil(forwardToAgent(env, channel, { action: "message", event }));
+          ctx.waitUntil(forwardToAgent(env, GLOBAL_LOGS_CHANNEL, { action: "logs_mirror", event }));
         }
       }
       return new Response("ok", { status: 200 });
@@ -194,6 +212,7 @@ export default {
       const channel = event.item?.channel ?? event.channel;
       if (channel) {
         ctx.waitUntil(forwardToAgent(env, channel, { action: "reaction", event }));
+        ctx.waitUntil(forwardToAgent(env, GLOBAL_LOGS_CHANNEL, { action: "logs_mirror", event }));
       }
       return new Response("ok", { status: 200 });
     }

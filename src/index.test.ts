@@ -127,9 +127,11 @@ describe("worker entry point", () => {
     await Promise.all(pending);
 
     expect(response.status).toBe(200);
-    expect(stub.fetch).toHaveBeenCalledTimes(1);
+    expect(stub.fetch).toHaveBeenCalledTimes(2);
     const forwardedBody = JSON.parse(stub.fetch.mock.calls[0][1].body as string);
+    const mirroredBody = JSON.parse(stub.fetch.mock.calls[1][1].body as string);
     expect(forwardedBody.action).toBe("message");
+    expect(mirroredBody.action).toBe("logs_mirror");
   });
 
   it("ignores bot messages to prevent infinite loops", async () => {
@@ -202,8 +204,11 @@ describe("worker entry point", () => {
     await worker.fetch(await signedRequest(JSON.stringify(payload), env.SLACK_SIGNING_SECRET), env, ctx);
     await Promise.all(pending);
 
+    expect(stub.fetch).toHaveBeenCalledTimes(2);
     const forwardedBody = JSON.parse(stub.fetch.mock.calls[0][1].body as string);
+    const mirroredBody = JSON.parse(stub.fetch.mock.calls[1][1].body as string);
     expect(forwardedBody.action).toBe("reaction");
+    expect(mirroredBody.action).toBe("logs_mirror");
   });
 
   it("renders the live logs page for a channel", async () => {
@@ -219,7 +224,7 @@ describe("worker entry point", () => {
     expect(html).toContain("C1");
   });
 
-  it("renders the live logs shell without a channel parameter", async () => {
+  it("renders the live logs shell in all-channel mode without a channel parameter", async () => {
     const stub = { fetch: vi.fn() };
     const env = makeEnv(stub);
     const { ctx } = makeCtx();
@@ -228,7 +233,7 @@ describe("worker entry point", () => {
     const html = await response.text();
 
     expect(response.status).toBe(200);
-    expect(html).toContain("No channel selected");
+    expect(html).toContain("__global__");
   });
 
   it("renders the live logs page without a query parameter when LOGS_CHANNEL is configured", async () => {
@@ -243,15 +248,17 @@ describe("worker entry point", () => {
     expect(html).toContain("C_DEFAULT");
   });
 
-  it("proxies live log data without a query parameter when LOGS_CHANNEL is configured", async () => {
+  it("proxies live log data in all-channel mode without a query parameter", async () => {
     const stub = { fetch: vi.fn().mockResolvedValue(Response.json({ events: [{ eventType: "thinking", message: "Started", createdAt: 1700000000 }] })) };
-    const env = makeEnv(stub, { LOGS_CHANNEL: "C_DEFAULT" });
+    const env = makeEnv(stub);
     const { ctx } = makeCtx();
 
     const response = await worker.fetch(new Request("https://example.com/logs/data"), env, ctx);
 
     expect(response.status).toBe(200);
     expect(stub.fetch).toHaveBeenCalledTimes(1);
+    const forwardedBody = JSON.parse(stub.fetch.mock.calls[0][1].body as string);
+    expect(forwardedBody.action).toBe("logs_snapshot");
   });
 
   it("proxies live log data through durable objects", async () => {
