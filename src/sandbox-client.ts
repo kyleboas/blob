@@ -90,7 +90,8 @@ export class SandboxClient {
     return message.includes("blockconcurrencywhile")
       || (message.includes("durable object") && message.includes("reset"))
       || message.includes("durable object is overloaded")
-      || message.includes("durable object request failed");
+      || message.includes("durable object request failed")
+      || (message.includes("http error") && message.includes("500"));
   }
 
   private async sleep(delayMs: number): Promise<void> {
