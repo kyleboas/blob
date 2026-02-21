@@ -12,11 +12,6 @@ import { enforceSafety } from "./safety";
 import { SandboxClient, type SandboxBinding } from "./sandbox-client";
 import {
   compactMessagesInDB,
-  completeBackgroundTask,
-  claimNextBackgroundTask,
-  enqueueBackgroundTask,
-  failBackgroundTask,
-  getHeartbeatGoal,
   getHistory,
   getKnowledge,
   getRecentAgentEvents,
@@ -26,7 +21,6 @@ import {
   initSchema,
   logAgentEvent,
   resolveOrCreateSession,
-  saveHeartbeatGoal,
   restoreRepoSnapshot,
   saveKnowledge,
   saveMessage,
@@ -74,8 +68,6 @@ const DEFAULT_DEPS: AgentDeps = {
   postSlackApproval: postApprovalRequest,
   now: () => Date.now()
 };
-
-const HEARTBEAT_INTERVAL_MS = 15 * 60 * 1000;
 
 const BASE_SYSTEM_PROMPT = [
   "You are Blob, a careful coding agent.",
@@ -144,21 +136,7 @@ export class AgentDO extends Agent {
 
     if (body.action === "logs_snapshot") {
       const sessionId = getCurrentSession(this.db);
-      const threadId = sessionId ?? "global";
-      return Response.json({ events: getRecentAgentEvents(this.db, threadId) });
-    }
-
-    if (body.action === "logs_mirror" && body.event) {
-      const event = body.event;
-      if (event.type === "message") {
-        const messageText = event.text?.trim() || "(no text)";
-        logAgentEvent(this.db, "global", "message", `[${event.channel ?? "unknown"}] ${messageText}`);
-      } else if (event.type === "reaction_added") {
-        const reaction = event.reaction ?? "unknown";
-        const channel = event.item?.channel ?? event.channel ?? "unknown";
-        logAgentEvent(this.db, "global", "reaction", `[${channel}] :${reaction}:`);
-      }
-      return new Response("ok");
+      return Response.json({ events: sessionId ? getRecentAgentEvents(this.db, sessionId) : [] });
     }
 
     if (body.action === "reaction" && body.event) {
@@ -168,25 +146,13 @@ export class AgentDO extends Agent {
 
     if (body.action === "message" && body.event) {
       const event = body.event;
-      if (this.ctx.storage.setAlarm) {
-        const task = event.text ?? "";
+      try {
+        await this.handleTaskEvent(event);
+      } catch (error) {
         const channel = event.channel;
-        if (channel && task.trim()) {
-          enqueueBackgroundTask(this.db, event);
-          saveHeartbeatGoal(this.db, channel, task);
-          const eventThreadId = event.thread_ts ?? event.ts ?? channel;
-          logAgentEvent(this.db, eventThreadId, "heartbeat_queued", "Task queued for heartbeat processing.");
-          await this.ctx.storage.setAlarm(this.deps.now());
-        }
-      } else {
-        try {
-          await this.handleTaskEvent(event);
-        } catch (error) {
-          const channel = event.channel;
-          if (channel) {
-            const message = error instanceof Error ? error.message : "An unexpected error occurred.";
-            await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, `Error: ${message}`);
-          }
+        if (channel) {
+          const message = error instanceof Error ? error.message : "An unexpected error occurred.";
+          await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, `Error: ${message}`);
         }
       }
       return new Response("accepted", { status: 202 });
@@ -428,36 +394,15 @@ export class AgentDO extends Agent {
   }
 
   private async startSandboxSession(sessionId: string): Promise<void> {
-    try {
-      await restoreRepoSnapshot(this.env.REPO_STORE, sessionId, this.sandbox);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown snapshot restore error";
-      logAgentEvent(this.db, sessionId, "snapshot_restore_failed", message);
-    }
-
-    try {
-      await syncKnowledgeToSandbox(this.db, this.sandbox);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown knowledge sync error";
-      logAgentEvent(this.db, sessionId, "knowledge_sync_to_sandbox_failed", message);
-    }
+    await restoreRepoSnapshot(this.env.REPO_STORE, sessionId, this.sandbox);
+    await syncKnowledgeToSandbox(this.db, this.sandbox);
   }
 
   private async endSandboxSession(sessionId: string): Promise<void> {
-    const operations = [
-      saveRepoSnapshot(this.env.REPO_STORE, sessionId, this.sandbox)
-        .catch((error) => {
-          const message = error instanceof Error ? error.message : "Unknown snapshot save error";
-          logAgentEvent(this.db, sessionId, "snapshot_save_failed", message);
-        }),
+    await Promise.all([
+      saveRepoSnapshot(this.env.REPO_STORE, sessionId, this.sandbox),
       syncKnowledgeFromSandbox(this.db, this.sandbox)
-        .catch((error) => {
-          const message = error instanceof Error ? error.message : "Unknown knowledge sync error";
-          logAgentEvent(this.db, sessionId, "knowledge_sync_from_sandbox_failed", message);
-        })
-    ];
-
-    await Promise.all(operations);
+    ]);
   }
 
   // Mechanism 4: end-of-conversation episodic + semantic memory
@@ -486,7 +431,7 @@ export class AgentDO extends Agent {
             "1. Write a SUMMARY (2-4 sentences) of what was accomplished.",
             "2. Write UPDATED_AGENT_MD with the complete updated long-term memory,",
             "   merging any important new facts (preferences, patterns, capabilities)",
-            "   into the existing content — or write exactly \"(unchanged)\" if nothing",
+            "   into the existing content -- or write exactly \"(unchanged)\" if nothing",
             "   needs to be added. Do not duplicate existing content.",
             "",
             `Current AGENT.md:\n${currentKnowledge || "(empty)"}`,
@@ -574,58 +519,6 @@ export class AgentDO extends Agent {
   }
 
   async alarm(): Promise<void> {
-    const nextTask = claimNextBackgroundTask(this.db);
-    if (nextTask) {
-      try {
-        await this.handleTaskEvent(nextTask.event);
-        completeBackgroundTask(this.db, nextTask.id);
-      } catch (error) {
-        failBackgroundTask(this.db, nextTask.id);
-        const message = error instanceof Error ? error.message : "An unexpected error occurred.";
-        if (nextTask.event.channel) {
-          await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, nextTask.event.channel, `Error: ${message}`);
-        }
-      }
-    } else {
-      const heartbeatGoal = getHeartbeatGoal(this.db);
-      if (heartbeatGoal) {
-        const heartbeatEvent: SlackEvent = {
-          type: "message",
-          channel: heartbeatGoal.channel,
-          text: `Heartbeat: continue working toward this goal: ${heartbeatGoal.goal}`
-        };
-        logAgentEvent(this.db, heartbeatGoal.channel, "heartbeat", "Running scheduled heartbeat toward goal.");
-        try {
-          await this.handleTaskEvent(heartbeatEvent);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "An unexpected error occurred.";
-          const remediationTask = [
-            "A scheduled heartbeat run failed.",
-            `Original goal: ${heartbeatGoal.goal}`,
-            `Failure: ${message}`,
-            "Please diagnose and fix the issue in the codebase, then report what changed."
-          ].join("\n");
-
-          enqueueBackgroundTask(this.db, {
-            type: "message",
-            channel: heartbeatGoal.channel,
-            text: remediationTask
-          });
-          logAgentEvent(this.db, heartbeatGoal.channel, "heartbeat_self_repair_queued", `Queued remediation for heartbeat failure: ${message}`);
-
-          await this.deps.postSlackMessage(
-            this.env.SLACK_BOT_TOKEN,
-            heartbeatGoal.channel,
-            `Heartbeat error: ${message}\nI noticed this failure and queued a self-repair task to investigate automatically.`
-          );
-        }
-      }
-    }
-
     await expireTimedOutApprovals(this.pendingApprovals, this.deps, this.env.SLACK_BOT_TOKEN, this.db);
-
-    if (this.ctx.storage.setAlarm) {
-      await this.ctx.storage.setAlarm(this.deps.now() + HEARTBEAT_INTERVAL_MS);
-    }
   }
 }
