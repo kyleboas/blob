@@ -1,8 +1,8 @@
 import { COMMAND_TIMEOUT } from "./config";
 
 const DEFAULT_MAX_OUTPUT_CHARS = 10_000;
-const TRANSIENT_SANDBOX_MAX_ATTEMPTS = 3;
-const TRANSIENT_SANDBOX_RETRY_DELAY_MS = 500;
+const TRANSIENT_SANDBOX_MAX_ATTEMPTS = 5;
+const TRANSIENT_SANDBOX_RETRY_DELAY_MS = 2_000;
 
 export interface SandboxExecResponse {
   stdout?: string;
@@ -167,7 +167,7 @@ export class SandboxClient {
 
   async fileExists(path: string): Promise<boolean> {
     try {
-      await this.sandbox.readFile(path);
+      await this.withTransientRetry(() => this.sandbox.readFile(path));
       return true;
     } catch {
       return false;
