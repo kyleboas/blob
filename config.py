@@ -13,6 +13,21 @@ except ImportError:  # pragma: no cover - optional during bootstrap
 
 load_dotenv()
 
+# Load user preferences from blob_settings.json (written by `python blob_config.py set KEY VALUE`).
+# Precedence: explicit env var > blob_settings.json > hardcoded default.
+def _apply_user_settings() -> None:
+    import json as _json
+    _settings_path = Path(__file__).resolve().parent / "blob_settings.json"
+    if not _settings_path.exists():
+        return
+    try:
+        for k, v in _json.loads(_settings_path.read_text()).items():
+            os.environ.setdefault(k, str(v))
+    except Exception:
+        pass
+
+_apply_user_settings()
+
 AGENT_ENV = os.getenv("AGENT_ENV", "dev").lower()
 if AGENT_ENV == "prod":
     WORKSPACE_ROOT = Path("/data")
