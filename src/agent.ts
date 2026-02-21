@@ -558,6 +558,7 @@ export class AgentDO {
   }
 
   private async startSandboxSession(sessionId: string): Promise<void> {
+    await this.sandbox.warmUp();
     await restoreRepoSnapshot(this.env.REPO_STORE, sessionId, this.sandbox);
     await syncKnowledgeToSandbox(this.db, this.sandbox);
   }
