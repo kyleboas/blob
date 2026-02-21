@@ -3,6 +3,21 @@ import type { Env, SlackEvent } from "./types";
 
 export { AgentDO } from "./agent";
 
+const HEARTBEAT_DO_NAME = "blob:heartbeats";
+
+async function forwardToHeartbeatDO(
+  env: Env,
+  payload: Record<string, unknown>
+): Promise<Response> {
+  const id = env.AGENT_DO.idFromName(HEARTBEAT_DO_NAME);
+  const stub = env.AGENT_DO.get(id);
+  return stub.fetch("https://agent.internal/event", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+}
+
 async function forwardToAgent(env: Env, channel: string, payload: { action: "message" | "reaction"; event: SlackEvent }): Promise<void> {
   const id = env.AGENT_DO.idFromName(mapChannelToDO(channel));
   const stub = env.AGENT_DO.get(id);
@@ -105,6 +120,25 @@ export default {
 
       const payload = await response.text();
       return new Response(payload, { status: 200, headers: { "content-type": "application/json" } });
+    }
+
+    // Heartbeat API – enqueue background tasks for Blob to work on proactively
+    if (request.method === "POST" && url.pathname === "/heartbeats") {
+      const body = await request.json() as { task?: string; channel?: string };
+      if (!body.task || !body.channel) {
+        return Response.json({ error: "task and channel are required" }, { status: 400 });
+      }
+      const response = await forwardToHeartbeatDO(env, {
+        action: "enqueue_heartbeat",
+        task: body.task,
+        channel: body.channel
+      });
+      return response;
+    }
+
+    if (request.method === "GET" && url.pathname === "/heartbeats") {
+      const response = await forwardToHeartbeatDO(env, { action: "list_heartbeats" });
+      return response;
     }
 
     if (request.method !== "POST" || url.pathname !== "/slack/events") {

@@ -1,10 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  completeHeartbeat,
+  enqueueHeartbeat,
+  failHeartbeat,
   getHistory,
   getKnowledge,
+  getNextPendingHeartbeat,
   getRateLimit,
+  hasPendingHeartbeats,
   incrementRateLimit,
   initSchema,
+  listHeartbeats,
   restoreRepoSnapshot,
   saveKnowledge,
   saveMessage,
@@ -17,11 +23,23 @@ import {
 
 type Row = Record<string, unknown>;
 
+interface HeartbeatRow {
+  id: number;
+  task: string;
+  channel: string;
+  status: string;
+  result: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 class FakeSql implements SqlStorage {
   private messages: Array<{ id: number; threadId: string; role: string; content: string }> = [];
   private rateLimits = new Map<string, number>();
   private knowledge = "";
   private nextMessageId = 1;
+  private heartbeats: HeartbeatRow[] = [];
+  private nextHeartbeatId = 1;
 
   exec(query: string, ...bindings: Array<string | number | null>) {
     const normalized = query.trim().replace(/\s+/g, " ");
@@ -73,6 +91,67 @@ class FakeSql implements SqlStorage {
 
     if (normalized.startsWith("SELECT content FROM knowledge")) {
       return { toArray: () => (this.knowledge ? [{ content: this.knowledge }] : []) };
+    }
+
+    // Heartbeat queries
+    if (normalized.startsWith("INSERT INTO heartbeats")) {
+      const id = this.nextHeartbeatId++;
+      this.heartbeats.push({
+        id,
+        task: String(bindings[0]),
+        channel: String(bindings[1]),
+        status: "pending",
+        result: null,
+        created_at: Math.floor(Date.now() / 1000),
+        updated_at: Math.floor(Date.now() / 1000)
+      });
+      return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("SELECT last_insert_rowid()")) {
+      const last = this.heartbeats.at(-1);
+      return { toArray: () => (last ? [{ id: last.id }] : [{ id: 0 }]) };
+    }
+
+    if (normalized.includes("FROM heartbeats") && normalized.includes("status = 'pending'") && normalized.includes("LIMIT 1")) {
+      const pending = this.heartbeats.find((h) => h.status === "pending");
+      if (!pending) return { toArray: () => [] };
+      pending.status = "running";
+      return { toArray: () => [{ ...pending }] as Row[] };
+    }
+
+    if (normalized.startsWith("UPDATE heartbeats SET status = 'running'")) {
+      const id = Number(bindings[0]);
+      const h = this.heartbeats.find((hb) => hb.id === id);
+      if (h) h.status = "running";
+      return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("UPDATE heartbeats SET status = 'completed'")) {
+      const result = String(bindings[0]);
+      const id = Number(bindings[1]);
+      const h = this.heartbeats.find((hb) => hb.id === id);
+      if (h) { h.status = "completed"; h.result = result; }
+      return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("UPDATE heartbeats SET status = 'failed'")) {
+      const result = String(bindings[0]);
+      const id = Number(bindings[1]);
+      const h = this.heartbeats.find((hb) => hb.id === id);
+      if (h) { h.status = "failed"; h.result = result; }
+      return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("SELECT 1 FROM heartbeats WHERE status = 'pending'")) {
+      const hasPending = this.heartbeats.some((h) => h.status === "pending");
+      return { toArray: () => (hasPending ? [{ 1: 1 }] : []) };
+    }
+
+    if (normalized.includes("FROM heartbeats") && normalized.includes("ORDER BY id DESC")) {
+      const limit = Number(bindings[0] ?? 50);
+      const rows = [...this.heartbeats].reverse().slice(0, limit);
+      return { toArray: () => rows as unknown as Row[] };
     }
 
     throw new Error(`Unhandled query in test fake: ${query}`);
@@ -189,5 +268,74 @@ describe("knowledge sync", () => {
 
     expect(readFile).not.toHaveBeenCalled();
     expect(getKnowledge(sql)).toBe("");
+  });
+});
+
+describe("heartbeat helpers", () => {
+  it("enqueues a heartbeat and returns its id", () => {
+    const sql = new FakeSql();
+    const id = enqueueHeartbeat(sql, "run tests", "C123");
+    expect(id).toBeGreaterThan(0);
+  });
+
+  it("getNextPendingHeartbeat returns null when queue is empty", () => {
+    const sql = new FakeSql();
+    expect(getNextPendingHeartbeat(sql)).toBeNull();
+  });
+
+  it("getNextPendingHeartbeat returns and claims the next pending heartbeat", () => {
+    const sql = new FakeSql();
+    enqueueHeartbeat(sql, "task A", "C1");
+    enqueueHeartbeat(sql, "task B", "C2");
+
+    const hb = getNextPendingHeartbeat(sql);
+    expect(hb).not.toBeNull();
+    expect(hb!.task).toBe("task A");
+    expect(hb!.channel).toBe("C1");
+    expect(hb!.status).toBe("running");
+  });
+
+  it("hasPendingHeartbeats returns false when empty", () => {
+    const sql = new FakeSql();
+    expect(hasPendingHeartbeats(sql)).toBe(false);
+  });
+
+  it("hasPendingHeartbeats returns true when there are pending heartbeats", () => {
+    const sql = new FakeSql();
+    enqueueHeartbeat(sql, "check deps", "C1");
+    expect(hasPendingHeartbeats(sql)).toBe(true);
+  });
+
+  it("completeHeartbeat marks the heartbeat as completed with a result", () => {
+    const sql = new FakeSql();
+    const id = enqueueHeartbeat(sql, "build", "C1");
+    getNextPendingHeartbeat(sql); // moves to running
+    completeHeartbeat(sql, id, "build succeeded");
+
+    const all = listHeartbeats(sql);
+    expect(all[0].status).toBe("completed");
+    expect(all[0].result).toBe("build succeeded");
+  });
+
+  it("failHeartbeat marks the heartbeat as failed with an error", () => {
+    const sql = new FakeSql();
+    const id = enqueueHeartbeat(sql, "deploy", "C1");
+    getNextPendingHeartbeat(sql);
+    failHeartbeat(sql, id, "timeout");
+
+    const all = listHeartbeats(sql);
+    expect(all[0].status).toBe("failed");
+    expect(all[0].result).toBe("timeout");
+  });
+
+  it("listHeartbeats returns heartbeats in reverse-chronological order", () => {
+    const sql = new FakeSql();
+    enqueueHeartbeat(sql, "first", "C1");
+    enqueueHeartbeat(sql, "second", "C1");
+
+    const list = listHeartbeats(sql);
+    expect(list).toHaveLength(2);
+    expect(list[0].task).toBe("second");
+    expect(list[1].task).toBe("first");
   });
 });
