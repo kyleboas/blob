@@ -5,7 +5,7 @@ const TRANSIENT_SANDBOX_MAX_ATTEMPTS = 5;
 const TRANSIENT_SANDBOX_RETRY_DELAY_MS = 2_000;
 const WARM_UP_MAX_ATTEMPTS = 10;
 const WARM_UP_RETRY_DELAY_MS = 5_000;
-const WARM_UP_TIMEOUT_MS = 15_000;
+const WARM_UP_TIMEOUT_MS = 90_000;
 
 export interface SandboxExecResponse {
   stdout?: string;
