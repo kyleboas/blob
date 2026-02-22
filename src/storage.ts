@@ -442,13 +442,14 @@ export async function syncKnowledgeToSandbox(
 
 export async function syncKnowledgeFromSandbox(
   sql: SqlStorage,
-  sandbox: Pick<SandboxClient, "readFile" | "fileExists">
+  sandbox: Pick<SandboxClient, "readFile">
 ): Promise<void> {
-  if (!(await sandbox.fileExists("AGENT.md"))) {
-    return;
+  try {
+    const knowledge = await sandbox.readFile("AGENT.md");
+    saveKnowledge(sql, knowledge);
+  } catch {
+    // AGENT.md does not exist in the sandbox – nothing to sync
   }
-  const knowledge = await sandbox.readFile("AGENT.md");
-  saveKnowledge(sql, knowledge);
 }
 
 // Heartbeat functions – background work items Blob processes proactively

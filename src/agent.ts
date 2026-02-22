@@ -300,7 +300,11 @@ export class AgentDO {
     saveMessage(this.db, sessionId, { role: "user", content: task });
     conversation.push({ role: "user", content: task });
 
-    await syncKnowledgeFromSandbox(this.db, this.sandbox);
+    // Sync runs in the background so it doesn't delay the LLM call.
+    // The system prompt uses the knowledge already cached in the DB from the
+    // previous sync; any external edits to AGENT.md will be picked up on the
+    // next user message.
+    void syncKnowledgeFromSandbox(this.db, this.sandbox);
     const summaries = getRecentSessionSummaries(this.db, SESSION_SUMMARY_RECENT_COUNT);
     const systemPrompt = buildSystemPrompt(getKnowledge(this.db), summaries);
 
