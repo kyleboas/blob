@@ -175,7 +175,9 @@ export class SandboxClient {
         return;
       } catch (error) {
         lastError = error;
-        if (!this.isTransientSandboxError(error) || attempt >= WARM_UP_MAX_ATTEMPTS) {
+        const isTimeout = error instanceof Error && error.message.includes("timed out");
+        const isTransient = this.isTransientSandboxError(error) || isTimeout;
+        if (!isTransient || attempt >= WARM_UP_MAX_ATTEMPTS) {
           throw error;
         }
         await this.sleep(WARM_UP_RETRY_DELAY_MS);
