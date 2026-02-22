@@ -123,7 +123,7 @@ describe("SandboxClient", () => {
       exec: vi.fn(),
       writeFile: vi
         .fn()
-        .mockRejectedValueOnce(new Error("Command timed out after 15 seconds"))
+        .mockRejectedValueOnce(new Error("Command timed out after 90 seconds"))
         .mockResolvedValueOnce(undefined),
       readFile: vi.fn()
     };
