@@ -117,4 +117,48 @@ describe("SandboxClient", () => {
     await expect(client.readFile("missing.txt")).rejects.toThrow("not found");
     expect(sandbox.readFile).toHaveBeenCalledTimes(1);
   });
+
+  it("retries warmUp when writeFile times out (cold-start timeout is transient)", async () => {
+    const sandbox = {
+      exec: vi.fn(),
+      writeFile: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("Command timed out after 15 seconds"))
+        .mockResolvedValueOnce(undefined),
+      readFile: vi.fn()
+    };
+
+    const client = new SandboxClient(sandbox, 10_000, 0);
+    await client.warmUp();
+
+    expect(sandbox.writeFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries warmUp on transient durable object errors", async () => {
+    const sandbox = {
+      exec: vi.fn(),
+      writeFile: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("HTTP error! Status: 500"))
+        .mockResolvedValueOnce(undefined),
+      readFile: vi.fn()
+    };
+
+    const client = new SandboxClient(sandbox, 10_000, 0);
+    await client.warmUp();
+
+    expect(sandbox.writeFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry warmUp on non-transient errors", async () => {
+    const sandbox = {
+      exec: vi.fn(),
+      writeFile: vi.fn().mockRejectedValue(new Error("permission denied")),
+      readFile: vi.fn()
+    };
+
+    const client = new SandboxClient(sandbox, 10_000, 0);
+    await expect(client.warmUp()).rejects.toThrow("permission denied");
+    expect(sandbox.writeFile).toHaveBeenCalledTimes(1);
+  });
 });
