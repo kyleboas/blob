@@ -17,3 +17,6 @@ image = "./Dockerfile"
 name = "sandbox"
 max_instances = 3
 instance_type = "basic"
+
+[observability.logs]
+enabled = true
