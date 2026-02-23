@@ -578,6 +578,52 @@ describe("AgentDO runAgentLoop", () => {
 
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Committed: add feature");
   });
+
+  it("can create and use a dynamic tool in the same loop", async () => {
+    const sql = new FakeSql();
+    const { env, sandbox } = makeTestEnv();
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: [{
+          type: "tool_use",
+          id: "1",
+          name: "create_tool",
+          input: {
+            name: "list_top_files",
+            description: "List top-level files in a path",
+            command_template: "find {path} -maxdepth 1 -type f",
+            args: ["path"]
+          }
+        }]
+      })
+      .mockResolvedValueOnce({
+        content: [{
+          type: "tool_use",
+          id: "2",
+          name: "list_top_files",
+          input: { path: "/workspace/blob" }
+        }]
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Dynamic tool worked" }] });
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runAgentLoop("inspect files", "C1", "thread-dynamic-tool");
+
+    expect(result.finalText).toBe("Dynamic tool worked");
+    expect(sandbox.exec).toHaveBeenCalledWith("find /workspace/blob -maxdepth 1 -type f");
+    expect(llmCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: expect.arrayContaining([expect.objectContaining({ name: "create_tool" })])
+      })
+    );
+  });
+
 });
 
 describe("AgentDO heartbeat actions", () => {
