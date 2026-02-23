@@ -7,7 +7,7 @@ import threading
 from typing import Protocol
 
 import config
-from safety import append_audit_log
+from safety import append_audit_log, log_activity
 
 READ_ONLY_PREFIXES = (
     "ls",
@@ -45,7 +45,9 @@ class SlackApprovalGate:
         self._events: dict[str, threading.Event] = {}
 
     def request_approval(self, action_description: str, tier: str) -> bool:
+        log_activity("approval_requested", {"action": action_description, "tier": tier, "gate": "slack"})
         if tier == "auto-approve":
+            log_activity("approval_decision", {"action": action_description, "tier": tier, "decision": "approved_auto"})
             return True
 
         response = self.client.chat_postMessage(
@@ -70,6 +72,7 @@ class SlackApprovalGate:
         if not approved:
             self._decisions[ts] = False
             append_audit_log(config.APPROVAL_AUDIT_LOG, {"message_ts": ts, "decision": "timeout_reject"})
+            log_activity("approval_decision", {"action": action_description, "tier": tier, "decision": "timeout_reject"})
         return self._decisions.get(ts, False)
 
     def resolve_reaction(self, message_ts: str, reaction: str) -> None:
@@ -87,6 +90,7 @@ class SlackApprovalGate:
             config.APPROVAL_AUDIT_LOG,
             {"message_ts": message_ts, "reaction": reaction, "decision": decision},
         )
+        log_activity("approval_decision", {"message_ts": message_ts, "reaction": reaction, "decision": decision})
         self._events[message_ts].set()
 
 
@@ -99,4 +103,14 @@ class AutonomousApprovalGate:
     """
 
     def request_approval(self, action_description: str, tier: str) -> bool:
-        return tier != "always-require-approval"
+        allowed = tier != "always-require-approval"
+        log_activity(
+            "approval_decision",
+            {
+                "action": action_description,
+                "tier": tier,
+                "gate": "autonomous",
+                "decision": "approved" if allowed else "rejected",
+            },
+        )
+        return allowed

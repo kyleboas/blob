@@ -212,6 +212,18 @@ describe("worker entry point", () => {
   });
 
 
+  it("serves the live logs page at the root path", async () => {
+    const stub = { fetch: vi.fn() };
+    const env = makeEnv(stub);
+    const { ctx } = makeCtx();
+
+    const response = await worker.fetch(new Request("https://example.com/"), env, ctx);
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).toContain("Blob Live Logs");
+  });
+
   it("renders the live logs shell without manual channel controls", async () => {
     const stub = { fetch: vi.fn() };
     const env = makeEnv(stub);

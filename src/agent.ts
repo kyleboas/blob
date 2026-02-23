@@ -213,6 +213,7 @@ export class AgentDO {
     void work.catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       logAgentEvent(this.db, "global", "background_error", message);
+      this.forwardToGlobalLogs("background_error", message);
     });
   }
 
@@ -315,7 +316,7 @@ export class AgentDO {
     let thinkingMessagePromise: Promise<void> | null = null;
     thinkingTimer = setTimeout(() => {
       thinkingMessagePromise = this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, "Thinking...").then(() => {
-        logAgentEvent(this.db, sessionId, "thinking", "Posted delayed thinking status.");
+        this.logDiagnostic(sessionId, "thinking", "Posted delayed thinking status.", channel);
       });
     }, THINKING_MESSAGE_DELAY_MS);
 
@@ -355,7 +356,7 @@ export class AgentDO {
         if (!sandboxStarted) {
           await this.traceOperation(sessionId, "sandbox_start", () => this.startSandboxSession(sessionId), channel);
           sandboxStarted = true;
-          logAgentEvent(this.db, sessionId, "session", "Sandbox session started.");
+          this.logDiagnostic(sessionId, "session", "Sandbox session started.", channel);
         }
 
         // Save the assistant's LLM response (including tool_use blocks) before execution
@@ -388,7 +389,7 @@ export class AgentDO {
     } finally {
       if (sandboxStarted) {
         await this.traceOperation(sessionId, "sandbox_end", () => this.endSandboxSession(sessionId), channel);
-        logAgentEvent(this.db, sessionId, "session", "Sandbox session ended.");
+        this.logDiagnostic(sessionId, "session", "Sandbox session ended.", channel);
       }
     }
 
@@ -721,6 +722,7 @@ export class AgentDO {
     if (!heartbeat) return;
 
     logAgentEvent(this.db, heartbeat.id.toString(), "heartbeat_start", heartbeat.task);
+    this.forwardToGlobalLogs("heartbeat_start", `[#${heartbeat.channel}] ${heartbeat.task}`);
 
     try {
       const { sessionId, previousSessionId } = resolveOrCreateSession(this.db, this.deps.now());

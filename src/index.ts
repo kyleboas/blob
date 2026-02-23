@@ -59,7 +59,10 @@ function renderLiveLogPage(): string {
     .line-command_error { color: #fca5a5; }
     .line-completed { color: #a78bfa; }
     .line-message { color: #fbbf24; }
-    .line-thinking, .line-session { color: #94a3b8; }
+    .line-thinking, .line-session, .line-trace { color: #94a3b8; }
+    .line-trace_warning { color: #f59e0b; }
+    .line-trace_error, .line-background_error { color: #f87171; }
+    .line-heartbeat_start { color: #22d3ee; }
     .empty { color: #475569; font-style: italic; }
     #copy-btn { margin-left: auto; font-family: inherit; font-size: 0.8rem; background: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 4px; padding: 0.25rem 0.6rem; cursor: pointer; }
     #copy-btn:hover { background: #334155; color: #e2e8f0; }
@@ -94,7 +97,7 @@ function renderLiveLogPage(): string {
 
     function renderEvents(events) {
       if (events.length === 0) {
-        logNode.innerHTML = '<span class="empty">No events yet. Send a message to Blob in Slack to see activity here.</span>';
+        logNode.innerHTML = '<span class="empty">No events yet. Blob activity will appear here automatically.</span>';
         return;
       }
 
@@ -192,7 +195,7 @@ export default {
       return new Response("ok", { status: 200 });
     }
 
-    if (request.method === "GET" && (url.pathname === "/logs" || url.pathname === "/live-logs")) {
+    if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/logs" || url.pathname === "/live-logs")) {
       return new Response(renderLiveLogPage(), {
         status: 200,
         headers: { "content-type": "text/html; charset=utf-8" }
