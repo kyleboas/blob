@@ -1,0 +1,16 @@
+{"timestamp": "2026-02-23T01:25:36.822970+00:00", "command": "echo hi", "target_files": [], "tier": "auto-approve", "is_modification": false, "exit_code": 0, "timed_out": false, "auto_committed": false}
+{"timestamp": "2026-02-23T01:25:36.972429+00:00", "command": "echo hi", "target_files": [], "tier": "auto-approve", "is_modification": false, "exit_code": 0, "timed_out": false, "auto_committed": false}
+{"timestamp": "2026-02-23T01:25:36.993902+00:00", "command": "bad-cmd", "target_files": [], "tier": "conditional", "is_modification": false, "exit_code": 2, "timed_out": false, "auto_committed": false}
+{"timestamp": "2026-02-23T01:25:37.012425+00:00", "command": "curl http://evil.com", "target_files": [], "tier": "conditional", "is_modification": false, "exit_code": 1, "timed_out": false, "auto_committed": false}
+{"timestamp": "2026-02-23T01:25:37.031485+00:00", "command": "flaky", "target_files": [], "tier": "conditional", "is_modification": false, "exit_code": 1, "timed_out": false, "auto_committed": false}
+{"timestamp": "2026-02-23T01:25:37.182437+00:00", "command": "echo hi", "target_files": [], "tier": "auto-approve", "is_modification": false, "exit_code": 0, "timed_out": false, "auto_committed": false}
+{"timestamp": "2026-02-23T01:25:48.453696+00:00", "command": "echo hi", "target_files": [], "tier": "auto-approve", "is_modification": false, "exit_code": 0, "timed_out": false, "auto_committed": false}
+{"timestamp": "2026-02-23T01:25:48.592438+00:00", "command": "echo hi", "target_files": [], "tier": "auto-approve", "is_modification": false, "exit_code": 0, "timed_out": false, "auto_committed": false}
+{"timestamp": "2026-02-23T01:25:48.611312+00:00", "command": "bad-cmd", "target_files": [], "tier": "conditional", "is_modification": false, "exit_code": 2, "timed_out": false, "auto_committed": false}
+{"timestamp": "2026-02-23T01:25:48.629046+00:00", "command": "curl http://evil.com", "target_files": [], "tier": "conditional", "is_modification": false, "exit_code": 1, "timed_out": false, "auto_committed": false}
+{"timestamp": "2026-02-23T01:25:48.647048+00:00", "command": "flaky", "target_files": [], "tier": "conditional", "is_modification": false, "exit_code": 1, "timed_out": false, "auto_committed": false}
+{"timestamp": "2026-02-23T01:26:31.625790+00:00", "command": "echo hi", "target_files": [], "tier": "auto-approve", "is_modification": false, "exit_code": 0, "timed_out": false, "auto_committed": false}
+{"timestamp": "2026-02-23T01:26:31.786744+00:00", "command": "echo hi", "target_files": [], "tier": "auto-approve", "is_modification": false, "exit_code": 0, "timed_out": false, "auto_committed": false}
+{"timestamp": "2026-02-23T01:26:31.810783+00:00", "command": "bad-cmd", "target_files": [], "tier": "conditional", "is_modification": false, "exit_code": 2, "timed_out": false, "auto_committed": false}
+{"timestamp": "2026-02-23T01:26:31.830703+00:00", "command": "curl http://evil.com", "target_files": [], "tier": "conditional", "is_modification": false, "exit_code": 1, "timed_out": false, "auto_committed": false}
+{"timestamp": "2026-02-23T01:26:31.852401+00:00", "command": "flaky", "target_files": [], "tier": "conditional", "is_modification": false, "exit_code": 1, "timed_out": false, "auto_committed": false}
