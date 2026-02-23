@@ -105,9 +105,14 @@ class Agent:
         self._base_messages: list[dict[str, object]] = []
 
     def _build_system_prompt(self) -> str:
-        agent_md = Path(config.WORKSPACE_ROOT / "AGENT.md")
-        knowledge = agent_md.read_text() if agent_md.exists() else ""
-        return f"You are a self-modifying coding agent.\n\n{knowledge}"
+        return "\n".join(
+            [
+                "You are Blob, a self-modifying coding agent.",
+                "Operate on your repository and use git history to answer questions about recent changes.",
+                "Use bash tools to inspect files and run tests before finishing code changes.",
+                "When asked to remember long-term preferences, save them to AGENT.md.",
+            ]
+        )
 
     def _emit_status(self, message: str) -> None:
         log_activity("status", {"message": message})

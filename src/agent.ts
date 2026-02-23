@@ -89,13 +89,8 @@ const BASE_SYSTEM_PROMPT = [
   "Each sandbox session starts fresh in /workspace — files from previous sessions are not automatically present."
 ].join(" ");
 
-function buildSystemPrompt(knowledge: string, recentSummaries: SessionSummary[]): string {
+function buildSystemPrompt(_knowledge: string, recentSummaries: SessionSummary[]): string {
   let prompt = BASE_SYSTEM_PROMPT;
-
-  const trimmedKnowledge = knowledge.trim();
-  if (trimmedKnowledge) {
-    prompt += `\n\nFollow this AGENT.md knowledge when relevant:\n${trimmedKnowledge}`;
-  }
 
   if (recentSummaries.length > 0) {
     const summariesText = recentSummaries.map((s) => s.summary).join("\n---\n");
