@@ -7,8 +7,8 @@ Usage (from bash via the agent):
     python github_tools.py fork --owner kyleboas --repo some-repo
     python github_tools.py remote-url --owner kyleboas --repo blob
 
-Requires GITHUB_TOKEN in the environment (a classic or fine-grained PAT with
-repo scope for private repos or public_repo for public repos).
+Requires GITHUB_TOKEN (preferred) or GH_TOKEN in the environment (a classic or
+fine-grained PAT with repo scope for private repos or public_repo for public repos).
 """
 
 from __future__ import annotations
@@ -23,9 +23,9 @@ GITHUB_API = "https://api.github.com"
 
 
 def _get_token() -> str:
-    token = os.getenv("GITHUB_TOKEN", "")
+    token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or ""
     if not token:
-        raise RuntimeError("GITHUB_TOKEN environment variable is not set")
+        raise RuntimeError("GITHUB_TOKEN (or GH_TOKEN) environment variable is not set")
     return token
 
 
@@ -98,7 +98,7 @@ def create_pull_request(
 
 
 def authenticated_remote_url(owner: str, repo: str) -> str:
-    """Return a git remote URL that embeds GITHUB_TOKEN for push access.
+    """Return a git remote URL that embeds a GitHub token for push access.
 
     Suitable for use in ``git remote set-url origin <url>`` so that
     ``git push`` authenticates automatically without prompting.

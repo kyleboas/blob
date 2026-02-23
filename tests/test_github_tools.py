@@ -31,8 +31,14 @@ class TestGetToken:
 
     def test_raises_when_missing(self, monkeypatch):
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-        with pytest.raises(RuntimeError, match="GITHUB_TOKEN"):
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        with pytest.raises(RuntimeError, match=r"GITHUB_TOKEN \(or GH_TOKEN\)"):
             github_tools._get_token()
+
+    def test_falls_back_to_gh_token(self, monkeypatch):
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.setenv("GH_TOKEN", "legacy-token")
+        assert github_tools._get_token() == "legacy-token"
 
 
 class TestApiRequest:
@@ -155,5 +161,6 @@ class TestAuthenticatedRemoteUrl:
 
     def test_raises_when_token_missing(self, monkeypatch):
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-        with pytest.raises(RuntimeError, match="GITHUB_TOKEN"):
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        with pytest.raises(RuntimeError, match=r"GITHUB_TOKEN \(or GH_TOKEN\)"):
             github_tools.authenticated_remote_url("kyleboas", "blob")
