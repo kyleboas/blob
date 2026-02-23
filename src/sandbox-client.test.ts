@@ -33,7 +33,9 @@ describe("SandboxClient", () => {
     const result = await client.exec("echo ok");
 
     expect(result).toMatchObject({ stdout: "ok", stderr: "", exitCode: 0, timedOut: false });
-    expect(sandbox.exec).toHaveBeenCalledWith("echo ok");
+    expect(sandbox.exec).toHaveBeenCalledWith(
+      `bash -o pipefail -c ${JSON.stringify(". /root/.blob_env 2>/dev/null; echo ok")}`
+    );
   });
 
   it("returns timeout response for long running command", async () => {

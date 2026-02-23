@@ -149,7 +149,9 @@ export class SandboxClient {
 
     // Wrap with pipefail so that a failing command in a pipeline (e.g. git clone ... | head -20)
     // propagates the non-zero exit code instead of returning head's exit code of 0.
-    const wrappedCommand = `bash -o pipefail -c ${JSON.stringify(command)}`;
+    // Source /root/.blob_env (written during sandbox_start) to make Cloudflare secrets like
+    // GITHUB_TOKEN available to commands running in the non-interactive sandbox shell.
+    const wrappedCommand = `bash -o pipefail -c ${JSON.stringify(`. /root/.blob_env 2>/dev/null; ${command}`)}`;
 
     try {
       const response = await this.withTransientRetry(

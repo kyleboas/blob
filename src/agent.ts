@@ -572,8 +572,16 @@ export class AgentDO {
 
   private async startSandboxSession(sessionId: string): Promise<void> {
     await this.sandbox.warmUp();
+    await this.injectSecretsIntoSandbox();
     await restoreRepoSnapshot(this.env.REPO_STORE, sessionId, this.sandbox);
     await syncKnowledgeToSandbox(this.db, this.sandbox);
+  }
+
+  private async injectSecretsIntoSandbox(): Promise<void> {
+    const token = this.env.GITHUB_TOKEN;
+    if (!token) return;
+    const envContent = `export GITHUB_TOKEN=${JSON.stringify(token)}\n`;
+    await this.sandbox.writeFile("/root/.blob_env", envContent);
   }
 
   private async endSandboxSession(sessionId: string): Promise<void> {
