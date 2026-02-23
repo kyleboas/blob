@@ -556,6 +556,47 @@ describe("AgentDO runAgentLoop", () => {
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Tests passed");
   });
 
+
+
+  it("returns a tool_result block for every tool_use in a single assistant turn", async () => {
+    const sql = new FakeSql();
+    const { env, sandbox } = makeTestEnv();
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: [
+          { type: "tool_use", id: "tool-1", name: "bash", input: { command: "echo one" } },
+          { type: "tool_use", id: "tool-2", name: "bash", input: { command: "echo two" } }
+        ]
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Done" }] });
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runAgentLoop("run two commands", "C1", "thread-multi-tool");
+
+    expect(result.finalText).toBe("Done");
+    expect(sandbox.exec).toHaveBeenNthCalledWith(1, "echo one");
+    expect(sandbox.exec).toHaveBeenNthCalledWith(2, "echo two");
+
+    const secondCall = llmCall.mock.calls[1]?.[0];
+    expect(secondCall.messages).toEqual(
+      expect.arrayContaining([
+        {
+          role: "user",
+          content: [
+            expect.objectContaining({ type: "tool_result", tool_use_id: "tool-1" }),
+            expect.objectContaining({ type: "tool_result", tool_use_id: "tool-2" })
+          ]
+        }
+      ])
+    );
+  });
+
   it("posts a milestone update when a git commit succeeds", async () => {
     const sql = new FakeSql();
     const { env, sandbox } = makeTestEnv();

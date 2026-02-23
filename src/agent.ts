@@ -50,6 +50,7 @@ import {
 import { postApprovalRequest, postMessage } from "./slack";
 import { createApprovalRequest, expireTimedOutApprovals, resolveApprovalReaction, type PendingApproval } from "./approval";
 import type { ConversationMessage, Env, SlackEvent } from "./types";
+import type { ToolResult } from "./types";
 
 interface DurableObjectStateLike {
   waitUntil?: (promise: Promise<unknown>) => void;
@@ -379,15 +380,16 @@ export class AgentDO {
           applySelfModificationRateLimit,
           dynamicTools
         });
+        if (decision.observations.length > 0) {
+          // Tool results are user-role messages in the Anthropic API, not assistant
+          conversation.push({ role: "user", content: decision.observations });
+          saveMessage(this.db, sessionId, { role: "user", content: decision.observations });
+        }
+
         if (decision.done) {
           finalText = decision.text;
           break;
         }
-
-        // Tool results are user-role messages in the Anthropic API, not assistant
-        const toolResult = JSON.parse(decision.observation) as unknown;
-        conversation.push({ role: "user", content: [toolResult] });
-        saveMessage(this.db, sessionId, { role: "user", content: [toolResult] });
 
         llmResponse = await this.traceOperation(
           sessionId,
@@ -447,7 +449,7 @@ export class AgentDO {
       applySelfModificationRateLimit: boolean;
       dynamicTools: Map<string, DynamicToolDefinition>;
     }
-  ): Promise<{ done: boolean; text: string; observation: string }> {
+  ): Promise<{ done: boolean; text: string; observations: ToolResult[] }> {
     const blocks = llmResponse.content as Array<ToolUseBlock | TextBlock>;
     const toolBlock = blocks.find((block) => block.type === "tool_use") as ToolUseBlock | undefined;
     if (!toolBlock) {
@@ -457,110 +459,121 @@ export class AgentDO {
         .join("\n")
         .trim();
 
-      return { done: true, text: text || "Done.", observation: "" };
+      return { done: true, text: text || "Done.", observations: [] };
     }
 
-    if (toolBlock.name === CREATE_TOOL_TOOL.name) {
-      const validation = validateDynamicToolDefinition(toolBlock.input);
-      const toolResult = validation.ok
-        ? (() => {
-            options.dynamicTools.set(validation.definition.name, validation.definition);
-            return `Created tool \"${validation.definition.name}\" with args: ${validation.definition.args.join(", ") || "(none)"}.`;
-          })()
-        : `Tool creation failed: ${validation.reason}`;
+    const observations: ToolResult[] = [];
+    let done = false;
+    let doneText = "";
 
-      return {
-        done: false,
-        text: "",
-        observation: JSON.stringify(formatToolResult(toolBlock.id, toolResult))
-      };
+    const toolBlocks = blocks.filter((block): block is ToolUseBlock => block.type === "tool_use");
+    for (let i = 0; i < toolBlocks.length; i++) {
+      const toolBlock = toolBlocks[i];
+
+      if (done) {
+        observations.push(formatToolResult(toolBlock.id, "Skipped: agent execution already paused."));
+        continue;
+      }
+
+      if (toolBlock.name === CREATE_TOOL_TOOL.name) {
+        const validation = validateDynamicToolDefinition(toolBlock.input);
+        const toolResult = validation.ok
+          ? (() => {
+              options.dynamicTools.set(validation.definition.name, validation.definition);
+              return `Created tool \"${validation.definition.name}\" with args: ${validation.definition.args.join(", ") || "(none)"}.`;
+            })()
+          : `Tool creation failed: ${validation.reason}`;
+
+        observations.push(formatToolResult(toolBlock.id, toolResult));
+        continue;
+      }
+
+      const dynamicTool = options.dynamicTools.get(toolBlock.name);
+      const commandResult = dynamicTool
+        ? compileDynamicToolCommand(dynamicTool, toolBlock.input)
+        : { ok: true as const, command: String(toolBlock.input.command ?? "") };
+
+      if (!commandResult.ok) {
+        observations.push(formatToolResult(toolBlock.id, `Tool execution failed: ${commandResult.reason}`));
+        continue;
+      }
+
+      const command = commandResult.command;
+      logAgentEvent(this.db, sessionId, "command", command);
+      this.forwardToGlobalLogs("command", `[#${channel}] ${command}`);
+      const safety = enforceSafety(command, this.db, sessionId, [], {
+        applySelfModificationRateLimit: options.applySelfModificationRateLimit
+      });
+
+      if (!safety.allowed && safety.requiresApproval) {
+        await createApprovalRequest(
+          this.pendingApprovals,
+          {
+            sessionId,
+            command,
+            channel
+          },
+          this.deps,
+          this.env.SLACK_BOT_TOKEN,
+          this.ctx.storage
+        );
+        observations.push(formatToolResult(toolBlock.id, "Paused pending approval."));
+        done = true;
+        doneText = "Paused pending approval.";
+        continue;
+      }
+
+      if (!safety.allowed) {
+        const blockedReason = safety.reason ?? "Blocked by safety policy.";
+        observations.push(formatToolResult(toolBlock.id, blockedReason));
+        done = true;
+        doneText = blockedReason;
+        continue;
+      }
+
+      if (options.applySelfModificationRateLimit && isSelfModificationCommand(command)) {
+        incrementRateLimit(this.db, "session", sessionId);
+        const todayKey = new Date().toISOString().slice(0, 10);
+        incrementRateLimit(this.db, "day", todayKey);
+      }
+      const result = await this.traceOperation(sessionId, "command_exec", () => this.executeWithGitSafety(command), channel);
+      if (result.stdout.trim()) {
+        const stdoutMessage = result.stdout.length > 4000 ? `${result.stdout.slice(0, 4000)}\n...[truncated]` : result.stdout;
+        logAgentEvent(this.db, sessionId, "command_output", stdoutMessage);
+        this.forwardToGlobalLogs("command_output", `[#${channel}] ${stdoutMessage}`);
+      }
+
+      if (result.stderr.trim()) {
+        const stderrMessage = result.stderr.length > 4000 ? `${result.stderr.slice(0, 4000)}\n...[truncated]` : result.stderr;
+        logAgentEvent(this.db, sessionId, "command_error", stderrMessage);
+        this.forwardToGlobalLogs("command_error", `[#${channel}] ${stderrMessage}`);
+      }
+
+      const exitSummary = `Command finished with exit code ${result.exitCode}.`;
+      const exitEventType = result.exitCode === 0 ? "command_success" : "command_failure";
+      logAgentEvent(this.db, sessionId, exitEventType, exitSummary);
+      this.forwardToGlobalLogs(exitEventType, `[#${channel}] ${exitSummary}`);
+
+      if (result.exitCode === 0 && isCloudflareApplyCommand(command)) {
+        await this.deps.postSlackMessage(
+          this.env.SLACK_BOT_TOKEN,
+          channel,
+          "✅ Cloudflare update applied successfully. Your latest changes should now be effective."
+        );
+      }
+
+      const milestone = detectMilestone(command, result.exitCode, result.stdout);
+      if (milestone) {
+        await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, milestone.message);
+      }
+
+      observations.push(formatToolResult(toolBlock.id, [result.stdout, result.stderr].filter(Boolean).join("\n")));
     }
-
-    const dynamicTool = options.dynamicTools.get(toolBlock.name);
-    const commandResult = dynamicTool
-      ? compileDynamicToolCommand(dynamicTool, toolBlock.input)
-      : { ok: true as const, command: String(toolBlock.input.command ?? "") };
-
-    if (!commandResult.ok) {
-      return {
-        done: false,
-        text: "",
-        observation: JSON.stringify(formatToolResult(toolBlock.id, `Tool execution failed: ${commandResult.reason}`))
-      };
-    }
-
-    const command = commandResult.command;
-    logAgentEvent(this.db, sessionId, "command", command);
-    this.forwardToGlobalLogs("command", `[#${channel}] ${command}`);
-    const safety = enforceSafety(command, this.db, sessionId, [], {
-      applySelfModificationRateLimit: options.applySelfModificationRateLimit
-    });
-
-    if (!safety.allowed && safety.requiresApproval) {
-      await createApprovalRequest(
-        this.pendingApprovals,
-        {
-          sessionId,
-          command,
-          channel
-        },
-        this.deps,
-        this.env.SLACK_BOT_TOKEN,
-        this.ctx.storage
-      );
-      return {
-        done: true,
-        text: "Paused pending approval.",
-        observation: ""
-      };
-    }
-
-    if (!safety.allowed) {
-      return { done: true, text: safety.reason ?? "Blocked by safety policy.", observation: "" };
-    }
-
-    if (options.applySelfModificationRateLimit && isSelfModificationCommand(command)) {
-      incrementRateLimit(this.db, "session", sessionId);
-      const todayKey = new Date().toISOString().slice(0, 10);
-      incrementRateLimit(this.db, "day", todayKey);
-    }
-    const result = await this.traceOperation(sessionId, "command_exec", () => this.executeWithGitSafety(command), channel);
-    if (result.stdout.trim()) {
-      const stdoutMessage = result.stdout.length > 4000 ? `${result.stdout.slice(0, 4000)}\n...[truncated]` : result.stdout;
-      logAgentEvent(this.db, sessionId, "command_output", stdoutMessage);
-      this.forwardToGlobalLogs("command_output", `[#${channel}] ${stdoutMessage}`);
-    }
-
-    if (result.stderr.trim()) {
-      const stderrMessage = result.stderr.length > 4000 ? `${result.stderr.slice(0, 4000)}\n...[truncated]` : result.stderr;
-      logAgentEvent(this.db, sessionId, "command_error", stderrMessage);
-      this.forwardToGlobalLogs("command_error", `[#${channel}] ${stderrMessage}`);
-    }
-
-    const exitSummary = `Command finished with exit code ${result.exitCode}.`;
-    const exitEventType = result.exitCode === 0 ? "command_success" : "command_failure";
-    logAgentEvent(this.db, sessionId, exitEventType, exitSummary);
-    this.forwardToGlobalLogs(exitEventType, `[#${channel}] ${exitSummary}`);
-
-    if (result.exitCode === 0 && isCloudflareApplyCommand(command)) {
-      await this.deps.postSlackMessage(
-        this.env.SLACK_BOT_TOKEN,
-        channel,
-        "✅ Cloudflare update applied successfully. Your latest changes should now be effective."
-      );
-    }
-
-    const milestone = detectMilestone(command, result.exitCode, result.stdout);
-    if (milestone) {
-      await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, milestone.message);
-    }
-
-    const formatted = formatToolResult(toolBlock.id, [result.stdout, result.stderr].filter(Boolean).join("\n"));
 
     return {
-      done: false,
-      text: "",
-      observation: JSON.stringify(formatted)
+      done,
+      text: doneText,
+      observations
     };
   }
 
