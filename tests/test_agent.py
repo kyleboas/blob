@@ -64,6 +64,43 @@ def test_tool_dispatch_and_on_status_callback() -> None:
     assert statuses
 
 
+def test_multiple_tool_uses_are_returned_in_one_tool_result_message() -> None:
+    llm = MockLLM(
+        [
+            LLMResponse(
+                content=[
+                    {"type": "tool_use", "id": "tool1", "input": {"command": "echo one"}},
+                    {"type": "tool_use", "id": "tool2", "input": {"command": "echo two"}},
+                ],
+                stop_reason="tool_use",
+                usage=LLMUsage(1, 1),
+            ),
+            LLMResponse(content=[{"type": "text", "text": "ok"}], stop_reason="end_turn", usage=LLMUsage(1, 1)),
+        ]
+    )
+    sandbox = DummySandbox()
+    agent = Agent(llm_client=llm, sandbox=sandbox, approval_gate=DummyApproval())
+
+    captured_messages: list[list[dict]] = []
+
+    def capture(model: str, system: str, messages: list[dict], tools: list[dict] | None = None) -> LLMResponse:
+        captured_messages.append([dict(item) for item in messages])
+        return llm.responses.pop(0)
+
+    llm.create_message = capture
+
+    result = agent.run_task("run two commands")
+
+    assert result == "ok"
+    assert len(captured_messages) == 2
+    second_call_messages = captured_messages[1]
+    assert second_call_messages[-1]["role"] == "user"
+    assert second_call_messages[-1]["content"] == [
+        {"type": "tool_result", "tool_use_id": "tool1", "content": [{"type": "text", "text": "exit=0\nstdout:\nran\nstderr:\n"}]},
+        {"type": "tool_result", "tool_use_id": "tool2", "content": [{"type": "text", "text": "exit=0\nstdout:\nran\nstderr:\n"}]},
+    ]
+
+
 def test_parse_github_repo() -> None:
     assert _parse_github_repo("git@github.com:octo/example.git") == "octo/example"
     assert _parse_github_repo("https://github.com/octo/example.git") == "octo/example"
