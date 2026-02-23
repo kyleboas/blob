@@ -147,9 +147,13 @@ export class SandboxClient {
       };
     }
 
+    // Wrap with pipefail so that a failing command in a pipeline (e.g. git clone ... | head -20)
+    // propagates the non-zero exit code instead of returning head's exit code of 0.
+    const wrappedCommand = `bash -o pipefail -c ${JSON.stringify(command)}`;
+
     try {
       const response = await this.withTransientRetry(
-        () => withTimeout(this.sandbox.exec(command), timeoutSeconds * 1000)
+        () => withTimeout(this.sandbox.exec(wrappedCommand), timeoutSeconds * 1000)
       );
       return {
         stdout: truncateOutput(response.stdout ?? "", this.maxOutputChars),
@@ -173,7 +177,7 @@ export class SandboxClient {
       if (this.isContainerExitError(error)) {
         try {
           await this.warmUp();
-          const response = await withTimeout(this.sandbox.exec(command), timeoutSeconds * 1000);
+          const response = await withTimeout(this.sandbox.exec(wrappedCommand), timeoutSeconds * 1000);
           return {
             stdout: truncateOutput(response.stdout ?? "", this.maxOutputChars),
             stderr: truncateOutput(response.stderr ?? "", this.maxOutputChars),

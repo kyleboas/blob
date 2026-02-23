@@ -240,11 +240,12 @@ export function compactMessagesInDB(
 ): void {
   sql.exec(`DELETE FROM conversation_messages WHERE thread_id = ?`, sessionId);
   for (const msg of compactedMessages) {
+    const content = Array.isArray(msg.content) ? JSON.stringify(msg.content) : msg.content;
     sql.exec(
       `INSERT INTO conversation_messages (thread_id, role, content) VALUES (?, ?, ?)`,
       sessionId,
       msg.role,
-      msg.content
+      content
     );
   }
 }
@@ -256,11 +257,12 @@ export interface AgentEvent {
 }
 
 export function saveMessage(sql: SqlStorage, threadId: string, msg: ConversationMessage): void {
+  const content = Array.isArray(msg.content) ? JSON.stringify(msg.content) : msg.content;
   sql.exec(
     `INSERT INTO conversation_messages (thread_id, role, content) VALUES (?, ?, ?)`,
     threadId,
     msg.role,
-    msg.content
+    content
   );
 }
 
@@ -275,10 +277,22 @@ export function getHistory(sql: SqlStorage, threadId: string): ConversationMessa
     )
     .toArray();
 
-  return rows.map((row) => ({
-    role: String(row.role) as ConversationMessage["role"],
-    content: String(row.content)
-  }));
+  return rows.map((row) => {
+    const raw = String(row.content);
+    let content: string | unknown[] = raw;
+    if (raw.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(raw) as unknown;
+        if (Array.isArray(parsed)) content = parsed;
+      } catch {
+        // Not a JSON array — treat as a plain string
+      }
+    }
+    return {
+      role: String(row.role) as ConversationMessage["role"],
+      content
+    };
+  });
 }
 
 export function incrementRateLimit(sql: SqlStorage, scope: string, key: string): number {
