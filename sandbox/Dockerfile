@@ -1,4 +1,4 @@
-FROM docker.io/cloudflare/sandbox:0.1.0
+FROM docker.io/cloudflare/sandbox:0.1.4
 
 ENV DEBIAN_FRONTEND=noninteractive
 
