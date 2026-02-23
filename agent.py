@@ -372,6 +372,7 @@ class Agent:
                         result_text = "Blocked: approval denied or timed out."
                     else:
                         execution = self._execute_with_retry(command)
+                        committed = False
                         if is_modification:
                             self.rate_limiter.record_modification()
                             commit_message = f"agent: apply `{command[:80]}`"
@@ -379,16 +380,18 @@ class Agent:
                                 committed = git_auto_commit(commit_message)
                             except subprocess.CalledProcessError:
                                 committed = False
-                            append_audit_log(
-                                config.TOOL_AUDIT_LOG,
-                                {
-                                    "command": command,
-                                    "target_files": target_files,
-                                    "tier": tier,
-                                    "exit_code": execution.exit_code,
-                                    "auto_committed": committed,
-                                },
-                            )
+                        append_audit_log(
+                            config.TOOL_AUDIT_LOG,
+                            {
+                                "command": command,
+                                "target_files": target_files,
+                                "tier": tier,
+                                "is_modification": is_modification,
+                                "exit_code": execution.exit_code,
+                                "timed_out": execution.timed_out,
+                                "auto_committed": committed,
+                            },
+                        )
                         result_text = f"exit={execution.exit_code}\nstdout:\n{execution.stdout}\nstderr:\n{execution.stderr}"
 
                 messages.append(
