@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { SELF_MODIFY_LIMIT_DAY, SELF_MODIFY_LIMIT_SESSION } from "./config";
-import { checkConstitution, checkRateLimit, classifyCommand, enforceSafety } from "./safety";
+import {
+  checkConstitution,
+  checkRateLimit,
+  classifyCommand,
+  enforceSafety,
+  isSelfModificationCommand
+} from "./safety";
 import { incrementRateLimit, type SqlStorage } from "./storage";
 
 class FakeSql implements SqlStorage {
@@ -69,6 +75,18 @@ describe("classifyCommand", () => {
   });
 });
 
+
+
+describe("isSelfModificationCommand", () => {
+  it("returns false for read-only commands", () => {
+    expect(isSelfModificationCommand("cat README.md")).toBe(false);
+  });
+
+  it("returns true for source-modifying commands", () => {
+    expect(isSelfModificationCommand("sed -i 's/a/b/' src/agent.ts")).toBe(true);
+  });
+});
+
 describe("checkConstitution", () => {
   it("detects protected files", () => {
     const violations = checkConstitution("sed -i 's/x/y/' safety.py", ["safety.py", "README.md"]);
@@ -87,6 +105,29 @@ describe("enforceSafety", () => {
     const sql = new FakeSql();
     const decision = enforceSafety("git commit -m 'update'", sql, "session-2", ["src/index.ts"]);
     expect(decision).toEqual({ allowed: true, requiresApproval: true });
+  });
+
+
+
+  it("does not apply self-modification limits to non-modifying commands", () => {
+    const sql = new FakeSql();
+    for (let i = 0; i < SELF_MODIFY_LIMIT_SESSION; i += 1) {
+      incrementRateLimit(sql, "session", "session-4");
+    }
+
+    const decision = enforceSafety("cat README.md", sql, "session-4", ["README.md"]);
+    expect(decision).toEqual({ allowed: true, requiresApproval: false });
+  });
+
+  it("applies self-modification limits only to modifying commands", () => {
+    const sql = new FakeSql();
+    for (let i = 0; i < SELF_MODIFY_LIMIT_SESSION; i += 1) {
+      incrementRateLimit(sql, "session", "session-5");
+    }
+
+    const decision = enforceSafety("sed -i 's/a/b/' src/safety.ts", sql, "session-5", ["src/safety.ts"]);
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("Session");
   });
 
   it("blocks protected file modifications", () => {
