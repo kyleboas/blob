@@ -12,7 +12,7 @@ export type ConversationRole = "user" | "assistant";
 
 export interface ConversationMessage {
   role: ConversationRole;
-  content: string;
+  content: string | unknown[];
 }
 
 export interface ToolCall {

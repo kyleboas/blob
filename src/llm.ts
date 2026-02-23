@@ -2,7 +2,7 @@ import { LLM_OVERLOAD_RETRY_BASE_MS, LLM_OVERLOAD_RETRY_MAX, MODEL_COMPLEX, MODE
 
 export interface AnthropicMessage {
   role: "user" | "assistant";
-  content: string;
+  content: string | unknown[];
 }
 
 export interface CallLLMInput {
@@ -40,9 +40,10 @@ export function selectModel(systemPrompt: string, messages: AnthropicMessage[], 
     return MODEL_COMPLEX;
   }
 
-  const containsComplexToolIntent = messages.some((msg) =>
-    /tool|bash|run command|test suite|migration/i.test(msg.content) && /complex|large|deep/i.test(msg.content)
-  );
+  const containsComplexToolIntent = messages.some((msg) => {
+    const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+    return /tool|bash|run command|test suite|migration/i.test(content) && /complex|large|deep/i.test(content);
+  });
 
   return containsComplexToolIntent ? MODEL_COMPLEX : MODEL_ROUTINE;
 }

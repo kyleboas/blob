@@ -83,7 +83,10 @@ const SLOW_OPERATION_WARN_MS = 15_000;
 
 const BASE_SYSTEM_PROMPT = [
   "You are Blob, a careful coding agent.",
-  "Use tools when needed."
+  "Use tools when needed.",
+  "The sandbox working directory is /workspace.",
+  "Always use absolute paths (e.g. /workspace/repo) rather than bare directory names when referencing cloned repos.",
+  "Each sandbox session starts fresh in /workspace — files from previous sessions are not automatically present."
 ].join(" ");
 
 function buildSystemPrompt(knowledge: string, recentSummaries: SessionSummary[]): string {
@@ -355,14 +358,20 @@ export class AgentDO {
           logAgentEvent(this.db, sessionId, "session", "Sandbox session started.");
         }
 
+        // Save the assistant's LLM response (including tool_use blocks) before execution
+        conversation.push({ role: "assistant", content: llmResponse.content });
+        saveMessage(this.db, sessionId, { role: "assistant", content: llmResponse.content });
+
         const decision = await this.processLlmResponse(llmResponse, channel, sessionId);
         if (decision.done) {
           finalText = decision.text;
           break;
         }
 
-        conversation.push({ role: "assistant", content: decision.observation });
-        saveMessage(this.db, sessionId, { role: "assistant", content: decision.observation });
+        // Tool results are user-role messages in the Anthropic API, not assistant
+        const toolResult = JSON.parse(decision.observation) as unknown;
+        conversation.push({ role: "user", content: [toolResult] });
+        saveMessage(this.db, sessionId, { role: "user", content: [toolResult] });
 
         llmResponse = await this.traceOperation(
           sessionId,
@@ -587,7 +596,10 @@ export class AgentDO {
     if (messages.length === 0) return;
 
     const history = messages
-      .map((m) => `${m.role === "user" ? "User" : "Blob"}: ${m.content}`)
+      .map((m) => {
+        const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+        return `${m.role === "user" ? "User" : "Blob"}: ${content}`;
+      })
       .join("\n\n");
 
     const currentKnowledge = getKnowledge(this.db);
@@ -657,7 +669,10 @@ export class AgentDO {
   ): Promise<ConversationMessage[]> {
     const KEEP_RECENT = 6;
     const estimatedTokens = conversation.reduce(
-      (sum, m) => sum + Math.ceil(m.content.length / 4),
+      (sum, m) => {
+        const len = typeof m.content === "string" ? m.content.length : JSON.stringify(m.content).length;
+        return sum + Math.ceil(len / 4);
+      },
       0
     );
 
@@ -669,7 +684,10 @@ export class AgentDO {
     const toKeep = conversation.slice(-KEEP_RECENT);
 
     const history = toCompact
-      .map((m) => `${m.role === "user" ? "User" : "Blob"}: ${m.content}`)
+      .map((m) => {
+        const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+        return `${m.role === "user" ? "User" : "Blob"}: ${content}`;
+      })
       .join("\n\n");
 
     const response = await this.deps.llmCall({
