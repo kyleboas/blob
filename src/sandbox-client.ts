@@ -4,7 +4,7 @@ const DEFAULT_MAX_OUTPUT_CHARS = 10_000;
 const TRANSIENT_SANDBOX_MAX_ATTEMPTS = 5;
 const TRANSIENT_SANDBOX_RETRY_DELAY_MS = 2_000;
 const WARM_UP_MAX_ATTEMPTS = 10;
-const WARM_UP_RETRY_DELAY_MS = 5_000;
+export const WARM_UP_RETRY_DELAY_MS = 5_000;
 const WARM_UP_TIMEOUT_MS = 90_000;
 
 export interface SandboxExecResponse {
@@ -81,7 +81,8 @@ export class SandboxClient {
   constructor(
     private readonly sandbox: SandboxBinding,
     private readonly maxOutputChars = DEFAULT_MAX_OUTPUT_CHARS,
-    private readonly retryDelayMs = TRANSIENT_SANDBOX_RETRY_DELAY_MS
+    private readonly retryDelayMs = TRANSIENT_SANDBOX_RETRY_DELAY_MS,
+    private readonly warmUpRetryDelayMs = WARM_UP_RETRY_DELAY_MS
   ) {}
 
   private isTransientSandboxError(error: unknown): boolean {
@@ -95,6 +96,20 @@ export class SandboxClient {
       || message.includes("durable object is overloaded")
       || message.includes("durable object request failed")
       || (message.includes("http error") && message.includes("500"));
+  }
+
+  // Detects errors caused by the sandbox container exiting (code 0 or otherwise)
+  // and becoming temporarily unavailable during a restart. These require a full
+  // warm-up cycle rather than the shorter transient retry budget.
+  private isContainerExitError(error: unknown): boolean {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+
+    const message = error.message.toLowerCase();
+    return message.includes("container exited")
+      || message.includes("container has exited")
+      || (message.includes("http error") && (message.includes("502") || message.includes("503")));
   }
 
   private async sleep(delayMs: number): Promise<void> {
@@ -152,6 +167,25 @@ export class SandboxClient {
         };
       }
 
+      // Container exited mid-session (e.g. code: 0 idle shutdown). Warm it
+      // back up and retry the command once so the agent loop can continue
+      // rather than returning a spurious error to the LLM.
+      if (this.isContainerExitError(error)) {
+        try {
+          await this.warmUp();
+          const response = await withTimeout(this.sandbox.exec(command), timeoutSeconds * 1000);
+          return {
+            stdout: truncateOutput(response.stdout ?? "", this.maxOutputChars),
+            stderr: truncateOutput(response.stderr ?? "", this.maxOutputChars),
+            exitCode: response.exitCode ?? 0,
+            timedOut: false
+          };
+        } catch {
+          // Warm-up or the post-restart retry failed; fall through to the
+          // error result below so the LLM receives a clear error message.
+        }
+      }
+
       return {
         stdout: "",
         stderr: error instanceof Error ? error.message : "Sandbox execution failed",
@@ -166,6 +200,7 @@ export class SandboxClient {
   // to handle the cold-start window where the container returns HTTP 500.
   // Uses writeFile (not exec) as the probe because exec and the file-system
   // layer can initialise independently; we must confirm file I/O is ready.
+  // Also retries when the container has exited and is restarting (code: 0).
   async warmUp(): Promise<void> {
     let lastError: unknown;
 
@@ -176,11 +211,11 @@ export class SandboxClient {
       } catch (error) {
         lastError = error;
         const isTimeout = error instanceof Error && error.message.includes("timed out");
-        const isTransient = this.isTransientSandboxError(error) || isTimeout;
+        const isTransient = this.isTransientSandboxError(error) || this.isContainerExitError(error) || isTimeout;
         if (!isTransient || attempt >= WARM_UP_MAX_ATTEMPTS) {
           throw error;
         }
-        await this.sleep(WARM_UP_RETRY_DELAY_MS);
+        await this.sleep(this.warmUpRetryDelayMs);
       }
     }
 
