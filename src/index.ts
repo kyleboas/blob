@@ -49,7 +49,8 @@ function renderLiveLogPage(): string {
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
     #status { color: #94a3b8; margin-bottom: 0.75rem; font-size: 0.85rem; }
     #status.error { color: #f87171; }
-    #log { white-space: pre-wrap; background: #020617; border: 1px solid #1e293b; border-radius: 8px; padding: 1rem; min-height: 300px; max-height: calc(100vh - 120px); overflow-y: auto; margin: 0; }
+    #log { white-space: pre-wrap; background: #020617; border: 1px solid #1e293b; border-radius: 8px; padding: 1rem; min-height: 300px; max-height: calc(100vh - 120px); overflow-y: auto; margin: 0; user-select: text; cursor: text; }
+    #log span { user-select: text; }
     .line-task_received { color: #60a5fa; }
     .line-command { color: #e2e8f0; }
     .line-command_success { color: #4ade80; }
@@ -60,17 +61,36 @@ function renderLiveLogPage(): string {
     .line-message { color: #fbbf24; }
     .line-thinking, .line-session { color: #94a3b8; }
     .empty { color: #475569; font-style: italic; }
+    #copy-btn { margin-left: auto; font-family: inherit; font-size: 0.8rem; background: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 4px; padding: 0.25rem 0.6rem; cursor: pointer; }
+    #copy-btn:hover { background: #334155; color: #e2e8f0; }
+    #copy-btn.copied { color: #4ade80; border-color: #4ade80; }
   </style>
 </head>
 <body>
-  <h1><span id="live-dot"></span>Blob Live Logs</h1>
+  <h1><span id="live-dot"></span>Blob Live Logs<button id="copy-btn" title="Copy all log text">Copy all</button></h1>
   <div id="status">Connecting...</div>
   <pre id="log"><span class="empty">Waiting for events...</span></pre>
   <script>
     const logNode = document.getElementById('log');
     const statusNode = document.getElementById('status');
     const dotNode = document.getElementById('live-dot');
+    const copyBtn = document.getElementById('copy-btn');
     let lastSnapshotSig = '';
+
+    copyBtn.addEventListener('click', () => {
+      const text = logNode.innerText;
+      navigator.clipboard.writeText(text).then(() => {
+        copyBtn.textContent = 'Copied!';
+        copyBtn.className = 'copied';
+        setTimeout(() => { copyBtn.textContent = 'Copy all'; copyBtn.className = ''; }, 2000);
+      }).catch(() => {
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(logNode);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      });
+    });
 
     function renderEvents(events) {
       if (events.length === 0) {
