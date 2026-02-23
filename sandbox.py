@@ -12,6 +12,7 @@ from typing import Protocol
 from urllib.parse import urlparse
 
 import config
+from safety import log_activity
 
 URL_PATTERN = re.compile(r"https?://[^\s'\"]+")
 PRIVATE_HOST_PATTERNS = {
@@ -104,7 +105,9 @@ class FlySpriteSandbox:
         return any(fnmatch(host, pattern) for pattern in self.allowlist)
 
     def execute(self, command: str, timeout: int = config.COMMAND_TIMEOUT) -> ExecutionResult:
+        log_activity("sandbox_execute_start", {"command": command, "timeout": timeout})
         if not is_command_safe(command, self.allowlist):
+            log_activity("sandbox_execute_rejected", {"command": command, "reason": "sandbox_policy"})
             return ExecutionResult(
                 stdout="",
                 stderr="Command rejected by sandbox policy",
@@ -116,6 +119,7 @@ class FlySpriteSandbox:
             memory_bytes = self.memory_limit_mb * 1024 * 1024
             resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
 
+        result: ExecutionResult | None = None
         try:
             completed = subprocess.run(
                 command,
@@ -126,16 +130,29 @@ class FlySpriteSandbox:
                 timeout=timeout,
                 preexec_fn=_apply_limits,
             )
-            return ExecutionResult(
+            result = ExecutionResult(
                 stdout=truncate_output(completed.stdout, self.max_output_chars),
                 stderr=truncate_output(completed.stderr, self.max_output_chars),
                 exit_code=completed.returncode,
                 timed_out=False,
             )
+            return result
         except subprocess.TimeoutExpired as exc:
-            return ExecutionResult(
+            log_activity("sandbox_execute_timeout", {"command": command, "timeout": timeout})
+            result = ExecutionResult(
                 stdout=truncate_output(exc.stdout or "", self.max_output_chars),
                 stderr=truncate_output(exc.stderr or "", self.max_output_chars),
                 exit_code=124,
                 timed_out=True,
+            )
+            return result
+        finally:
+            # Best-effort terminal marker for execution lifecycle.
+            log_activity(
+                "sandbox_execute_end",
+                {
+                    "command": command,
+                    "exit_code": result.exit_code if result else None,
+                    "timed_out": result.timed_out if result else None,
+                },
             )

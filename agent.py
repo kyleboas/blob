@@ -25,6 +25,7 @@ from safety import (
     git_checkpoint,
     git_history,
     git_revert_to_checkpoint,
+    log_activity,
 )
 from sandbox import SandboxExecutor
 from tools import BASH_TOOL, MAKE_PR_TOOL, PUSH_BRANCH_TOOL, format_tool_result
@@ -109,6 +110,7 @@ class Agent:
         return f"You are a self-modifying coding agent.\n\n{knowledge}"
 
     def _emit_status(self, message: str) -> None:
+        log_activity("status", {"message": message})
         if self.on_status:
             self.on_status(message)
 
@@ -119,6 +121,16 @@ class Agent:
         return config.MODEL_ROUTING["routine"]
 
     def _record_llm_usage(self, task: str, model: str, input_tokens: int, output_tokens: int) -> None:
+        log_activity(
+            "llm_usage",
+            {
+                "task": task[:120],
+                "model": model,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": input_tokens + output_tokens,
+            },
+        )
         append_audit_log(
             config.LLM_TELEMETRY_LOG,
             {
@@ -281,6 +293,7 @@ class Agent:
         return f"ok: opened PR #{pr_number} {pr_url}"
 
     def run_task(self, task: str, extra_context: str = "") -> str:
+        log_activity("task_start", {"task": task[:400], "has_extra_context": bool(extra_context)})
         messages = list(self._base_messages)
         auto_docs: list[str] = []
         for url in _extract_urls(task):
@@ -340,6 +353,7 @@ class Agent:
                         result_text = "Blocked: approval denied or timed out."
                     else:
                         result_text = self._push_branch_to_remote(tool_use.get("input", {}))
+                    log_activity("tool_result", {"tool": tool_name, "result": result_text[:500]})
                     messages.append(
                         {
                             "role": "user",
@@ -355,6 +369,7 @@ class Agent:
                         result_text = "Blocked: approval denied or timed out."
                     else:
                         result_text = self._create_github_pr(tool_use.get("input", {}))
+                    log_activity("tool_result", {"tool": tool_name, "result": result_text[:500]})
                     messages.append(
                         {
                             "role": "user",
@@ -390,6 +405,15 @@ class Agent:
                                 },
                             )
                         result_text = f"exit={execution.exit_code}\nstdout:\n{execution.stdout}\nstderr:\n{execution.stderr}"
+                log_activity(
+                    "tool_result",
+                    {
+                        "tool": tool_name,
+                        "command": command,
+                        "is_modification": is_modification,
+                        "result_preview": result_text[:500],
+                    },
+                )
 
                 messages.append(
                     {
@@ -399,6 +423,7 @@ class Agent:
                 )
 
         self._reset_conversation()
+        log_activity("task_end", {"task": task[:400], "result_preview": (final_text or "")[:500]})
         return final_text or ""
 
     def _load_task_queue(self, tasks_path: Path) -> list[dict[str, str]]:
