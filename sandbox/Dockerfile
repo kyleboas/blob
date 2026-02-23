@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM docker.io/cloudflare/sandbox:0.1.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 
