@@ -8,7 +8,7 @@ import {
   BACKGROUND_TASK_INTERVAL_MS
 } from "./config";
 import { callLLM, type LLMResponse } from "./llm";
-import { enforceSafety } from "./safety";
+import { enforceSafety, isSelfModificationCommand } from "./safety";
 import { SandboxClient, type SandboxBinding } from "./sandbox-client";
 import {
   compactMessagesInDB,
@@ -459,7 +459,11 @@ export class AgentDO {
       return { done: true, text: safety.reason ?? "Blocked by safety policy.", observation: "" };
     }
 
-    incrementRateLimit(this.db, "session", sessionId);
+    if (isSelfModificationCommand(command)) {
+      incrementRateLimit(this.db, "session", sessionId);
+      const todayKey = new Date().toISOString().slice(0, 10);
+      incrementRateLimit(this.db, "day", todayKey);
+    }
     const result = await this.traceOperation(sessionId, "command_exec", () => this.executeWithGitSafety(command), channel);
     if (result.stdout.trim()) {
       const stdoutMessage = result.stdout.length > 4000 ? `${result.stdout.slice(0, 4000)}\n...[truncated]` : result.stdout;
