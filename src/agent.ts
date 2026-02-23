@@ -38,7 +38,15 @@ import {
   type SessionSummary,
   type SqlStorage
 } from "./storage";
-import { BASH_TOOL, formatToolResult } from "./tools";
+import {
+  BASH_TOOL,
+  CREATE_TOOL_TOOL,
+  compileDynamicToolCommand,
+  dynamicToolToAnthropicSchema,
+  formatToolResult,
+  type DynamicToolDefinition,
+  validateDynamicToolDefinition
+} from "./tools";
 import { postApprovalRequest, postMessage } from "./slack";
 import { createApprovalRequest, expireTimedOutApprovals, resolveApprovalReaction, type PendingApproval } from "./approval";
 import type { ConversationMessage, Env, SlackEvent } from "./types";
@@ -55,7 +63,7 @@ interface ToolUseBlock {
   type: "tool_use";
   id: string;
   name: string;
-  input: { command?: string };
+  input: Record<string, unknown>;
 }
 
 interface TextBlock {
@@ -86,7 +94,8 @@ const BASE_SYSTEM_PROMPT = [
   "Use tools when needed.",
   "The sandbox working directory is /workspace.",
   "Always use absolute paths (e.g. /workspace/repo) rather than bare directory names when referencing cloned repos.",
-  "Each sandbox session starts fresh in /workspace — files from previous sessions are not automatically present."
+  "Each sandbox session starts fresh in /workspace — files from previous sessions are not automatically present.",
+  "If a workflow repeats, use create_tool to define a reusable tool and then call it directly in later steps."
 ].join(" ");
 
 function buildSystemPrompt(_knowledge: string, recentSummaries: SessionSummary[]): string {
@@ -313,6 +322,7 @@ export class AgentDO {
     void syncKnowledgeFromSandbox(this.db, this.sandbox);
     const summaries = getRecentSessionSummaries(this.db, SESSION_SUMMARY_RECENT_COUNT);
     const systemPrompt = buildSystemPrompt(getKnowledge(this.db), summaries);
+    const dynamicTools = new Map<string, DynamicToolDefinition>();
 
     let thinkingTimer: ReturnType<typeof setTimeout> | undefined;
     let thinkingMessagePromise: Promise<void> | null = null;
@@ -329,7 +339,7 @@ export class AgentDO {
         apiKey: this.env.ANTHROPIC_API_KEY,
         systemPrompt,
         messages: conversation,
-        tools: [BASH_TOOL]
+        tools: this.buildToolList(dynamicTools)
       }),
       channel
     );
@@ -366,7 +376,8 @@ export class AgentDO {
         saveMessage(this.db, sessionId, { role: "assistant", content: llmResponse.content });
 
         const decision = await this.processLlmResponse(llmResponse, channel, sessionId, {
-          applySelfModificationRateLimit
+          applySelfModificationRateLimit,
+          dynamicTools
         });
         if (decision.done) {
           finalText = decision.text;
@@ -385,7 +396,7 @@ export class AgentDO {
             apiKey: this.env.ANTHROPIC_API_KEY,
             systemPrompt,
             messages: conversation,
-            tools: [BASH_TOOL]
+            tools: this.buildToolList(dynamicTools)
           }),
           channel
         );
@@ -432,7 +443,10 @@ export class AgentDO {
     llmResponse: LLMResponse,
     channel: string,
     sessionId: string,
-    options: { applySelfModificationRateLimit: boolean }
+    options: {
+      applySelfModificationRateLimit: boolean;
+      dynamicTools: Map<string, DynamicToolDefinition>;
+    }
   ): Promise<{ done: boolean; text: string; observation: string }> {
     const blocks = llmResponse.content as Array<ToolUseBlock | TextBlock>;
     const toolBlock = blocks.find((block) => block.type === "tool_use") as ToolUseBlock | undefined;
@@ -446,7 +460,36 @@ export class AgentDO {
       return { done: true, text: text || "Done.", observation: "" };
     }
 
-    const command = String(toolBlock.input.command ?? "");
+    if (toolBlock.name === CREATE_TOOL_TOOL.name) {
+      const validation = validateDynamicToolDefinition(toolBlock.input);
+      const toolResult = validation.ok
+        ? (() => {
+            options.dynamicTools.set(validation.definition.name, validation.definition);
+            return `Created tool \"${validation.definition.name}\" with args: ${validation.definition.args.join(", ") || "(none)"}.`;
+          })()
+        : `Tool creation failed: ${validation.reason}`;
+
+      return {
+        done: false,
+        text: "",
+        observation: JSON.stringify(formatToolResult(toolBlock.id, toolResult))
+      };
+    }
+
+    const dynamicTool = options.dynamicTools.get(toolBlock.name);
+    const commandResult = dynamicTool
+      ? compileDynamicToolCommand(dynamicTool, toolBlock.input)
+      : { ok: true as const, command: String(toolBlock.input.command ?? "") };
+
+    if (!commandResult.ok) {
+      return {
+        done: false,
+        text: "",
+        observation: JSON.stringify(formatToolResult(toolBlock.id, `Tool execution failed: ${commandResult.reason}`))
+      };
+    }
+
+    const command = commandResult.command;
     logAgentEvent(this.db, sessionId, "command", command);
     this.forwardToGlobalLogs("command", `[#${channel}] ${command}`);
     const safety = enforceSafety(command, this.db, sessionId, [], {
@@ -519,6 +562,10 @@ export class AgentDO {
       text: "",
       observation: JSON.stringify(formatted)
     };
+  }
+
+  private buildToolList(dynamicTools: Map<string, DynamicToolDefinition>): unknown[] {
+    return [BASH_TOOL, CREATE_TOOL_TOOL, ...Array.from(dynamicTools.values()).map((tool) => dynamicToolToAnthropicSchema(tool))];
   }
 
   private async executeWithRetry(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
