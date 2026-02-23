@@ -13,6 +13,10 @@ export interface SafetyDecision {
   requiresApproval?: boolean;
 }
 
+export interface SafetyOptions {
+  applySelfModificationRateLimit?: boolean;
+}
+
 const SELF_MOD_WRITE_PATTERNS = [
   /\b(sed|tee|truncate|touch|mv|cp|rm)\b/,
   />|>>/,
@@ -108,9 +112,12 @@ export function enforceSafety(
   command: string,
   sql: SqlStorage,
   sessionId: string,
-  files: string[] = []
+  files: string[] = [],
+  options: SafetyOptions = {}
 ): SafetyDecision {
-  if (isSelfModificationCommand(command)) {
+  const { applySelfModificationRateLimit = true } = options;
+
+  if (applySelfModificationRateLimit && isSelfModificationCommand(command)) {
     const rateLimit = checkRateLimit(sql, sessionId);
     if (!rateLimit.allowed) {
       return { allowed: false, reason: rateLimit.reason };

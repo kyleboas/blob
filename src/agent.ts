@@ -288,7 +288,14 @@ export class AgentDO {
     return new Response("bad request", { status: 400 });
   }
 
-  async runAgentLoop(task: string, channel: string, sessionId: string): Promise<{ finalText: string; steps: number }> {
+  async runAgentLoop(
+    task: string,
+    channel: string,
+    sessionId: string,
+    options: { applySelfModificationRateLimit?: boolean } = {}
+  ): Promise<{ finalText: string; steps: number }> {
+    const { applySelfModificationRateLimit = false } = options;
+
     logAgentEvent(this.db, sessionId, "task_received", task);
     this.forwardToGlobalLogs("task_received", `[#${channel}] ${task}`);
 
@@ -358,7 +365,9 @@ export class AgentDO {
         conversation.push({ role: "assistant", content: llmResponse.content });
         saveMessage(this.db, sessionId, { role: "assistant", content: llmResponse.content });
 
-        const decision = await this.processLlmResponse(llmResponse, channel, sessionId);
+        const decision = await this.processLlmResponse(llmResponse, channel, sessionId, {
+          applySelfModificationRateLimit
+        });
         if (decision.done) {
           finalText = decision.text;
           break;
@@ -422,7 +431,8 @@ export class AgentDO {
   private async processLlmResponse(
     llmResponse: LLMResponse,
     channel: string,
-    sessionId: string
+    sessionId: string,
+    options: { applySelfModificationRateLimit: boolean }
   ): Promise<{ done: boolean; text: string; observation: string }> {
     const blocks = llmResponse.content as Array<ToolUseBlock | TextBlock>;
     const toolBlock = blocks.find((block) => block.type === "tool_use") as ToolUseBlock | undefined;
@@ -439,7 +449,9 @@ export class AgentDO {
     const command = String(toolBlock.input.command ?? "");
     logAgentEvent(this.db, sessionId, "command", command);
     this.forwardToGlobalLogs("command", `[#${channel}] ${command}`);
-    const safety = enforceSafety(command, this.db, sessionId, []);
+    const safety = enforceSafety(command, this.db, sessionId, [], {
+      applySelfModificationRateLimit: options.applySelfModificationRateLimit
+    });
 
     if (!safety.allowed && safety.requiresApproval) {
       await createApprovalRequest(
@@ -464,7 +476,7 @@ export class AgentDO {
       return { done: true, text: safety.reason ?? "Blocked by safety policy.", observation: "" };
     }
 
-    if (isSelfModificationCommand(command)) {
+    if (options.applySelfModificationRateLimit && isSelfModificationCommand(command)) {
       incrementRateLimit(this.db, "session", sessionId);
       const todayKey = new Date().toISOString().slice(0, 10);
       incrementRateLimit(this.db, "day", todayKey);
@@ -724,7 +736,9 @@ export class AgentDO {
       if (previousSessionId) {
         await this.summarizePreviousSession(previousSessionId);
       }
-      const { finalText } = await this.runAgentLoop(heartbeat.task, heartbeat.channel, sessionId);
+      const { finalText } = await this.runAgentLoop(heartbeat.task, heartbeat.channel, sessionId, {
+        applySelfModificationRateLimit: true
+      });
       completeHeartbeat(this.db, heartbeat.id, finalText);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);

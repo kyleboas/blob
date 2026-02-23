@@ -119,6 +119,18 @@ describe("enforceSafety", () => {
     expect(decision).toEqual({ allowed: true, requiresApproval: false });
   });
 
+
+  it("can skip self-modification limits for user-directed sessions", () => {
+    const sql = new FakeSql();
+    for (let i = 0; i < SELF_MODIFY_LIMIT_SESSION; i += 1) {
+      incrementRateLimit(sql, "session", "session-6");
+    }
+
+    const decision = enforceSafety("sed -i 's/a/b/' src/safety.ts", sql, "session-6", ["src/safety.ts"], {
+      applySelfModificationRateLimit: false
+    });
+    expect(decision).toEqual({ allowed: true, requiresApproval: true });
+  });
   it("applies self-modification limits only to modifying commands", () => {
     const sql = new FakeSql();
     for (let i = 0; i < SELF_MODIFY_LIMIT_SESSION; i += 1) {
