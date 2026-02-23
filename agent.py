@@ -345,6 +345,7 @@ class Agent:
                 done = True
                 break
 
+            tool_results: list[dict[str, object]] = []
             for tool_use in tool_uses:
                 tool_name = tool_use.get("name", "bash")
                 command = tool_use.get("input", {}).get("command", "")
@@ -359,12 +360,7 @@ class Agent:
                     else:
                         result_text = self._push_branch_to_remote(tool_use.get("input", {}))
                     log_activity("tool_result", {"tool": tool_name, "result": result_text[:500]})
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": [format_tool_result(tool_use_id=tool_use["id"], output=result_text)],
-                        }
-                    )
+                    tool_results.append(format_tool_result(tool_use_id=tool_use["id"], output=result_text))
                     continue
 
                 if tool_name == "make_pr":
@@ -375,12 +371,7 @@ class Agent:
                     else:
                         result_text = self._create_github_pr(tool_use.get("input", {}))
                     log_activity("tool_result", {"tool": tool_name, "result": result_text[:500]})
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": [format_tool_result(tool_use_id=tool_use["id"], output=result_text)],
-                        }
-                    )
+                    tool_results.append(format_tool_result(tool_use_id=tool_use["id"], output=result_text))
                     continue
 
                 if is_modification and not self.rate_limiter.can_modify():
@@ -420,10 +411,13 @@ class Agent:
                     },
                 )
 
+                tool_results.append(format_tool_result(tool_use_id=tool_use["id"], output=result_text))
+
+            if tool_results:
                 messages.append(
                     {
                         "role": "user",
-                        "content": [format_tool_result(tool_use_id=tool_use["id"], output=result_text)],
+                        "content": tool_results,
                     }
                 )
 
