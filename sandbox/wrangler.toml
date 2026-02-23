@@ -1,5 +1,5 @@
 name = "blob-agent-sandbox"
-main = "src/index.ts"
+main = "index.ts"
 compatibility_date = "2026-02-19"
 compatibility_flags = ["nodejs_compat"]
 
