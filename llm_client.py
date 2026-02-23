@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -77,7 +78,18 @@ class AnthropicClient:
                 for tool in tools
             ]
 
-        response = self._client.messages.create(**payload)
+        response = None
+        for attempt in range(config.LLM_OVERLOAD_RETRY_MAX + 1):
+            try:
+                response = self._client.messages.create(**payload)
+                break
+            except Exception as exc:
+                if getattr(exc, "status_code", None) == 529 and attempt < config.LLM_OVERLOAD_RETRY_MAX:
+                    wait = config.LLM_OVERLOAD_RETRY_BASE_S * (2 ** attempt)
+                    time.sleep(wait)
+                    continue
+                raise
+
         usage = LLMUsage(
             input_tokens=getattr(response.usage, "input_tokens", 0),
             output_tokens=getattr(response.usage, "output_tokens", 0),
