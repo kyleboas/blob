@@ -51,14 +51,22 @@ npx wrangler deploy
 5. Disable **Socket Mode** (the app uses HTTP webhooks now).
 6. Reinstall the app if Slack requests it.
 
-## 7) Smoke test
+## 7) Configure Slash Commands
+
+1. In your Slack app settings, open **Slash Commands**.
+2. Create `/stop` and `/reset` commands.
+3. For each command, set **Request URL** to:
+   - `https://<your-worker-domain>/slack/events`
+4. Reinstall the app after adding commands.
+
+## 8) Smoke test
 
 1. DM the bot a simple request, for example: `list files in the repository`.
 2. Verify the bot responds in-thread.
 3. Trigger an approval-required command and react with 👍 or 👎.
 4. Verify approval and denial flows are reflected in bot replies.
 
-## 8) Persistence + safety checks
+## 9) Persistence + safety checks
 
 1. Complete a task that updates conversation history.
 2. Wait for idle time, then send a follow-up in the same Slack thread.
