@@ -42,7 +42,7 @@ function renderLiveLogPage(): string {
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Blob Live Logs</title>
   <style>
-    body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; padding: 1rem; background: #0f172a; color: #e2e8f0; }
+    body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; background: #0f172a; color: #e2e8f0; }
     h1 { margin-top: 0; font-size: 1.2rem; display: flex; align-items: center; gap: 0.5rem; }
     #live-dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; display: inline-block; animation: pulse 2s ease-in-out infinite; }
     #live-dot.error { background: #f87171; animation: none; }
