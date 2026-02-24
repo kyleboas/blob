@@ -54,3 +54,10 @@ find /workspace/blob -maxdepth 1 -type f
 Blob receives the tool result, can call the generated tool again with different args, and then returns a final text response.
 
 See `docs/dynamic-tools-example.md` for a full end-to-end transcript-style example.
+
+
+## LLM routing
+
+Blob now supports Cloudflare AI Gateway as the primary provider path.
+Set `AI_GATEWAY_BASE_URL` and `AI_GATEWAY_TOKEN` to route both Anthropic and OpenAI-compatible requests through Gateway.
+Default model routing is `gpt-4.1-mini` for routine/simple tasks and `claude-sonnet-4-6` for complex planning.

@@ -294,6 +294,10 @@ export class AgentDO {
       orchestratorName?: string;
       doName?: string;
       status?: string;
+      priorMessages?: ConversationMessage[];
+      systemPrompt?: string;
+      orchestratorSessionId?: string;
+      finalText?: string;
     };
 
     if (body.action === "logs_snapshot") {
@@ -438,6 +442,32 @@ export class AgentDO {
     return new Response("bad request", { status: 400 });
   }
 
+
+  private buildLlmInput(overrides: {
+    systemPrompt: string;
+    messages: ConversationMessage[];
+    tools?: unknown[];
+    taskComplexityHint?: "routine" | "complex";
+    model?: string;
+  }): {
+    apiKey?: string;
+    openAiApiKey?: string;
+    aiGatewayToken?: string;
+    aiGatewayBaseUrl?: string;
+    systemPrompt: string;
+    messages: ConversationMessage[];
+    tools?: unknown[];
+    taskComplexityHint?: "routine" | "complex";
+    model?: string;
+  } {
+    return {
+      apiKey: this.env.ANTHROPIC_API_KEY,
+      openAiApiKey: this.env.OPENAI_API_KEY,
+      aiGatewayToken: this.env.AI_GATEWAY_TOKEN,
+      aiGatewayBaseUrl: this.env.AI_GATEWAY_BASE_URL,
+      ...overrides
+    };
+  }
   async runAgentLoop(
     task: string,
     channel: string,
@@ -502,12 +532,12 @@ export class AgentDO {
     const firstResponse = await this.traceOperation(
       sessionId,
       "llm_call_initial",
-      () => this.deps.llmCall({
-        apiKey: this.env.ANTHROPIC_API_KEY,
+      () => this.deps.llmCall(this.buildLlmInput({
         systemPrompt,
         messages: conversation,
-        tools: this.buildToolList(dynamicTools)
-      }),
+        tools: this.buildToolList(dynamicTools),
+        taskComplexityHint: options.priorMessages ? "routine" : undefined
+      })),
       channel
     );
 
@@ -560,12 +590,12 @@ export class AgentDO {
         llmResponse = await this.traceOperation(
           sessionId,
           "llm_call_follow_up",
-          () => this.deps.llmCall({
-            apiKey: this.env.ANTHROPIC_API_KEY,
+          () => this.deps.llmCall(this.buildLlmInput({
             systemPrompt,
             messages: conversation,
-            tools: this.buildToolList(dynamicTools)
-          }),
+            tools: this.buildToolList(dynamicTools),
+            taskComplexityHint: options.priorMessages ? "routine" : undefined
+          })),
           channel
         );
       }
@@ -948,9 +978,9 @@ export class AgentDO {
 
     const currentKnowledge = getKnowledge(this.db);
 
-    const response = await this.deps.llmCall({
-      apiKey: this.env.ANTHROPIC_API_KEY,
+    const response = await this.deps.llmCall(this.buildLlmInput({
       taskComplexityHint: "routine",
+      model: "gpt-4.1-mini",
       systemPrompt: "You maintain concise memory between AI agent sessions.",
       messages: [
         {
@@ -974,7 +1004,7 @@ export class AgentDO {
           ].join("\n")
         }
       ]
-    });
+    }));
 
     const text = extractTextContent(response);
     const lines = text.split("\n");
@@ -1034,12 +1064,14 @@ export class AgentDO {
       })
       .join("\n\n");
 
-    const response = await this.deps.llmCall({
-      apiKey: this.env.ANTHROPIC_API_KEY,
+    const response = await this.deps.llmCall(this.buildLlmInput({
       taskComplexityHint: "routine",
+      model: "gpt-4.1-mini",
       systemPrompt: "Summarise conversation history concisely, preserving key decisions, code changes, and context.",
-      messages: [{ role: "user", content: `Summarise:\n\n${history}` }]
-    });
+      messages: [{ role: "user", content: `Summarise:
+
+${history}` }]
+    }));
 
     const summaryText = extractTextContent(response) || "(context summarised)";
     const summaryMessage: ConversationMessage = {

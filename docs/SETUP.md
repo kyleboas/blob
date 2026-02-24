@@ -82,7 +82,9 @@ cp .env.example .env
 
 Open `.env` and fill in your values:
 
-- `ANTHROPIC_API_KEY` (required for model calls)
+- `AI_GATEWAY_BASE_URL` + `AI_GATEWAY_TOKEN` (recommended for model calls via Cloudflare AI Gateway)
+- `OPENAI_API_KEY` (optional fallback when not using AI Gateway)
+- `ANTHROPIC_API_KEY` (optional fallback when not using AI Gateway)
 - `SLACK_BOT_TOKEN` (required only for Slack bot mode)
 - `SLACK_APP_TOKEN` (required only for Slack bot mode)
 - `FLY_API_TOKEN` (required only for Fly deployment)
@@ -160,7 +162,7 @@ High-level flow:
 1. Create/configure Slack app with Socket Mode.
 2. Run `flyctl launch --no-deploy`.
 3. Create a Fly volume.
-4. Set secrets (`ANTHROPIC_API_KEY`, Slack tokens, Fly token).
+4. Set secrets (`AI_GATEWAY_BASE_URL`, `AI_GATEWAY_TOKEN`, Slack tokens, Fly token).
 5. Deploy with `flyctl deploy`.
 6. Verify with `flyctl status` and `flyctl logs`.
 
@@ -180,7 +182,8 @@ High-level flow:
 
 ### Model/API errors
 
-- Confirm `ANTHROPIC_API_KEY` is set and valid.
+- If using AI Gateway, confirm `AI_GATEWAY_BASE_URL` and `AI_GATEWAY_TOKEN` are set and valid.
+- If not using AI Gateway, confirm provider key (`OPENAI_API_KEY` or `ANTHROPIC_API_KEY`) is set and valid.
 
 ### Tests fail unexpectedly
 
@@ -199,3 +202,10 @@ High-level flow:
 6. Run app (`agent ...` or `python slack_bot.py`)
 
 That’s it—you’re ready to work with the project.
+
+
+### Model routing defaults
+
+- Routine chat + simple planning: `gpt-4.1-mini`
+- Complex planning: `claude-sonnet-4-6`
+- Sub-agents start with routine routing and can escalate to complex model when complexity signals are detected.
