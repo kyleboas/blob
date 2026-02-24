@@ -47,7 +47,7 @@ def test_message_dispatch_posts_progress_and_result() -> None:
         return _Agent(gate, on_status)
 
     bot = SlackBot(client=client, agent_factory=factory)
-    bot.handle_message_event({"channel": "C1", "ts": "100.1", "text": "hello"})
+    bot.handle_message_event({"channel": "C1", "ts": "100.1", "text": "do work"})
     assert done.wait(timeout=2)
     assert any("Starting session" in post["text"] for post in client.posts)
     assert any("Step 1/25" in post["text"] for post in client.posts)
@@ -68,17 +68,117 @@ def test_session_mapping_and_reaction_resolution() -> None:
         return _Agent(gate, on_status)
 
     bot = SlackBot(client=client, agent_factory=factory)
-    bot.handle_message_event({"channel": "C1", "ts": "200.1", "text": "hello"})
+    bot.handle_message_event({"channel": "C1", "ts": "200.1", "text": "do work"})
 
     # wait until background thread runs and clears mapping
     assert "gate" in gate_holder
 
     gate = gate_holder["gate"]
     gate._events["approval-ts"] = Event()
-    bot.thread_sessions["200.1"] = SessionContext(session_ts="200.1", channel="C1", approval_gate=gate)
+    bot.thread_sessions["200.1"] = SessionContext(session_key="200.1", channel="C1", approval_gate=gate, agent=StubAgent(gate, lambda _msg: None))
     bot.handle_reaction_event({"reaction": "white_check_mark", "item": {"ts": "approval-ts"}})
 
     assert gate._decisions["approval-ts"] is True
+
+
+
+
+def test_greeting_does_not_start_session() -> None:
+    client = MockClient()
+    done = Event()
+
+    def factory(gate, on_status):
+        class _Agent(StubAgent):
+            def run_task(self, text: str) -> str:
+                done.set()
+                return super().run_task(text)
+
+        return _Agent(gate, on_status)
+
+    bot = SlackBot(client=client, agent_factory=factory)
+    bot.handle_message_event({"channel": "C1", "ts": "300.1", "text": "Hi Blob"})
+
+    assert not done.wait(timeout=0.2)
+    assert any("Heartbeats handle pending tasks" in p["text"] for p in client.posts)
+    assert not any("Starting session" in p["text"] for p in client.posts)
+
+
+
+def test_greeting_variants_do_not_start_session() -> None:
+    client = MockClient()
+    done = Event()
+
+    def factory(gate, on_status):
+        class _Agent(StubAgent):
+            def run_task(self, text: str) -> str:
+                done.set()
+                return super().run_task(text)
+
+        return _Agent(gate, on_status)
+
+    bot = SlackBot(client=client, agent_factory=factory)
+    bot.handle_message_event({"channel": "C1", "ts": "301.1", "text": "Hi Blob!"})
+    bot.handle_message_event({"channel": "C1", "ts": "301.2", "text": "<@U123> hello blob 👋"})
+
+    assert not done.wait(timeout=0.2)
+    assert sum(1 for p in client.posts if "Heartbeats handle pending tasks" in p["text"]) == 2
+    assert not any("Starting session" in p["text"] for p in client.posts)
+
+
+def test_channel_session_is_reused_for_new_messages() -> None:
+    client = MockClient()
+    created = 0
+    done = Event()
+
+    def factory(gate, on_status):
+        nonlocal created
+        created += 1
+
+        class _Agent(StubAgent):
+            def run_task(self, text: str) -> str:
+                done.set()
+                return super().run_task(text)
+
+        return _Agent(gate, on_status)
+
+    bot = SlackBot(client=client, agent_factory=factory)
+
+    bot.handle_message_event({"channel": "C1", "ts": "400.1", "text": "first"})
+    assert done.wait(timeout=2)
+    done.clear()
+    bot.handle_message_event({"channel": "C1", "ts": "500.2", "text": "second"})
+    assert done.wait(timeout=2)
+
+    assert created == 1
+    assert sum(1 for p in client.posts if "Starting session" in p["text"]) == 1
+
+
+def test_thread_reuses_existing_channel_session() -> None:
+    client = MockClient()
+    created = 0
+    done = Event()
+
+    def factory(gate, on_status):
+        nonlocal created
+        created += 1
+
+        class _Agent(StubAgent):
+            def run_task(self, text: str) -> str:
+                done.set()
+                return super().run_task(text)
+
+        return _Agent(gate, on_status)
+
+    bot = SlackBot(client=client, agent_factory=factory)
+    bot.handle_message_event({"channel": "C1", "ts": "700.1", "text": "initial"})
+    assert done.wait(timeout=2)
+    done.clear()
+
+    bot.handle_message_event({"channel": "C1", "ts": "700.2", "thread_ts": "700.1", "text": "reply"})
+    assert done.wait(timeout=2)
+
+    assert created == 1
+
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +358,9 @@ def test_background_worker_uses_heartbeat_approval_gate() -> None:
     assert gate.request_approval("sed -i 's/x/y/' agent.py", "always-require-approval") is False
 
 
-def test_stop_and_reset_commands_control_message_handling() -> None:
+
+
+def test_slash_commands_control_message_handling() -> None:
     client = MockClient()
     done = Event()
 
@@ -272,14 +374,14 @@ def test_stop_and_reset_commands_control_message_handling() -> None:
 
     bot = SlackBot(client=client, agent_factory=factory)
 
-    bot.handle_message_event({"channel": "C1", "ts": "1.0", "text": "/stop"})
+    bot.handle_slash_command(channel="C1", command="/stop")
     bot.handle_message_event({"channel": "C1", "ts": "1.1", "text": "hello"})
 
     assert not done.wait(timeout=0.2)
     assert any("Bot stopped" in post["text"] for post in client.posts)
     assert any("currently stopped" in post["text"] for post in client.posts)
 
-    bot.handle_message_event({"channel": "C1", "ts": "1.2", "text": "/reset"})
+    bot.handle_slash_command(channel="C1", command="/reset")
     bot.handle_message_event({"channel": "C1", "ts": "1.3", "text": "hello again"})
 
     assert done.wait(timeout=2)

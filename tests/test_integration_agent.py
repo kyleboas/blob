@@ -172,7 +172,7 @@ def test_slack_message_and_approval_flow() -> None:
             return f"done: {text}"
 
     bot = SlackBot(client=client, agent_factory=lambda gate, on_status: _Agent(gate, on_status))
-    bot.handle_message_event({"channel": "C1", "ts": "1", "text": "hello"})
+    bot.handle_message_event({"channel": "C1", "ts": "1", "text": "run check"})
     assert done.wait(timeout=2)
     assert any("Starting session" in p["text"] for p in client.posts)
     assert any("Session complete" in p["text"] for p in client.posts)

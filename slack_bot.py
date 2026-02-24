@@ -10,6 +10,7 @@ from typing import Callable
 import logging
 
 import os
+import re
 
 import config
 from agent import Agent
@@ -24,6 +25,21 @@ except ImportError:  # pragma: no cover
     SocketModeHandler = None
 
 logger = logging.getLogger(__name__)
+
+
+def _is_greeting_message(text: str) -> bool:
+    normalized = text.lower().strip()
+    normalized = re.sub(r"<@[a-z0-9]+>", "", normalized)
+    normalized = re.sub(r"[^a-z0-9\s]", " ", normalized)
+    normalized = " ".join(normalized.split())
+    return normalized in {
+        "hi",
+        "hello",
+        "hey",
+        "hi blob",
+        "hello blob",
+        "hey blob",
+    }
 
 
 class _HeartbeatApprovalGate(ApprovalGate):
@@ -62,9 +78,10 @@ def start_health_server(port: int = 8080) -> HTTPServer:
 
 @dataclass(slots=True)
 class SessionContext:
-    session_ts: str
+    session_key: str
     channel: str
     approval_gate: SlackApprovalGate
+    agent: Agent
 
 
 class SlackBot:
@@ -76,7 +93,9 @@ class SlackBot:
     ) -> None:
         self.client = client
         self.agent_factory = agent_factory
+        self.channel_sessions: dict[str, SessionContext] = {}
         self.thread_sessions: dict[str, SessionContext] = {}
+        self._session_lock = Lock()
         self._is_stopped = False
         self._background_worker = background_worker
         if background_worker is not None:
@@ -85,26 +104,34 @@ class SlackBot:
     def _post_status(self, channel: str, text: str) -> None:
         self.client.chat_postMessage(channel=channel, text=text)
 
+    def handle_slash_command(self, channel: str, command: str) -> None:
+        normalized = command.strip().lower()
+        if normalized == "/stop":
+            self._is_stopped = True
+            self.thread_sessions.clear()
+            self.channel_sessions.clear()
+            self._post_status(channel, "Bot stopped. Send /reset to start from scratch.")
+            return
+        if normalized == "/reset":
+            self._is_stopped = False
+            self.thread_sessions.clear()
+            self.channel_sessions.clear()
+            self._post_status(channel, "Bot reset. Starting fresh.")
+            return
+
     def handle_message_event(self, event: dict[str, str]) -> None:
         if event.get("subtype"):
             return
 
         text = event.get("text", "").strip()
         channel = event.get("channel", "")
-        session_ts = event.get("ts", "")
-        if not text or not channel or not session_ts:
+        thread_ts = event.get("thread_ts", "")
+        session_key = thread_ts or channel
+        if not text or not channel or not session_key:
             return
 
-        if text.lower() == "/stop":
-            self._is_stopped = True
-            self.thread_sessions.clear()
-            self._post_status(channel, "Bot stopped. Send /reset to start from scratch.")
-            return
-
-        if text.lower() == "/reset":
-            self._is_stopped = False
-            self.thread_sessions.clear()
-            self._post_status(channel, "Bot reset. Starting fresh.")
+        if text.lower() in {"/stop", "/reset"}:
+            self.handle_slash_command(channel=channel, command=text)
             return
 
         if self._is_stopped:
@@ -119,29 +146,48 @@ class SlackBot:
                 self._post_status(channel, "No background worker is running.")
             return
 
-        self._post_status(channel, "Starting session...")
-        approval_gate = SlackApprovalGate(client=self.client, channel=channel)
-        self.thread_sessions[session_ts] = SessionContext(
-            session_ts=session_ts,
-            channel=channel,
-            approval_gate=approval_gate,
-        )
+        if _is_greeting_message(text):
+            self._post_status(
+                channel,
+                "👋 Hi! Heartbeats handle pending tasks. I won't start a build or task run from a greeting.",
+            )
+            return
 
-        def on_status(message: str) -> None:
-            self._post_status(channel, message)
+        with self._session_lock:
+            session = self.thread_sessions.get(session_key)
+            if session is None:
+                session = self.channel_sessions.get(channel)
+            if session is None:
+                self._post_status(channel, "Starting session...")
+                approval_gate = SlackApprovalGate(client=self.client, channel=channel)
+
+                def on_status(message: str) -> None:
+                    self._post_status(channel, message)
+
+                agent = self.agent_factory(approval_gate, on_status)
+                session = SessionContext(
+                    session_key=session_key,
+                    channel=channel,
+                    approval_gate=approval_gate,
+                    agent=agent,
+                )
+            self.thread_sessions[session_key] = session
+            if not thread_ts:
+                self.channel_sessions[channel] = session
 
         def run() -> None:
-            agent = self.agent_factory(approval_gate, on_status)
             try:
                 if text.lower() == "self-improve":
-                    result = "\n".join(agent.run_self_improvement_cycle())
+                    result = "\n".join(session.agent.run_self_improvement_cycle())
                 else:
-                    result = agent.run_task(text)
+                    guarded_task = (
+                        "Answer the user message directly. Do not run self-improvement tasks or process tasks.json unless the user explicitly asks for self-improve.\n\n"
+                        f"User message: {text}"
+                    )
+                    result = session.agent.run_task(guarded_task)
                 self._post_status(channel, f"Session complete:\n{result or '(no output)'}")
             except Exception as exc:  # pragma: no cover - defensive runtime reporting
                 self._post_status(channel, f"Session failed: {exc}")
-            finally:
-                self.thread_sessions.pop(session_ts, None)
 
         Thread(target=run, daemon=True).start()
 
@@ -251,10 +297,13 @@ def _build_default_agent(approval_gate: ApprovalGate, on_status: Callable[[str],
 
 
 def main() -> None:
-    if App is None or SocketModeHandler is None:
+    if App is None:
         raise RuntimeError("slack-bolt is required to run slack_bot.py")
 
-    app = App(token=os.getenv("SLACK_BOT_TOKEN"))
+    app = App(
+        token=os.getenv("SLACK_BOT_TOKEN"),
+        signing_secret=os.getenv("SLACK_SIGNING_SECRET"),
+    )
 
     heartbeat_channel = os.getenv("HEARTBEAT_CHANNEL") or None
     background_worker = BackgroundWorker(
@@ -273,9 +322,32 @@ def main() -> None:
     def on_reaction_added(event: dict[str, object]) -> None:
         bot.handle_reaction_event(event)
 
+    @app.command("/stop")
+    def on_stop_command(ack: Callable[[], None], body: dict[str, str]) -> None:
+        ack()
+        channel = body.get("channel_id", "")
+        if channel:
+            bot.handle_slash_command(channel=channel, command="/stop")
+
+    @app.command("/reset")
+    def on_reset_command(ack: Callable[[], None], body: dict[str, str]) -> None:
+        ack()
+        channel = body.get("channel_id", "")
+        if channel:
+            bot.handle_slash_command(channel=channel, command="/reset")
+
     start_health_server()
-    handler = SocketModeHandler(app, os.getenv("SLACK_APP_TOKEN"))
-    handler.start()
+
+    use_socket_mode = os.getenv("SLACK_SOCKET_MODE", "false").lower() == "true"
+    if use_socket_mode:
+        if SocketModeHandler is None:
+            raise RuntimeError("slack-bolt socket mode adapter is required for SLACK_SOCKET_MODE=true")
+        handler = SocketModeHandler(app, os.getenv("SLACK_APP_TOKEN"))
+        handler.start()
+        return
+
+    port = int(os.getenv("PORT", "3000"))
+    app.start(port=port)
 
 
 if __name__ == "__main__":
