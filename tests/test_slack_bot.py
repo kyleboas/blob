@@ -193,6 +193,36 @@ def test_background_worker_posts_status_when_no_summary() -> None:
     assert any("Heartbeat check:" in text for text in posted)
 
 
+def test_background_worker_works_without_channel(tmp_path: Path) -> None:
+    """BackgroundWorker should run and log results even when no channel is configured."""
+    ticked = Event()
+
+    def factory(gate: ApprovalGate, on_status: Callable[[str], None]) -> StubAgent:
+        class _Agent(StubAgent):
+            def run_self_improvement_cycle(self, tasks_path: Path | None = None) -> list[str]:
+                summaries = super().run_self_improvement_cycle(tasks_path=tasks_path)
+                ticked.set()
+                return summaries
+
+        return _Agent(gate, on_status)
+
+    posted: list[str] = []
+    worker = BackgroundWorker(
+        agent_factory=factory,
+        post_fn=lambda ch, text: posted.append(text),
+        # no channel
+        interval_seconds=60,
+        run_on_start=True,
+    )
+    worker.start()
+    assert ticked.wait(timeout=2), "BackgroundWorker did not tick within 2 seconds"
+    worker.stop()
+
+    import time; time.sleep(0.1)
+    # No Slack posts should be made when there is no channel
+    assert posted == []
+
+
 def test_background_worker_uses_heartbeat_approval_gate() -> None:
     """The gate passed to heartbeat agents should allow conditional ops but block constitution files."""
     from slack_bot import _HeartbeatApprovalGate
