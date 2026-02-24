@@ -340,6 +340,28 @@ describe("AgentDO runAgentLoop", () => {
     expect(result.steps).toBe(25);
   });
 
+  it("skips empty bash commands instead of executing sandbox", async () => {
+    const sql = new FakeSql();
+    const { env, sandbox } = makeTestEnv();
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({ content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "   " } }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Recovered" }] });
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runAgentLoop("do thing", "C1", "thread-empty-cmd");
+
+    expect(result.finalText).toBe("Recovered");
+    expect(sandbox.exec).not.toHaveBeenCalledWith(expect.stringContaining("set -euo pipefail"));
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Recovered");
+  });
+
   it("posts error to Slack when agent loop throws", async () => {
     const sql = new FakeSql();
     const { env } = makeTestEnv();
