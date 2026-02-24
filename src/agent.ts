@@ -359,10 +359,18 @@ export class AgentDO {
       const event = body.event;
       const orchestratorName = String(body.orchestratorName ?? "");
       const doName = String(body.doName ?? "");
+      const priorMessages = Array.isArray(body.priorMessages)
+        ? (body.priorMessages as ConversationMessage[])
+        : undefined;
+      const systemPrompt = body.systemPrompt ? String(body.systemPrompt) : undefined;
+      const orchestratorSessionId = body.orchestratorSessionId
+        ? String(body.orchestratorSessionId)
+        : undefined;
       this.runInBackground((async () => {
         let completionStatus: "completed" | "failed" = "completed";
+        let finalText = "";
         try {
-          await this.handleTaskEvent(event);
+          finalText = await this.handleTaskEvent(event, priorMessages, systemPrompt);
         } catch (error) {
           completionStatus = "failed";
           const channel = event.channel;
@@ -377,7 +385,13 @@ export class AgentDO {
             void orchestratorStub.fetch("https://agent.internal/event", {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ action: "sub_agent_done", doName, status: completionStatus })
+              body: JSON.stringify({
+                action: "sub_agent_done",
+                doName,
+                status: completionStatus,
+                finalText,
+                orchestratorSessionId
+              })
             }).catch(() => {});
           }
         }
@@ -388,6 +402,15 @@ export class AgentDO {
     if (body.action === "sub_agent_done" && body.doName) {
       const status = (body.status as "completed" | "failed") || "completed";
       markSubAgentDone(this.db, String(body.doName), status);
+      // Persist the assistant's response into the orchestrator's conversation
+      // history so the next message in this session sees the full exchange.
+      const orchestratorSessionId = body.orchestratorSessionId
+        ? String(body.orchestratorSessionId)
+        : null;
+      const finalText = body.finalText ? String(body.finalText) : null;
+      if (orchestratorSessionId && finalText && status === "completed") {
+        saveMessage(this.db, orchestratorSessionId, { role: "assistant", content: finalText });
+      }
       return new Response("ok");
     }
 
@@ -419,22 +442,35 @@ export class AgentDO {
     task: string,
     channel: string,
     sessionId: string,
-    options: { applySelfModificationRateLimit?: boolean } = {}
+    options: {
+      applySelfModificationRateLimit?: boolean;
+      // When provided by an orchestrator, these replace the sub-agent's own
+      // (empty) DB-derived values so the sub-agent has full conversation context.
+      priorMessages?: ConversationMessage[];
+      systemPrompt?: string;
+    } = {}
   ): Promise<{ finalText: string; steps: number }> {
     const { applySelfModificationRateLimit = false } = options;
 
     logAgentEvent(this.db, sessionId, "task_received", task);
     this.forwardToGlobalLogs("task_received", `[#${channel}] ${task}`);
 
-    // Load history and compact if the context is getting large
-    const rawConversation = getHistory(this.db, sessionId);
-    const compactedConversation = await this.compactConversationIfNeeded(rawConversation, sessionId);
-    const repairedConversation = repairMissingToolResults(compactedConversation);
-    let conversation = repairedConversation.messages;
-    if (repairedConversation.repaired) {
-      // Persist repaired history to prevent recurring invalid Anthropic message order
-      // errors in future turns for the same thread.
-      compactMessagesInDB(this.db, sessionId, conversation);
+    // If the orchestrator supplied prior conversation messages use them directly;
+    // otherwise fall back to loading from this DO's own DB (standalone / legacy path).
+    let conversation: ConversationMessage[];
+    if (options.priorMessages) {
+      conversation = [...options.priorMessages];
+    } else {
+      // Load history and compact if the context is getting large
+      const rawConversation = getHistory(this.db, sessionId);
+      const compactedConversation = await this.compactConversationIfNeeded(rawConversation, sessionId);
+      const repairedConversation = repairMissingToolResults(compactedConversation);
+      conversation = repairedConversation.messages;
+      if (repairedConversation.repaired) {
+        // Persist repaired history to prevent recurring invalid Anthropic message order
+        // errors in future turns for the same thread.
+        compactMessagesInDB(this.db, sessionId, conversation);
+      }
     }
 
     saveMessage(this.db, sessionId, { role: "user", content: task });
@@ -445,8 +481,14 @@ export class AgentDO {
     // previous sync; any external edits to AGENT.md will be picked up on the
     // next user message.
     void syncKnowledgeFromSandbox(this.db, this.sandbox);
-    const summaries = getRecentSessionSummaries(this.db, SESSION_SUMMARY_RECENT_COUNT);
-    const systemPrompt = buildSystemPrompt(getKnowledge(this.db), summaries);
+    // Use the orchestrator-supplied system prompt when available (the sub-agent's
+    // own DB is empty so its summaries/knowledge would be missing).
+    const systemPrompt =
+      options.systemPrompt ??
+      buildSystemPrompt(
+        getKnowledge(this.db),
+        getRecentSessionSummaries(this.db, SESSION_SUMMARY_RECENT_COUNT)
+      );
     const dynamicTools = new Map<string, DynamicToolDefinition>();
 
     let thinkingTimer: ReturnType<typeof setTimeout> | undefined;
@@ -748,23 +790,28 @@ export class AgentDO {
     return result;
   }
 
-  private async handleTaskEvent(event: SlackEvent): Promise<void> {
+  private async handleTaskEvent(
+    event: SlackEvent,
+    priorMessages?: ConversationMessage[],
+    systemPrompt?: string
+  ): Promise<string> {
     const task = event.text ?? "";
     const channel = event.channel;
 
     if (!channel || !task.trim()) {
-      return;
+      return "";
     }
 
-    const { sessionId, previousSessionId } = resolveOrCreateSession(this.db, this.deps.now());
+    // The sub-agent uses its own session only for internal tracking (sandbox,
+    // agent events). Session lifecycle and conversation memory are managed by
+    // the orchestrator; no previous-session summarisation is needed here.
+    const { sessionId } = resolveOrCreateSession(this.db, this.deps.now());
 
-    // When a new conversation starts, summarize the previous one and extract
-    // any long-term learnings into AGENT.md before the new session runs
-    if (previousSessionId) {
-      await this.traceOperation(sessionId, "session_summary", () => this.summarizePreviousSession(previousSessionId), channel);
-    }
-
-    await this.runAgentLoop(task, channel, sessionId);
+    const { finalText } = await this.runAgentLoop(task, channel, sessionId, {
+      priorMessages,
+      systemPrompt,
+    });
+    return finalText;
   }
 
   private async handleApprovalReaction(event: SlackEvent): Promise<void> {
@@ -784,9 +831,38 @@ export class AgentDO {
   // be routed to all active sub-agents for that channel.
   private async spawnSubAgent(event: SlackEvent): Promise<void> {
     const channel = event.channel;
-    if (!channel || !event.text?.trim()) {
+    const task = event.text?.trim();
+    if (!channel || !task) {
       return;
     }
+
+    // Orchestrator owns session lifecycle and conversation memory.
+    // It resolves (or creates) the current session, handles end-of-session
+    // summarisation, and passes the accumulated history to the ephemeral
+    // sub-agent so the sub-agent starts with full conversation context.
+    const { sessionId, previousSessionId } = resolveOrCreateSession(this.db, this.deps.now());
+    if (previousSessionId) {
+      await this.traceOperation(
+        sessionId,
+        "session_summary",
+        () => this.summarizePreviousSession(previousSessionId),
+        channel
+      );
+    }
+
+    // Build the system prompt here using the orchestrator's own summaries so
+    // the sub-agent receives an accurate prompt even though its own DB is empty.
+    const summaries = getRecentSessionSummaries(this.db, SESSION_SUMMARY_RECENT_COUNT);
+    const systemPrompt = buildSystemPrompt(getKnowledge(this.db), summaries);
+
+    // Snapshot the history *before* appending the new user message so that
+    // runAgentLoop on the sub-agent can append it itself (preserving the
+    // existing load-then-append pattern).
+    const priorMessages = getHistory(this.db, sessionId);
+
+    // Persist the incoming user message on the orchestrator side now so that
+    // even if the sub-agent crashes the turn is recorded.
+    saveMessage(this.db, sessionId, { role: "user", content: task });
 
     const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     const subAgentDoName = `task-agent:${channel}:${uniqueSuffix}`;
@@ -804,7 +880,11 @@ export class AgentDO {
         action: "run_task",
         event,
         orchestratorName,
-        doName: subAgentDoName
+        doName: subAgentDoName,
+        // Conversation context from the orchestrator
+        priorMessages,
+        systemPrompt,
+        orchestratorSessionId: sessionId
       })
     });
   }
