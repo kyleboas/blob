@@ -94,6 +94,14 @@ class SlackBot:
         if not text or not channel or not session_ts:
             return
 
+        if text.lower() == "set heartbeat channel":
+            if self._background_worker is not None:
+                self._background_worker.channel = channel
+                self._post_status(channel, f"Heartbeat channel set to <#{channel}>")
+            else:
+                self._post_status(channel, "No background worker is running.")
+            return
+
         self._post_status(channel, "Starting session...")
         approval_gate = SlackApprovalGate(client=self.client, channel=channel)
         self.thread_sessions[session_ts] = SessionContext(

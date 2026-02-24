@@ -193,6 +193,31 @@ def test_background_worker_posts_status_when_no_summary() -> None:
     assert any("Heartbeat check:" in text for text in posted)
 
 
+def test_set_heartbeat_channel_command() -> None:
+    """'set heartbeat channel' message should update the worker channel and confirm."""
+    client = MockClient()
+
+    def factory(gate, on_status):
+        return StubAgent(gate, on_status)
+
+    worker = BackgroundWorker(
+        agent_factory=factory,
+        post_fn=lambda ch, text: client.chat_postMessage(channel=ch, text=text),
+        channel=None,
+        interval_seconds=60,
+        run_on_start=False,
+    )
+    bot = SlackBot(client=client, agent_factory=factory, background_worker=worker)
+
+    assert worker.channel is None
+    bot.handle_message_event({"channel": "C-new", "ts": "1.0", "text": "set heartbeat channel"})
+
+    assert worker.channel == "C-new"
+    assert any("C-new" in p["text"] for p in client.posts)
+    # Should not start a regular agent session
+    assert not any("Starting session" in p["text"] for p in client.posts)
+
+
 def test_background_worker_works_without_channel(tmp_path: Path) -> None:
     """BackgroundWorker should run and log results even when no channel is configured."""
     ticked = Event()
