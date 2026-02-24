@@ -109,7 +109,8 @@ def test_background_worker_runs_heartbeat_and_posts_result(tmp_path: Path) -> No
         agent_factory=factory,
         post_fn=lambda ch, text: posted.append({"channel": ch, "text": text}),
         tasks_path=tasks_path,
-        interval_seconds=0,
+        interval_seconds=60,
+        run_on_start=True,
     )
     worker.start()
 
@@ -135,6 +136,7 @@ def test_background_worker_stop_prevents_further_ticks() -> None:
         agent_factory=factory,
         post_fn=lambda ch, text: posted.append(text),
         interval_seconds=5,  # long interval – should not tick again
+        run_on_start=False,
     )
     worker.start()
     worker.stop()  # stop immediately
@@ -142,6 +144,53 @@ def test_background_worker_stop_prevents_further_ticks() -> None:
     import time; time.sleep(0.2)
     # The worker was stopped before the first interval elapsed so no ticks
     assert tick_count == 0
+
+
+def test_background_worker_posts_failure_message_on_exception() -> None:
+    posted: list[dict[str, str]] = []
+
+    def factory(gate: ApprovalGate, on_status: Callable[[str], None]) -> StubAgent:  # noqa: ARG001
+        class _Agent(StubAgent):
+            def run_self_improvement_cycle(self, tasks_path: Path | None = None) -> list[str]:  # noqa: ARG002
+                raise RuntimeError("boom")
+
+        return _Agent(gate, on_status)
+
+    worker = BackgroundWorker(
+        channel="C-fail",
+        agent_factory=factory,
+        post_fn=lambda ch, text: posted.append({"channel": ch, "text": text}),
+        interval_seconds=60,
+        run_on_start=True,
+    )
+    worker.start()
+    worker.stop()
+
+    assert any("Heartbeat failed: boom" in post["text"] for post in posted)
+
+
+def test_background_worker_posts_status_when_no_summary() -> None:
+    posted: list[str] = []
+
+    def factory(gate: ApprovalGate, on_status: Callable[[str], None]) -> StubAgent:
+        class _Agent(StubAgent):
+            def run_self_improvement_cycle(self, tasks_path: Path | None = None) -> list[str]:  # noqa: ARG002
+                self.on_status("checked queue")
+                return []
+
+        return _Agent(gate, on_status)
+
+    worker = BackgroundWorker(
+        channel="C-status",
+        agent_factory=factory,
+        post_fn=lambda ch, text: posted.append(text),
+        interval_seconds=60,
+        run_on_start=True,
+    )
+    worker.start()
+    worker.stop()
+
+    assert any("Heartbeat check:" in text for text in posted)
 
 
 def test_background_worker_uses_heartbeat_approval_gate() -> None:

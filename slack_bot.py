@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from typing import Callable
 import logging
 
@@ -140,6 +140,7 @@ class BackgroundWorker:
     """
 
     DEFAULT_INTERVAL_SECONDS = int(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "300"))  # 5 minutes
+    RUN_ON_START = os.getenv("HEARTBEAT_RUN_ON_START", "true").lower() == "true"
 
     def __init__(
         self,
@@ -148,31 +149,44 @@ class BackgroundWorker:
         post_fn: Callable[[str, str], None],
         tasks_path: Path | None = None,
         interval_seconds: int | None = None,
+        run_on_start: bool | None = None,
     ) -> None:
         self.channel = channel
         self.agent_factory = agent_factory
         self.post_fn = post_fn
         self.tasks_path = tasks_path or (config.WORKSPACE_ROOT / "tasks.json")
         self.interval_seconds = interval_seconds if interval_seconds is not None else self.DEFAULT_INTERVAL_SECONDS
+        self.run_on_start = self.RUN_ON_START if run_on_start is None else run_on_start
         self._stop = Event()
+        self._tick_lock = Lock()
         self._thread: Thread | None = None
 
     def start(self) -> None:
+        if self.run_on_start:
+            self._tick()
         self._thread = Thread(target=self._loop, daemon=True, name="blob-heartbeat")
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1)
 
     def _loop(self) -> None:
         while not self._stop.wait(self.interval_seconds):
             self._tick()
 
     def _tick(self) -> None:
+        if not self._tick_lock.acquire(blocking=False):
+            logger.warning("Skipping heartbeat tick because a previous tick is still running")
+            return
         try:
             self._run_pending_heartbeats()
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("Heartbeat tick failed: %s", exc)
+            self.post_fn(self.channel, f"Heartbeat failed: {exc}")
+        finally:
+            self._tick_lock.release()
 
     def _run_pending_heartbeats(self) -> None:
         gate = _HeartbeatApprovalGate()
@@ -187,6 +201,9 @@ class BackgroundWorker:
         if summaries:
             report = "\n".join(summaries)
             self.post_fn(self.channel, f"Heartbeat complete:\n{report}")
+        elif statuses:
+            report = "\n".join(statuses)
+            self.post_fn(self.channel, f"Heartbeat check:\n{report}")
 
 
 def _build_default_agent(approval_gate: ApprovalGate, on_status: Callable[[str], None]) -> Agent:
