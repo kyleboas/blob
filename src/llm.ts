@@ -90,7 +90,7 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
       return (await response.json()) as LLMResponse;
     }
 
-    if (response.status === 529 && attempt < LLM_OVERLOAD_RETRY_MAX) {
+    if ((response.status === 529 || response.status === 429) && attempt < LLM_OVERLOAD_RETRY_MAX) {
       const waitMs = LLM_OVERLOAD_RETRY_BASE_MS * Math.pow(2, attempt);
       await sleepImpl(waitMs);
       continue;
