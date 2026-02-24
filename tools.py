@@ -46,6 +46,27 @@ PUSH_BRANCH_TOOL = {
 }
 
 
+SPAWN_SUBAGENT_TOOL = {
+    "name": "spawn_subagent",
+    "description": (
+        "Spawn a sub-agent to handle an independent task concurrently with other sub-agents. "
+        "Use this when the user requests multiple independent tasks that can be completed in parallel. "
+        "Call spawn_subagent once per independent task; all spawned sub-agents run concurrently. "
+        "Each sub-agent runs its own ReAct loop with isolated conversation history."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "task": {
+                "type": "string",
+                "description": "The task description for the sub-agent to complete.",
+            },
+        },
+        "required": ["task"],
+    },
+}
+
+
 def format_tool_result(tool_use_id: str, output: str) -> dict[str, object]:
     return {
         "type": "tool_result",

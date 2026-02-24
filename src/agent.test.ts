@@ -686,6 +686,78 @@ describe("AgentDO runAgentLoop", () => {
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Committed: add feature");
   });
 
+  it("spawn_subagent tool runs sub-tasks and returns their results to the main agent", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const llmCall = vi
+      .fn()
+      // Main agent: spawn two sub-agents
+      .mockResolvedValueOnce({
+        content: [
+          { type: "tool_use", id: "sa1", name: "spawn_subagent", input: { task: "task one" } },
+          { type: "tool_use", id: "sa2", name: "spawn_subagent", input: { task: "task two" } }
+        ]
+      })
+      // Sub-agent 1: returns immediately with a text result
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "result one" }] })
+      // Sub-agent 2: returns immediately with a text result
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "result two" }] })
+      // Main agent: final response after sub-agents complete
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "all done" }] });
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runAgentLoop("do two tasks", "C1", "thread-spawn");
+
+    expect(result.finalText).toBe("all done");
+    // The main agent's follow-up call should include tool_result blocks for both sub-agents
+    const followUpCall = llmCall.mock.calls[3]?.[0];
+    expect(followUpCall.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.arrayContaining([
+            expect.objectContaining({ type: "tool_result", tool_use_id: "sa1" }),
+            expect.objectContaining({ type: "tool_result", tool_use_id: "sa2" })
+          ])
+        })
+      ])
+    );
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "all done");
+  });
+
+  it("spawn_subagent error is returned as a tool result without crashing the main loop", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const llmCall = vi
+      .fn()
+      // Main agent: spawn one sub-agent
+      .mockResolvedValueOnce({
+        content: [{ type: "tool_use", id: "sa1", name: "spawn_subagent", input: { task: "bad task" } }]
+      })
+      // Sub-agent LLM call throws
+      .mockRejectedValueOnce(new Error("sub-agent LLM failure"))
+      // Main agent: receives error result and finishes
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "handled error" }] });
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runAgentLoop("test error handling", "C1", "thread-spawn-error");
+
+    expect(result.finalText).toBe("handled error");
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "handled error");
+  });
+
   it("can create and use a dynamic tool in the same loop", async () => {
     const sql = new FakeSql();
     const { env, sandbox } = makeTestEnv();

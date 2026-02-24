@@ -593,6 +593,48 @@ def test_get_authenticated_push_url_returns_none_without_token(tmp_path: Path) -
     assert url is None
 
 
+def test_spawn_subagent_dispatches_subtasks() -> None:
+    """spawn_subagent tool calls _run_subagent_task for each subtask."""
+    llm = MockLLM([
+        LLMResponse(
+            content=[
+                {"type": "tool_use", "id": "sa1", "name": "spawn_subagent", "input": {"task": "task one"}},
+                {"type": "tool_use", "id": "sa2", "name": "spawn_subagent", "input": {"task": "task two"}},
+            ],
+            stop_reason="tool_use",
+            usage=LLMUsage(1, 1),
+        ),
+        LLMResponse(content=[{"type": "text", "text": "all done"}], stop_reason="end_turn", usage=LLMUsage(1, 1)),
+    ])
+    agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
+
+    with patch.object(agent, "_run_subagent_task", side_effect=["result one", "result two"]) as mock_sub:
+        result = agent.run_task("do two tasks")
+
+    assert result == "all done"
+    assert mock_sub.call_count == 2
+    mock_sub.assert_any_call("task one")
+    mock_sub.assert_any_call("task two")
+
+
+def test_spawn_subagent_handles_error_gracefully() -> None:
+    """spawn_subagent failure is reported as an error result without raising."""
+    llm = MockLLM([
+        LLMResponse(
+            content=[{"type": "tool_use", "id": "sa1", "name": "spawn_subagent", "input": {"task": "bad task"}}],
+            stop_reason="tool_use",
+            usage=LLMUsage(1, 1),
+        ),
+        LLMResponse(content=[{"type": "text", "text": "handled"}], stop_reason="end_turn", usage=LLMUsage(1, 1)),
+    ])
+    agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
+
+    with patch.object(agent, "_run_subagent_task", side_effect=RuntimeError("crash")):
+        result = agent.run_task("test error")
+
+    assert result == "handled"
+
+
 def test_get_authenticated_push_url_returns_none_on_git_failure(tmp_path: Path) -> None:
     llm = MockLLM([])
     agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())

@@ -41,6 +41,7 @@ import {
 import {
   BASH_TOOL,
   CREATE_TOOL_TOOL,
+  SPAWN_SUBAGENT_TOOL,
   compileDynamicToolCommand,
   dynamicToolToAnthropicSchema,
   formatToolResult,
@@ -491,8 +492,32 @@ export class AgentDO {
     let doneText = "";
 
     const toolBlocks = blocks.filter((block): block is ToolUseBlock => block.type === "tool_use");
-    for (let i = 0; i < toolBlocks.length; i++) {
-      const toolBlock = toolBlocks[i];
+
+    // Run spawn_subagent blocks concurrently before the sequential tool loop
+    const spawnBlocks = toolBlocks.filter((b) => b.name === SPAWN_SUBAGENT_TOOL.name);
+    const regularBlocks = toolBlocks.filter((b) => b.name !== SPAWN_SUBAGENT_TOOL.name);
+
+    if (spawnBlocks.length > 0) {
+      const spawnResults = await Promise.all(
+        spawnBlocks.map(async (b) => {
+          const task = String(b.input.task ?? "").trim();
+          if (!task) {
+            return formatToolResult(b.id, "Sub-agent error: task description is required.");
+          }
+          try {
+            const result = await this.runSubTask(task, channel, sessionId, options.dynamicTools);
+            return formatToolResult(b.id, result);
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            return formatToolResult(b.id, `Sub-agent error: ${msg}`);
+          }
+        })
+      );
+      observations.push(...spawnResults);
+    }
+
+    for (let i = 0; i < regularBlocks.length; i++) {
+      const toolBlock = regularBlocks[i];
 
       if (done) {
         observations.push(formatToolResult(toolBlock.id, "Skipped: agent execution already paused."));
@@ -614,7 +639,72 @@ export class AgentDO {
   }
 
   private buildToolList(dynamicTools: Map<string, DynamicToolDefinition>): unknown[] {
+    return [BASH_TOOL, CREATE_TOOL_TOOL, SPAWN_SUBAGENT_TOOL, ...Array.from(dynamicTools.values()).map((tool) => dynamicToolToAnthropicSchema(tool))];
+  }
+
+  // Sub-agents do not get spawn_subagent to prevent recursive spawning.
+  private buildSubAgentToolList(dynamicTools: Map<string, DynamicToolDefinition>): unknown[] {
     return [BASH_TOOL, CREATE_TOOL_TOOL, ...Array.from(dynamicTools.values()).map((tool) => dynamicToolToAnthropicSchema(tool))];
+  }
+
+  // Run a task in an isolated sub-agent with its own conversation history.
+  // Uses the already-started sandbox and does not manage sandbox lifecycle.
+  // Sub-agents cannot themselves spawn further sub-agents.
+  private async runSubTask(
+    task: string,
+    channel: string,
+    sessionId: string,
+    dynamicTools: Map<string, DynamicToolDefinition>
+  ): Promise<string> {
+    const subConversation: ConversationMessage[] = [{ role: "user", content: task }];
+    const summaries = getRecentSessionSummaries(this.db, SESSION_SUMMARY_RECENT_COUNT);
+    const systemPrompt = buildSystemPrompt(getKnowledge(this.db), summaries);
+
+    let steps = 0;
+    let llmResponse = await this.deps.llmCall({
+      apiKey: this.env.ANTHROPIC_API_KEY,
+      systemPrompt,
+      messages: subConversation,
+      tools: this.buildSubAgentToolList(dynamicTools)
+    });
+
+    while (steps < MAX_STEPS) {
+      steps++;
+      const blocks = llmResponse.content as Array<ToolUseBlock | TextBlock>;
+      const hasToolUse = blocks.some((b) => b.type === "tool_use");
+
+      if (!hasToolUse) {
+        return blocks
+          .filter((b): b is TextBlock => b.type === "text")
+          .map((b) => b.text)
+          .join("\n")
+          .trim() || "Done.";
+      }
+
+      subConversation.push({ role: "assistant", content: llmResponse.content });
+
+      const decision = await this.processLlmResponse(llmResponse, channel, sessionId, {
+        applySelfModificationRateLimit: false,
+        dynamicTools
+      });
+
+      if (decision.observations.length > 0) {
+        subConversation.push({ role: "user", content: decision.observations });
+      }
+
+      if (decision.done) {
+        return decision.text;
+      }
+
+      llmResponse = await this.deps.llmCall({
+        apiKey: this.env.ANTHROPIC_API_KEY,
+        systemPrompt,
+        messages: subConversation,
+        tools: this.buildSubAgentToolList(dynamicTools)
+      });
+    }
+
+    return `Stopped after reaching max steps (${MAX_STEPS}).`;
   }
 
   private async executeWithRetry(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {

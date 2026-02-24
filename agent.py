@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import os
 import subprocess
@@ -29,7 +30,7 @@ from safety import (
     log_activity,
 )
 from sandbox import SandboxExecutor
-from tools import BASH_TOOL, MAKE_PR_TOOL, PUSH_BRANCH_TOOL, format_tool_result
+from tools import BASH_TOOL, MAKE_PR_TOOL, PUSH_BRANCH_TOOL, SPAWN_SUBAGENT_TOOL, format_tool_result
 
 
 class _HTMLToTextParser(HTMLParser):
@@ -102,6 +103,7 @@ class Agent:
         self.approval_gate = approval_gate
         self.on_status = on_status
         self.rate_limiter = rate_limiter or ModificationRateLimiter()
+        self._allow_subagent_spawn = True
         self._system_prompt = self._build_system_prompt()
         self._base_messages: list[dict[str, object]] = []
 
@@ -350,6 +352,9 @@ class Agent:
         done = False
         steps = 0
         model = self._select_model_for_task(task)
+        available_tools = [BASH_TOOL, MAKE_PR_TOOL, PUSH_BRANCH_TOOL]
+        if self._allow_subagent_spawn:
+            available_tools.append(SPAWN_SUBAGENT_TOOL)
 
         while not done and steps < config.MAX_STEPS:
             steps += 1
@@ -359,7 +364,7 @@ class Agent:
                 model=model,
                 system=self._system_prompt,
                 messages=messages,
-                tools=[BASH_TOOL, MAKE_PR_TOOL, PUSH_BRANCH_TOOL],
+                tools=available_tools,
             )
             self._record_llm_usage(task, model, response.usage.input_tokens, response.usage.output_tokens)
             messages.append({"role": "assistant", "content": response.content})
@@ -373,7 +378,27 @@ class Agent:
                 break
 
             tool_results: list[dict[str, object]] = []
-            for tool_use in tool_uses:
+
+            # Separate spawn_subagent calls so they run concurrently
+            spawn_tool_uses = [tu for tu in tool_uses if tu.get("name") == "spawn_subagent"]
+            regular_tool_uses = [tu for tu in tool_uses if tu.get("name") != "spawn_subagent"]
+
+            if spawn_tool_uses:
+                self._emit_status(f"Spawning {len(spawn_tool_uses)} sub-agent(s)...")
+                with concurrent.futures.ThreadPoolExecutor(max_workers=len(spawn_tool_uses)) as executor:
+                    pending = [
+                        (tu["id"], executor.submit(self._run_subagent_task, str(tu.get("input", {}).get("task", ""))))
+                        for tu in spawn_tool_uses
+                    ]
+                for tool_id, future in pending:
+                    try:
+                        result_text = future.result()
+                    except Exception as exc:
+                        result_text = f"Sub-agent error: {exc}"
+                    log_activity("tool_result", {"tool": "spawn_subagent", "result": result_text[:500]})
+                    tool_results.append(format_tool_result(tool_use_id=tool_id, output=result_text))
+
+            for tool_use in regular_tool_uses:
                 tool_name = tool_use.get("name", "bash")
                 command = tool_use.get("input", {}).get("command", "")
                 target_files = _extract_target_files(command)
@@ -451,6 +476,22 @@ class Agent:
         self._reset_conversation()
         log_activity("task_end", {"task": task[:400], "result_preview": (final_text or "")[:500]})
         return final_text or ""
+
+    def _run_subagent_task(self, task: str) -> str:
+        """Run a task in an isolated sub-agent with its own conversation history.
+
+        The sub-agent shares the parent's LLM client, sandbox, approval gate, and
+        rate limiter but has a fresh message history. Sub-agents cannot themselves
+        spawn further sub-agents, preventing unbounded recursion.
+        """
+        sub_agent = Agent(
+            llm_client=self.llm_client,
+            sandbox=self.sandbox,
+            approval_gate=self.approval_gate,
+            rate_limiter=self.rate_limiter,
+        )
+        sub_agent._allow_subagent_spawn = False
+        return sub_agent.run_task(task)
 
     def _load_task_queue(self, tasks_path: Path) -> list[dict[str, str]]:
         raw = json.loads(tasks_path.read_text())

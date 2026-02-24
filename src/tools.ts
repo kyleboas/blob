@@ -23,6 +23,22 @@ export const BASH_TOOL = {
   }
 } as const;
 
+export const SPAWN_SUBAGENT_TOOL = {
+  name: "spawn_subagent",
+  description: "Spawn a sub-agent to handle an independent task concurrently. Use this when the user requests multiple independent tasks that can be completed in parallel. Call spawn_subagent once per independent task; all spawned sub-agents run concurrently. Each sub-agent runs its own ReAct loop with isolated conversation history.",
+  input_schema: {
+    type: "object",
+    properties: {
+      task: {
+        type: "string",
+        description: "The task description for the sub-agent to complete"
+      }
+    },
+    required: ["task"],
+    additionalProperties: false
+  }
+} as const;
+
 export const CREATE_TOOL_TOOL = {
   name: "create_tool",
   description: "Create a reusable command tool. Use this when the same shell workflow will be run repeatedly.",
