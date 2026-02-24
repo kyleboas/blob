@@ -77,6 +77,7 @@ class SlackBot:
         self.client = client
         self.agent_factory = agent_factory
         self.thread_sessions: dict[str, SessionContext] = {}
+        self._is_stopped = False
         self._background_worker = background_worker
         if background_worker is not None:
             background_worker.start()
@@ -92,6 +93,22 @@ class SlackBot:
         channel = event.get("channel", "")
         session_ts = event.get("ts", "")
         if not text or not channel or not session_ts:
+            return
+
+        if text.lower() == "/stop":
+            self._is_stopped = True
+            self.thread_sessions.clear()
+            self._post_status(channel, "Bot stopped. Send /reset to start from scratch.")
+            return
+
+        if text.lower() == "/reset":
+            self._is_stopped = False
+            self.thread_sessions.clear()
+            self._post_status(channel, "Bot reset. Starting fresh.")
+            return
+
+        if self._is_stopped:
+            self._post_status(channel, "Bot is currently stopped. Send /reset to start from scratch.")
             return
 
         if text.lower() == "set heartbeat channel":
