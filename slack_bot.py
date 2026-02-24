@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from typing import Callable
 import logging
 
@@ -94,6 +94,14 @@ class SlackBot:
         if not text or not channel or not session_ts:
             return
 
+        if text.lower() == "set heartbeat channel":
+            if self._background_worker is not None:
+                self._background_worker.channel = channel
+                self._post_status(channel, f"Heartbeat channel set to <#{channel}>")
+            else:
+                self._post_status(channel, "No background worker is running.")
+            return
+
         self._post_status(channel, "Starting session...")
         approval_gate = SlackApprovalGate(client=self.client, channel=channel)
         self.thread_sessions[session_ts] = SessionContext(
@@ -140,39 +148,54 @@ class BackgroundWorker:
     """
 
     DEFAULT_INTERVAL_SECONDS = int(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "300"))  # 5 minutes
+    RUN_ON_START = os.getenv("HEARTBEAT_RUN_ON_START", "true").lower() == "true"
 
     def __init__(
         self,
-        channel: str,
         agent_factory: Callable[[ApprovalGate, Callable[[str], None]], Agent],
         post_fn: Callable[[str, str], None],
+        channel: str | None = None,
         tasks_path: Path | None = None,
         interval_seconds: int | None = None,
+        run_on_start: bool | None = None,
     ) -> None:
-        self.channel = channel
+        self.channel = channel or None
         self.agent_factory = agent_factory
         self.post_fn = post_fn
         self.tasks_path = tasks_path or (config.WORKSPACE_ROOT / "tasks.json")
         self.interval_seconds = interval_seconds if interval_seconds is not None else self.DEFAULT_INTERVAL_SECONDS
+        self.run_on_start = self.RUN_ON_START if run_on_start is None else run_on_start
         self._stop = Event()
+        self._tick_lock = Lock()
         self._thread: Thread | None = None
 
     def start(self) -> None:
+        if self.run_on_start:
+            self._tick()
         self._thread = Thread(target=self._loop, daemon=True, name="blob-heartbeat")
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1)
 
     def _loop(self) -> None:
         while not self._stop.wait(self.interval_seconds):
             self._tick()
 
     def _tick(self) -> None:
+        if not self._tick_lock.acquire(blocking=False):
+            logger.warning("Skipping heartbeat tick because a previous tick is still running")
+            return
         try:
             self._run_pending_heartbeats()
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("Heartbeat tick failed: %s", exc)
+            if self.channel:
+                self.post_fn(self.channel, f"Heartbeat failed: {exc}")
+        finally:
+            self._tick_lock.release()
 
     def _run_pending_heartbeats(self) -> None:
         gate = _HeartbeatApprovalGate()
@@ -186,7 +209,16 @@ class BackgroundWorker:
         summaries = agent.run_self_improvement_cycle(tasks_path=self.tasks_path)
         if summaries:
             report = "\n".join(summaries)
-            self.post_fn(self.channel, f"Heartbeat complete:\n{report}")
+            if self.channel:
+                self.post_fn(self.channel, f"Heartbeat complete:\n{report}")
+            else:
+                logger.info("Heartbeat complete:\n%s", report)
+        elif statuses:
+            report = "\n".join(statuses)
+            if self.channel:
+                self.post_fn(self.channel, f"Heartbeat check:\n{report}")
+            else:
+                logger.info("Heartbeat check:\n%s", report)
 
 
 def _build_default_agent(approval_gate: ApprovalGate, on_status: Callable[[str], None]) -> Agent:
@@ -207,14 +239,12 @@ def main() -> None:
 
     app = App(token=os.getenv("SLACK_BOT_TOKEN"))
 
-    heartbeat_channel = os.getenv("HEARTBEAT_CHANNEL", "")
-    background_worker: BackgroundWorker | None = None
-    if heartbeat_channel:
-        background_worker = BackgroundWorker(
-            channel=heartbeat_channel,
-            agent_factory=_build_default_agent,
-            post_fn=lambda ch, text: app.client.chat_postMessage(channel=ch, text=text),
-        )
+    heartbeat_channel = os.getenv("HEARTBEAT_CHANNEL") or None
+    background_worker = BackgroundWorker(
+        agent_factory=_build_default_agent,
+        post_fn=lambda ch, text: app.client.chat_postMessage(channel=ch, text=text),
+        channel=heartbeat_channel,
+    )
 
     bot = SlackBot(client=app.client, agent_factory=_build_default_agent, background_worker=background_worker)
 

@@ -49,11 +49,71 @@ describe("callLLM", () => {
     });
   });
 
-  it("throws on rate limit/API error responses", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
+  it("retries on 429 rate limit and succeeds", async () => {
+    const rateLimitResponse = {
       ok: false,
       status: 429,
-      text: async () => "rate limit"
+      text: async () => '{"type":"error","error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}'
+    };
+    const successResponse = {
+      ok: true,
+      json: async () => ({
+        id: "msg_3",
+        model: MODEL_ROUTINE,
+        content: [{ type: "text", text: "ok" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 10, output_tokens: 5 }
+      })
+    };
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(rateLimitResponse)
+      .mockResolvedValueOnce(rateLimitResponse)
+      .mockResolvedValueOnce(successResponse);
+    const mockSleep = vi.fn().mockResolvedValue(undefined);
+
+    const response = await callLLM({
+      apiKey: "test-key",
+      systemPrompt: "be helpful",
+      messages: [{ role: "user", content: "hello" }],
+      fetchImpl: mockFetch,
+      sleepImpl: mockSleep
+    });
+
+    expect(response.id).toBe("msg_3");
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(mockSleep).toHaveBeenCalledTimes(2);
+    expect(mockSleep).toHaveBeenNthCalledWith(1, 5_000);
+    expect(mockSleep).toHaveBeenNthCalledWith(2, 10_000);
+  });
+
+  it("throws after exhausting all 429 retries", async () => {
+    const rateLimitResponse = {
+      ok: false,
+      status: 429,
+      text: async () => '{"type":"error","error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}'
+    };
+    const mockFetch = vi.fn().mockResolvedValue(rateLimitResponse);
+    const mockSleep = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      callLLM({
+        apiKey: "test-key",
+        systemPrompt: "be helpful",
+        messages: [{ role: "user", content: "hello" }],
+        fetchImpl: mockFetch,
+        sleepImpl: mockSleep
+      })
+    ).rejects.toThrow("Anthropic API error (429)");
+
+    expect(mockFetch).toHaveBeenCalledTimes(5); // 1 initial + 4 retries
+    expect(mockSleep).toHaveBeenCalledTimes(4);
+  });
+
+  it("throws immediately on non-retriable API errors", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => "bad request"
     });
 
     await expect(
@@ -63,6 +123,68 @@ describe("callLLM", () => {
         messages: [{ role: "user", content: "hello" }],
         fetchImpl: mockFetch
       })
-    ).rejects.toThrow("Anthropic API error (429): rate limit");
+    ).rejects.toThrow("Anthropic API error (400): bad request");
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries on 529 overloaded and succeeds", async () => {
+    const overloadedResponse = {
+      ok: false,
+      status: 529,
+      text: async () => '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'
+    };
+    const successResponse = {
+      ok: true,
+      json: async () => ({
+        id: "msg_2",
+        model: MODEL_ROUTINE,
+        content: [{ type: "text", text: "ok" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 10, output_tokens: 5 }
+      })
+    };
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(overloadedResponse)
+      .mockResolvedValueOnce(overloadedResponse)
+      .mockResolvedValueOnce(successResponse);
+    const mockSleep = vi.fn().mockResolvedValue(undefined);
+
+    const response = await callLLM({
+      apiKey: "test-key",
+      systemPrompt: "be helpful",
+      messages: [{ role: "user", content: "hello" }],
+      fetchImpl: mockFetch,
+      sleepImpl: mockSleep
+    });
+
+    expect(response.id).toBe("msg_2");
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(mockSleep).toHaveBeenCalledTimes(2);
+    expect(mockSleep).toHaveBeenNthCalledWith(1, 5_000);
+    expect(mockSleep).toHaveBeenNthCalledWith(2, 10_000);
+  });
+
+  it("throws after exhausting all 529 retries", async () => {
+    const overloadedResponse = {
+      ok: false,
+      status: 529,
+      text: async () => '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'
+    };
+    const mockFetch = vi.fn().mockResolvedValue(overloadedResponse);
+    const mockSleep = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      callLLM({
+        apiKey: "test-key",
+        systemPrompt: "be helpful",
+        messages: [{ role: "user", content: "hello" }],
+        fetchImpl: mockFetch,
+        sleepImpl: mockSleep
+      })
+    ).rejects.toThrow("Anthropic API error (529)");
+
+    expect(mockFetch).toHaveBeenCalledTimes(5); // 1 initial + 4 retries
+    expect(mockSleep).toHaveBeenCalledTimes(4);
   });
 });

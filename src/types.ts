@@ -6,13 +6,15 @@ export interface Env {
   SLACK_BOT_TOKEN: string;
   SLACK_SIGNING_SECRET: string;
   LOGS_CHANNEL?: string;
+  GITHUB_TOKEN?: string;
+  GITHUB_USERNAME?: string;
 }
 
 export type ConversationRole = "user" | "assistant";
 
 export interface ConversationMessage {
   role: ConversationRole;
-  content: string;
+  content: string | unknown[];
 }
 
 export interface ToolCall {

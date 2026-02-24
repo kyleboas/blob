@@ -13,6 +13,46 @@ except ImportError:  # pragma: no cover - optional during bootstrap
 
 load_dotenv()
 
+
+def _load_blob_env() -> None:
+    """Load credentials from .blob-env into os.environ if not already set.
+
+    The Cloudflare sandbox environment writes credentials to /workspace/.blob-env
+    using ``export KEY='VALUE'`` syntax.  This function parses that file and
+    injects any missing variables into the current process so that GITHUB_TOKEN
+    is available to git-askpass, github_tools, and all downstream code without
+    requiring an explicit ``source`` call from each shell command.
+    """
+    import shlex
+
+    candidates = [
+        Path("/workspace/.blob-env"),
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[7:]
+            if "=" not in line:
+                continue
+            key, _, raw = line.partition("=")
+            key = key.strip()
+            if not key or not key.replace("_", "").isalnum():
+                continue
+            try:
+                value = shlex.split(raw)[0]
+            except (ValueError, IndexError):
+                value = raw.strip("'\"")
+            os.environ.setdefault(key, value)
+        break
+
+
+_load_blob_env()
+
 # Load user preferences from blob_settings.json (written by `python blob_config.py set KEY VALUE`).
 # Precedence: explicit env var > blob_settings.json > hardcoded default.
 def _apply_user_settings() -> None:
@@ -39,6 +79,8 @@ COMMAND_TIMEOUT = int(os.getenv("COMMAND_TIMEOUT", "30"))
 MEMORY_LIMIT_MB = int(os.getenv("MEMORY_LIMIT_MB", "512"))
 TOOL_RETRY_MAX = int(os.getenv("TOOL_RETRY_MAX", "2"))
 TOOL_RETRY_BACKOFF_BASE = float(os.getenv("TOOL_RETRY_BACKOFF_BASE", "1.5"))
+LLM_OVERLOAD_RETRY_MAX = int(os.getenv("LLM_OVERLOAD_RETRY_MAX", "4"))
+LLM_OVERLOAD_RETRY_BASE_S = float(os.getenv("LLM_OVERLOAD_RETRY_BASE_S", "5.0"))
 SELF_MODIFY_LIMIT_SESSION = int(os.getenv("SELF_MODIFY_LIMIT_SESSION", "3"))
 SELF_MODIFY_LIMIT_DAY = int(os.getenv("SELF_MODIFY_LIMIT_DAY", "10"))
 APPROVAL_TIMEOUT_MINUTES = int(os.getenv("APPROVAL_TIMEOUT_MINUTES", "30"))

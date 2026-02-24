@@ -64,6 +64,43 @@ def test_tool_dispatch_and_on_status_callback() -> None:
     assert statuses
 
 
+def test_multiple_tool_uses_are_returned_in_one_tool_result_message() -> None:
+    llm = MockLLM(
+        [
+            LLMResponse(
+                content=[
+                    {"type": "tool_use", "id": "tool1", "input": {"command": "echo one"}},
+                    {"type": "tool_use", "id": "tool2", "input": {"command": "echo two"}},
+                ],
+                stop_reason="tool_use",
+                usage=LLMUsage(1, 1),
+            ),
+            LLMResponse(content=[{"type": "text", "text": "ok"}], stop_reason="end_turn", usage=LLMUsage(1, 1)),
+        ]
+    )
+    sandbox = DummySandbox()
+    agent = Agent(llm_client=llm, sandbox=sandbox, approval_gate=DummyApproval())
+
+    captured_messages: list[list[dict]] = []
+
+    def capture(model: str, system: str, messages: list[dict], tools: list[dict] | None = None) -> LLMResponse:
+        captured_messages.append([dict(item) for item in messages])
+        return llm.responses.pop(0)
+
+    llm.create_message = capture
+
+    result = agent.run_task("run two commands")
+
+    assert result == "ok"
+    assert len(captured_messages) == 2
+    second_call_messages = captured_messages[1]
+    assert second_call_messages[-1]["role"] == "user"
+    assert second_call_messages[-1]["content"] == [
+        {"type": "tool_result", "tool_use_id": "tool1", "content": [{"type": "text", "text": "exit=0\nstdout:\nran\nstderr:\n"}]},
+        {"type": "tool_result", "tool_use_id": "tool2", "content": [{"type": "text", "text": "exit=0\nstdout:\nran\nstderr:\n"}]},
+    ]
+
+
 def test_parse_github_repo() -> None:
     assert _parse_github_repo("git@github.com:octo/example.git") == "octo/example"
     assert _parse_github_repo("https://github.com/octo/example.git") == "octo/example"
@@ -525,3 +562,47 @@ def test_extract_urls_handles_slack_link_format() -> None:
     )
 
     assert _extract_urls(text) == ["https://blog.cloudflare.com/code-mode-mcp/?utm_source=twitter"]
+
+
+def test_get_authenticated_push_url_embeds_token(tmp_path: Path) -> None:
+    llm = MockLLM([])
+    agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
+
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = "https://github.com/kyleboas/blob.git\n"
+
+    with patch("agent.subprocess.run", return_value=mock_result), \
+         patch.dict("os.environ", {"GITHUB_TOKEN": "ghp_testtoken123"}):
+        url = agent._get_authenticated_push_url("origin")
+
+    assert url == "https://ghp_testtoken123@github.com/kyleboas/blob.git"
+
+
+def test_get_authenticated_push_url_returns_none_without_token(tmp_path: Path) -> None:
+    llm = MockLLM([])
+    agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
+
+    with patch.dict("os.environ", {}, clear=True):
+        # Remove token env vars if present
+        import os
+        os.environ.pop("GITHUB_TOKEN", None)
+        os.environ.pop("GH_TOKEN", None)
+        url = agent._get_authenticated_push_url("origin")
+
+    assert url is None
+
+
+def test_get_authenticated_push_url_returns_none_on_git_failure(tmp_path: Path) -> None:
+    llm = MockLLM([])
+    agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
+
+    mock_result = MagicMock()
+    mock_result.returncode = 128
+    mock_result.stdout = ""
+
+    with patch("agent.subprocess.run", return_value=mock_result), \
+         patch.dict("os.environ", {"GITHUB_TOKEN": "ghp_testtoken123"}):
+        url = agent._get_authenticated_push_url("origin")
+
+    assert url is None

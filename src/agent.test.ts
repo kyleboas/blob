@@ -220,13 +220,57 @@ describe("AgentDO runAgentLoop", () => {
     const result = await agent.runAgentLoop("list files", "C1", "thread-1");
 
     expect(result.finalText).toBe("All done");
-    expect(sandbox.exec).toHaveBeenCalledWith("ls");
+    expect(sandbox.exec).toHaveBeenCalledWith(expect.stringContaining("ls"));
     expect(llmCall).toHaveBeenCalledWith(
       expect.objectContaining({
-        systemPrompt: expect.stringContaining("Follow this AGENT.md knowledge when relevant:\nknowledge")
+        systemPrompt: expect.stringContaining("You are Blob, a careful coding agent.")
       })
     );
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "All done");
+  });
+
+  it("recovers when history ends with an orphaned tool_use (interrupted run)", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+
+    // Pre-populate DB simulating a crash: assistant message with tool_use was saved
+    // but the corresponding tool_result message was never saved.
+    sql.exec(
+      "INSERT INTO conversation_messages (thread_id, role, content) VALUES (?, ?, ?)",
+      "thread-interrupted",
+      "user",
+      "previous task"
+    );
+    sql.exec(
+      "INSERT INTO conversation_messages (thread_id, role, content) VALUES (?, ?, ?)",
+      "thread-interrupted",
+      "assistant",
+      JSON.stringify([{ type: "tool_use", id: "orphaned-1", name: "bash", input: { command: "ls" } }])
+    );
+
+    const llmCall = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Recovered!" }] });
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runAgentLoop("new question", "C1", "thread-interrupted");
+
+    expect(result.finalText).toBe("Recovered!");
+
+    // The LLM should have been called with a valid conversation where the orphaned
+    // tool_use is immediately followed by a placeholder tool_result.
+    const messagesArg = llmCall.mock.calls[0][0].messages as Array<{ role: string; content: unknown }>;
+    const assistantIdx = messagesArg.findIndex((m) => m.role === "assistant");
+    expect(assistantIdx).toBeGreaterThan(-1);
+
+    const nextMsg = messagesArg[assistantIdx + 1];
+    expect(nextMsg.role).toBe("user");
+    const nextContent = nextMsg.content as Array<{ type: string; tool_use_id: string }>;
+    expect(nextContent[0].type).toBe("tool_result");
+    expect(nextContent[0].tool_use_id).toBe("orphaned-1");
   });
 
   it("includes a new user message for follow-up thread replies", async () => {
@@ -294,6 +338,28 @@ describe("AgentDO runAgentLoop", () => {
 
     expect(result.finalText).toContain("max steps");
     expect(result.steps).toBe(25);
+  });
+
+  it("skips empty bash commands instead of executing sandbox", async () => {
+    const sql = new FakeSql();
+    const { env, sandbox } = makeTestEnv();
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({ content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "   " } }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Recovered" }] });
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runAgentLoop("do thing", "C1", "thread-empty-cmd");
+
+    expect(result.finalText).toBe("Recovered");
+    expect(sandbox.exec).not.toHaveBeenCalledWith(expect.stringContaining("set -euo pipefail"));
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Recovered");
   });
 
   it("posts error to Slack when agent loop throws", async () => {
@@ -556,6 +622,47 @@ describe("AgentDO runAgentLoop", () => {
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Tests passed");
   });
 
+
+
+  it("returns a tool_result block for every tool_use in a single assistant turn", async () => {
+    const sql = new FakeSql();
+    const { env, sandbox } = makeTestEnv();
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: [
+          { type: "tool_use", id: "tool-1", name: "bash", input: { command: "echo one" } },
+          { type: "tool_use", id: "tool-2", name: "bash", input: { command: "echo two" } }
+        ]
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Done" }] });
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runAgentLoop("run two commands", "C1", "thread-multi-tool");
+
+    expect(result.finalText).toBe("Done");
+    expect(sandbox.exec).toHaveBeenNthCalledWith(1, expect.stringContaining("echo one"));
+    expect(sandbox.exec).toHaveBeenNthCalledWith(2, expect.stringContaining("echo two"));
+
+    const secondCall = llmCall.mock.calls[1]?.[0];
+    expect(secondCall.messages).toEqual(
+      expect.arrayContaining([
+        {
+          role: "user",
+          content: [
+            expect.objectContaining({ type: "tool_result", tool_use_id: "tool-1" }),
+            expect.objectContaining({ type: "tool_result", tool_use_id: "tool-2" })
+          ]
+        }
+      ])
+    );
+  });
+
   it("posts a milestone update when a git commit succeeds", async () => {
     const sql = new FakeSql();
     const { env, sandbox } = makeTestEnv();
@@ -578,6 +685,52 @@ describe("AgentDO runAgentLoop", () => {
 
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Committed: add feature");
   });
+
+  it("can create and use a dynamic tool in the same loop", async () => {
+    const sql = new FakeSql();
+    const { env, sandbox } = makeTestEnv();
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: [{
+          type: "tool_use",
+          id: "1",
+          name: "create_tool",
+          input: {
+            name: "list_top_files",
+            description: "List top-level files in a path",
+            command_template: "find {path} -maxdepth 1 -type f",
+            args: ["path"]
+          }
+        }]
+      })
+      .mockResolvedValueOnce({
+        content: [{
+          type: "tool_use",
+          id: "2",
+          name: "list_top_files",
+          input: { path: "/workspace/blob" }
+        }]
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Dynamic tool worked" }] });
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runAgentLoop("inspect files", "C1", "thread-dynamic-tool");
+
+    expect(result.finalText).toBe("Dynamic tool worked");
+    expect(sandbox.exec).toHaveBeenCalledWith(expect.stringContaining("find /workspace/blob -maxdepth 1 -type f"));
+    expect(llmCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: expect.arrayContaining([expect.objectContaining({ name: "create_tool" })])
+      })
+    );
+  });
+
 });
 
 describe("AgentDO heartbeat actions", () => {

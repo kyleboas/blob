@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import time
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ from safety import (
     git_checkpoint,
     git_history,
     git_revert_to_checkpoint,
+    log_activity,
 )
 from sandbox import SandboxExecutor
 from tools import BASH_TOOL, MAKE_PR_TOOL, PUSH_BRANCH_TOOL, format_tool_result
@@ -104,11 +106,17 @@ class Agent:
         self._base_messages: list[dict[str, object]] = []
 
     def _build_system_prompt(self) -> str:
-        agent_md = Path(config.WORKSPACE_ROOT / "AGENT.md")
-        knowledge = agent_md.read_text() if agent_md.exists() else ""
-        return f"You are a self-modifying coding agent.\n\n{knowledge}"
+        return "\n".join(
+            [
+                "You are Blob, a self-modifying coding agent.",
+                "Operate on your repository and use git history to answer questions about recent changes.",
+                "Use bash tools to inspect files and run tests before finishing code changes.",
+                "When asked to remember long-term preferences, save them to AGENT.md.",
+            ]
+        )
 
     def _emit_status(self, message: str) -> None:
+        log_activity("status", {"message": message})
         if self.on_status:
             self.on_status(message)
 
@@ -119,6 +127,16 @@ class Agent:
         return config.MODEL_ROUTING["routine"]
 
     def _record_llm_usage(self, task: str, model: str, input_tokens: int, output_tokens: int) -> None:
+        log_activity(
+            "llm_usage",
+            {
+                "task": task[:120],
+                "model": model,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": input_tokens + output_tokens,
+            },
+        )
         append_audit_log(
             config.LLM_TELEMETRY_LOG,
             {
@@ -129,6 +147,30 @@ class Agent:
                 "total_tokens": input_tokens + output_tokens,
             },
         )
+
+    def _get_authenticated_push_url(self, remote: str = "origin") -> str | None:
+        """Return a GitHub HTTPS remote URL with the token embedded, or None if unavailable.
+
+        Using a token-embedded URL lets ``git push`` authenticate without an
+        interactive credential prompt, which is necessary in non-TTY sandbox
+        environments where git cannot read a username/password.
+        """
+        token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or ""
+        if not token:
+            return None
+        get_url = subprocess.run(
+            ["git", "remote", "get-url", remote],
+            cwd=config.WORKSPACE_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if get_url.returncode != 0:
+            return None
+        repo = _parse_github_repo(get_url.stdout)
+        if not repo:
+            return None
+        return f"https://{token}@github.com/{repo}.git"
 
     def _push_branch_to_remote(self, tool_input: dict[str, object]) -> str:
         remote = str(tool_input.get("remote", "origin")).strip() or "origin"
@@ -149,11 +191,12 @@ class Agent:
         if branch == "HEAD":
             return "error: detached HEAD is not supported; checkout a branch first"
 
+        push_target = self._get_authenticated_push_url(remote) or remote
         set_upstream = bool(tool_input.get("set_upstream", True))
         push_command = ["git", "push"]
         if set_upstream:
             push_command.append("-u")
-        push_command.extend([remote, branch])
+        push_command.extend([push_target, branch])
 
         push = subprocess.run(
             push_command,
@@ -228,8 +271,9 @@ class Agent:
             else:
                 base = "main"
 
+        push_target = self._get_authenticated_push_url("origin") or "origin"
         push = subprocess.run(
-            ["git", "push", "-u", "origin", head],
+            ["git", "push", "-u", push_target, head],
             cwd=config.WORKSPACE_ROOT,
             check=False,
             capture_output=True,
@@ -281,6 +325,7 @@ class Agent:
         return f"ok: opened PR #{pr_number} {pr_url}"
 
     def run_task(self, task: str, extra_context: str = "") -> str:
+        log_activity("task_start", {"task": task[:400], "has_extra_context": bool(extra_context)})
         messages = list(self._base_messages)
         auto_docs: list[str] = []
         for url in _extract_urls(task):
@@ -327,6 +372,7 @@ class Agent:
                 done = True
                 break
 
+            tool_results: list[dict[str, object]] = []
             for tool_use in tool_uses:
                 tool_name = tool_use.get("name", "bash")
                 command = tool_use.get("input", {}).get("command", "")
@@ -340,12 +386,8 @@ class Agent:
                         result_text = "Blocked: approval denied or timed out."
                     else:
                         result_text = self._push_branch_to_remote(tool_use.get("input", {}))
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": [format_tool_result(tool_use_id=tool_use["id"], output=result_text)],
-                        }
-                    )
+                    log_activity("tool_result", {"tool": tool_name, "result": result_text[:500]})
+                    tool_results.append(format_tool_result(tool_use_id=tool_use["id"], output=result_text))
                     continue
 
                 if tool_name == "make_pr":
@@ -355,12 +397,8 @@ class Agent:
                         result_text = "Blocked: approval denied or timed out."
                     else:
                         result_text = self._create_github_pr(tool_use.get("input", {}))
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": [format_tool_result(tool_use_id=tool_use["id"], output=result_text)],
-                        }
-                    )
+                    log_activity("tool_result", {"tool": tool_name, "result": result_text[:500]})
+                    tool_results.append(format_tool_result(tool_use_id=tool_use["id"], output=result_text))
                     continue
 
                 if is_modification and not self.rate_limiter.can_modify():
@@ -390,15 +428,28 @@ class Agent:
                                 },
                             )
                         result_text = f"exit={execution.exit_code}\nstdout:\n{execution.stdout}\nstderr:\n{execution.stderr}"
+                log_activity(
+                    "tool_result",
+                    {
+                        "tool": tool_name,
+                        "command": command,
+                        "is_modification": is_modification,
+                        "result_preview": result_text[:500],
+                    },
+                )
 
+                tool_results.append(format_tool_result(tool_use_id=tool_use["id"], output=result_text))
+
+            if tool_results:
                 messages.append(
                     {
                         "role": "user",
-                        "content": [format_tool_result(tool_use_id=tool_use["id"], output=result_text)],
+                        "content": tool_results,
                     }
                 )
 
         self._reset_conversation()
+        log_activity("task_end", {"task": task[:400], "result_preview": (final_text or "")[:500]})
         return final_text or ""
 
     def _load_task_queue(self, tasks_path: Path) -> list[dict[str, str]]:

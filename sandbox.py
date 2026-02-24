@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from fnmatch import fnmatch
 import ipaddress
+import os
+from pathlib import Path
 import re
 import resource
 import subprocess
@@ -12,8 +14,12 @@ from typing import Protocol
 from urllib.parse import urlparse
 
 import config
+from safety import log_activity
 
 URL_PATTERN = re.compile(r"https?://[^\s'\"]+")
+
+# Path to the ASKPASS helper used to supply GitHub credentials non-interactively.
+_GIT_ASKPASS = Path(__file__).resolve().parent / "scripts" / "git-askpass.py"
 PRIVATE_HOST_PATTERNS = {
     "localhost",
     "127.0.0.1",
@@ -103,8 +109,24 @@ class FlySpriteSandbox:
     def allows_host(self, host: str) -> bool:
         return any(fnmatch(host, pattern) for pattern in self.allowlist)
 
+    def _build_subprocess_env(self) -> dict[str, str]:
+        """Return an env dict for subprocess calls with git auth configured.
+
+        Sets GIT_TERMINAL_PROMPT=0 so git never tries to open /dev/tty for
+        interactive credential prompts (which hang in non-TTY sandbox
+        environments).  When the ASKPASS helper script is present and
+        executable, GIT_ASKPASS is pointed at it so git can still obtain
+        credentials from the environment non-interactively.
+        """
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        if _GIT_ASKPASS.exists() and os.access(_GIT_ASKPASS, os.X_OK):
+            env["GIT_ASKPASS"] = str(_GIT_ASKPASS)
+        return env
+
     def execute(self, command: str, timeout: int = config.COMMAND_TIMEOUT) -> ExecutionResult:
+        log_activity("sandbox_execute_start", {"command": command, "timeout": timeout})
         if not is_command_safe(command, self.allowlist):
+            log_activity("sandbox_execute_rejected", {"command": command, "reason": "sandbox_policy"})
             return ExecutionResult(
                 stdout="",
                 stderr="Command rejected by sandbox policy",
@@ -116,6 +138,7 @@ class FlySpriteSandbox:
             memory_bytes = self.memory_limit_mb * 1024 * 1024
             resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
 
+        result: ExecutionResult | None = None
         try:
             completed = subprocess.run(
                 command,
@@ -125,17 +148,31 @@ class FlySpriteSandbox:
                 text=True,
                 timeout=timeout,
                 preexec_fn=_apply_limits,
+                env=self._build_subprocess_env(),
             )
-            return ExecutionResult(
+            result = ExecutionResult(
                 stdout=truncate_output(completed.stdout, self.max_output_chars),
                 stderr=truncate_output(completed.stderr, self.max_output_chars),
                 exit_code=completed.returncode,
                 timed_out=False,
             )
+            return result
         except subprocess.TimeoutExpired as exc:
-            return ExecutionResult(
+            log_activity("sandbox_execute_timeout", {"command": command, "timeout": timeout})
+            result = ExecutionResult(
                 stdout=truncate_output(exc.stdout or "", self.max_output_chars),
                 stderr=truncate_output(exc.stderr or "", self.max_output_chars),
                 exit_code=124,
                 timed_out=True,
+            )
+            return result
+        finally:
+            # Best-effort terminal marker for execution lifecycle.
+            log_activity(
+                "sandbox_execute_end",
+                {
+                    "command": command,
+                    "exit_code": result.exit_code if result else None,
+                    "timed_out": result.timed_out if result else None,
+                },
             )

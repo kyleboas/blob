@@ -13,6 +13,22 @@ export interface SafetyDecision {
   requiresApproval?: boolean;
 }
 
+export interface SafetyOptions {
+  applySelfModificationRateLimit?: boolean;
+}
+
+const SELF_MOD_WRITE_PATTERNS = [
+  /\b(sed|tee|truncate|touch|mv|cp|rm)\b/,
+  />|>>/,
+  /\b(git\s+commit|git\s+add|python|npm)\b/
+];
+
+const SELF_MOD_TARGET_PATTERNS = [
+  /\b(src|tests?|scripts|docs)\//,
+  /\b(agent\.py|safety\.py|approval\.py|config\.py|blob_config\.py)\b/,
+  /\.(ts|tsx|js|jsx|py|md|json|toml|yaml|yml)\b/
+];
+
 const AUTO_APPROVE_PATTERNS = [
   /^(cat|ls|pwd|echo|head|tail|wc|find|grep|git\s+status)\b/
 ];
@@ -70,6 +86,16 @@ export function classifyCommand(command: string): CommandClassification {
   return "conditional";
 }
 
+export function isSelfModificationCommand(command: string): boolean {
+  const normalized = command.trim().toLowerCase();
+  const hasWriteIntent = SELF_MOD_WRITE_PATTERNS.some((pattern) => pattern.test(normalized));
+  if (!hasWriteIntent) {
+    return false;
+  }
+
+  return SELF_MOD_TARGET_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
 export function checkConstitution(command: string, files: string[]): string[] {
   const lowered = command.toLowerCase();
 
@@ -86,11 +112,16 @@ export function enforceSafety(
   command: string,
   sql: SqlStorage,
   sessionId: string,
-  files: string[] = []
+  files: string[] = [],
+  options: SafetyOptions = {}
 ): SafetyDecision {
-  const rateLimit = checkRateLimit(sql, sessionId);
-  if (!rateLimit.allowed) {
-    return { allowed: false, reason: rateLimit.reason };
+  const { applySelfModificationRateLimit = true } = options;
+
+  if (applySelfModificationRateLimit && isSelfModificationCommand(command)) {
+    const rateLimit = checkRateLimit(sql, sessionId);
+    if (!rateLimit.allowed) {
+      return { allowed: false, reason: rateLimit.reason };
+    }
   }
 
   const constitutionViolations = checkConstitution(command, files);

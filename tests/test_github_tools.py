@@ -31,8 +31,14 @@ class TestGetToken:
 
     def test_raises_when_missing(self, monkeypatch):
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-        with pytest.raises(RuntimeError, match="GITHUB_TOKEN"):
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        with pytest.raises(RuntimeError, match=r"GITHUB_TOKEN \(or GH_TOKEN\)"):
             github_tools._get_token()
+
+    def test_falls_back_to_gh_token(self, monkeypatch):
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.setenv("GH_TOKEN", "legacy-token")
+        assert github_tools._get_token() == "legacy-token"
 
 
 class TestApiRequest:
@@ -155,5 +161,40 @@ class TestAuthenticatedRemoteUrl:
 
     def test_raises_when_token_missing(self, monkeypatch):
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-        with pytest.raises(RuntimeError, match="GITHUB_TOKEN"):
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        with pytest.raises(RuntimeError, match=r"GITHUB_TOKEN \(or GH_TOKEN\)"):
             github_tools.authenticated_remote_url("kyleboas", "blob")
+
+
+class TestPushBranch:
+    def test_push_succeeds(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stderr = "Branch 'blob/my-branch' set up to track remote branch"
+        mock_result.stdout = ""
+        with patch("github_tools.subprocess.run", return_value=mock_result) as mock_run:
+            result = github_tools.push_branch("kyleboas", "blob", "blob/my-branch")
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "git"
+        assert cmd[1] == "push"
+        assert "-u" in cmd
+        assert "https://test-token@github.com/kyleboas/blob.git" in cmd
+        assert "blob/my-branch" in cmd
+        assert "set up to track" in result
+
+    def test_push_fails_raises(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+        mock_result = MagicMock()
+        mock_result.returncode = 128
+        mock_result.stderr = "fatal: repository not found"
+        mock_result.stdout = ""
+        with patch("github_tools.subprocess.run", return_value=mock_result):
+            with pytest.raises(RuntimeError, match="git push failed"):
+                github_tools.push_branch("kyleboas", "blob", "blob/my-branch")
+
+    def test_push_raises_when_token_missing(self, monkeypatch):
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        with pytest.raises(RuntimeError, match=r"GITHUB_TOKEN \(or GH_TOKEN\)"):
+            github_tools.push_branch("kyleboas", "blob", "blob/my-branch")

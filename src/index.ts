@@ -49,7 +49,8 @@ function renderLiveLogPage(): string {
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
     #status { color: #94a3b8; margin-bottom: 0.75rem; font-size: 0.85rem; }
     #status.error { color: #f87171; }
-    #log { white-space: pre-wrap; background: #020617; border: 1px solid #1e293b; border-radius: 8px; padding: 1rem; min-height: 300px; max-height: calc(100vh - 120px); overflow-y: auto; margin: 0; }
+    #log { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #020617; border: 1px solid #1e293b; border-radius: 8px; padding: 1rem; min-height: 300px; max-height: calc(100vh - 120px); overflow-y: auto; margin: 0; user-select: text; cursor: text; }
+    #log span { user-select: text; }
     .line-task_received { color: #60a5fa; }
     .line-command { color: #e2e8f0; }
     .line-command_success { color: #4ade80; }
@@ -58,33 +59,112 @@ function renderLiveLogPage(): string {
     .line-command_error { color: #fca5a5; }
     .line-completed { color: #a78bfa; }
     .line-message { color: #fbbf24; }
-    .line-thinking, .line-session { color: #94a3b8; }
+    .line-thinking, .line-session, .line-trace { color: #94a3b8; }
+    .line-trace_warning { color: #f59e0b; }
+    .line-trace_error, .line-background_error { color: #f87171; }
+    .line-heartbeat_start { color: #22d3ee; }
     .empty { color: #475569; font-style: italic; }
+    #copy-btn { margin-left: auto; font-family: inherit; font-size: 0.8rem; background: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 4px; padding: 0.25rem 0.6rem; cursor: pointer; }
+    #copy-btn:hover { background: #334155; color: #e2e8f0; }
+    #copy-btn.copied { color: #4ade80; border-color: #4ade80; }
+    .build-group { display: block; }
+    .build-group + .build-group { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #1e293b; }
+    .build-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; white-space: normal; }
+    .build-label { color: #64748b; font-size: 0.8rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .build-copy-btn { font-family: inherit; font-size: 0.75rem; background: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 4px; padding: 0.15rem 0.5rem; cursor: pointer; flex-shrink: 0; }
+    .build-copy-btn:hover { background: #334155; color: #e2e8f0; }
+    .build-copy-btn.copied { color: #4ade80; border-color: #4ade80; }
   </style>
 </head>
 <body>
-  <h1><span id="live-dot"></span>Blob Live Logs</h1>
+  <h1><span id="live-dot"></span>Blob Live Logs<button id="copy-btn" title="Copy all log text">Copy all</button></h1>
   <div id="status">Connecting...</div>
-  <pre id="log"><span class="empty">Waiting for events...</span></pre>
+  <div id="log"><span class="empty">Waiting for events...</span></div>
   <script>
     const logNode = document.getElementById('log');
     const statusNode = document.getElementById('status');
     const dotNode = document.getElementById('live-dot');
+    const copyBtn = document.getElementById('copy-btn');
     let lastSnapshotSig = '';
+    let currentEvents = [];
+
+    copyBtn.addEventListener('click', () => {
+      const text = currentEvents.map((event) => {
+        const when = new Date(event.createdAt * 1000).toISOString().replace('T', ' ').replace('Z', '');
+        return when + '  [' + event.eventType + ']  ' + event.message;
+      }).join('\\n');
+      navigator.clipboard.writeText(text).then(() => {
+        copyBtn.textContent = 'Copied!';
+        copyBtn.className = 'copied';
+        setTimeout(() => { copyBtn.textContent = 'Copy all'; copyBtn.className = ''; }, 2000);
+      }).catch(() => {
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(logNode);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      });
+    });
+
+    function escHtml(s) {
+      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    function formatLine(event) {
+      const when = new Date(event.createdAt * 1000).toISOString().replace('T', ' ').replace('Z', '');
+      const cls = 'line-' + event.eventType;
+      const text = when + '  [' + event.eventType + ']  ' + event.message;
+      return '<span class="' + cls + '">' + escHtml(text) + '</span>';
+    }
 
     function renderEvents(events) {
+      currentEvents = events;
       if (events.length === 0) {
-        logNode.innerHTML = '<span class="empty">No events yet. Send a message to Blob in Slack to see activity here.</span>';
+        logNode.innerHTML = '<span class="empty">No events yet. Blob activity will appear here automatically.</span>';
         return;
       }
 
       const atBottom = logNode.scrollHeight - logNode.scrollTop <= logNode.clientHeight + 50;
-      logNode.innerHTML = events.map((event) => {
-        const when = new Date(event.createdAt * 1000).toISOString().replace('T', ' ').replace('Z', '');
-        const cls = 'line-' + event.eventType;
-        const text = when + '  [' + event.eventType + ']  ' + event.message;
-        return '<span class="' + cls + '">' + text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</span>';
-      }).join('\\n');
+
+      // Group events into builds; a new build starts at each task_received or heartbeat_start event
+      const builds = [];
+      let current = null;
+      for (const event of events) {
+        if (event.eventType === 'task_received' || event.eventType === 'heartbeat_start') {
+          current = { label: event.message, events: [] };
+          builds.push(current);
+        }
+        if (!current) {
+          current = { label: null, events: [] };
+          builds.push(current);
+        }
+        current.events.push(event);
+      }
+
+      logNode.innerHTML = builds.map((build, idx) => {
+        const labelHtml = build.label !== null ? escHtml(build.label.slice(0, 120)) : 'Events';
+        const header = '<div class="build-header"><span class="build-label">' + labelHtml + '</span><button class="build-copy-btn" data-idx="' + idx + '">Copy</button></div>';
+        const lines = build.events.map(formatLine).join('\\n');
+        return '<div class="build-group">' + header + lines + '</div>';
+      }).join('');
+
+      // Attach per-build copy button handlers
+      logNode.querySelectorAll('.build-copy-btn').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const idx = parseInt(btn.getAttribute('data-idx'));
+          const build = builds[idx];
+          const text = build.events.map((event) => {
+            const when = new Date(event.createdAt * 1000).toISOString().replace('T', ' ').replace('Z', '');
+            return when + '  [' + event.eventType + ']  ' + event.message;
+          }).join('\\n');
+          navigator.clipboard.writeText(text).then(() => {
+            btn.textContent = 'Copied!';
+            btn.classList.add('copied');
+            setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+          }).catch(() => {});
+        });
+      });
 
       if (atBottom) logNode.scrollTop = logNode.scrollHeight;
     }
@@ -172,7 +252,7 @@ export default {
       return new Response("ok", { status: 200 });
     }
 
-    if (request.method === "GET" && (url.pathname === "/logs" || url.pathname === "/live-logs")) {
+    if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/logs" || url.pathname === "/live-logs")) {
       return new Response(renderLiveLogPage(), {
         status: 200,
         headers: { "content-type": "text/html; charset=utf-8" }

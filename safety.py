@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -12,6 +13,23 @@ import config
 
 
 MODIFY_COUNT_FILE = config.WORKSPACE_ROOT / ".modify_count"
+
+
+def _activity_log_path() -> Path:
+    """Return the global activity log path (defaults to /logs/blob_activity.jsonl)."""
+    log_dir = Path(os.getenv("BLOB_ACTIVITY_LOG_DIR", "/logs"))
+    return log_dir / "blob_activity.jsonl"
+
+
+def log_activity(event: str, payload: dict[str, object]) -> None:
+    """Write an append-only activity event for all runtime behavior."""
+    append_audit_log(
+        _activity_log_path(),
+        {
+            "event": event,
+            **payload,
+        },
+    )
 
 
 def _run_git(*args: str) -> subprocess.CompletedProcess[str]:
@@ -26,6 +44,18 @@ def append_audit_log(path: Path, payload: dict[str, object]) -> None:
     }
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row) + "\n")
+
+    activity_log = _activity_log_path()
+    if path != activity_log:
+        mirror_row = {
+            "timestamp": row["timestamp"],
+            "event": "audit_log",
+            "source_log": str(path),
+            "payload": payload,
+        }
+        activity_log.parent.mkdir(parents=True, exist_ok=True)
+        with activity_log.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(mirror_row) + "\n")
 
 
 def git_auto_commit(message: str) -> bool:

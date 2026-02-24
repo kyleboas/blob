@@ -8,8 +8,8 @@ import {
   BACKGROUND_TASK_INTERVAL_MS
 } from "./config";
 import { callLLM, type LLMResponse } from "./llm";
-import { enforceSafety } from "./safety";
-import { SandboxClient, type SandboxBinding } from "./sandbox-client";
+import { enforceSafety, isSelfModificationCommand } from "./safety";
+import { SandboxClient, SANDBOX_ENV_FILE, type SandboxBinding } from "./sandbox-client";
 import {
   compactMessagesInDB,
   completeHeartbeat,
@@ -38,10 +38,19 @@ import {
   type SessionSummary,
   type SqlStorage
 } from "./storage";
-import { BASH_TOOL, formatToolResult } from "./tools";
+import {
+  BASH_TOOL,
+  CREATE_TOOL_TOOL,
+  compileDynamicToolCommand,
+  dynamicToolToAnthropicSchema,
+  formatToolResult,
+  type DynamicToolDefinition,
+  validateDynamicToolDefinition
+} from "./tools";
 import { postApprovalRequest, postMessage } from "./slack";
 import { createApprovalRequest, expireTimedOutApprovals, resolveApprovalReaction, type PendingApproval } from "./approval";
 import type { ConversationMessage, Env, SlackEvent } from "./types";
+import type { ToolResult } from "./types";
 
 interface DurableObjectStateLike {
   waitUntil?: (promise: Promise<unknown>) => void;
@@ -55,7 +64,7 @@ interface ToolUseBlock {
   type: "tool_use";
   id: string;
   name: string;
-  input: { command?: string };
+  input: Record<string, unknown>;
 }
 
 interface TextBlock {
@@ -77,22 +86,27 @@ const DEFAULT_DEPS: AgentDeps = {
   now: () => Date.now()
 };
 
+// Wraps a string in single quotes and escapes any embedded single quotes so it
+// can be safely embedded in a shell script written to the sandbox env file.
+function shellEscape(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 // DO name for the global logs channel – matches mapChannelToDO("__global__")
 const GLOBAL_LOGS_DO_NAME = "slack-channel:__global__";
 const SLOW_OPERATION_WARN_MS = 15_000;
 
 const BASE_SYSTEM_PROMPT = [
   "You are Blob, a careful coding agent.",
-  "Use tools when needed."
+  "Use tools when needed.",
+  "The sandbox working directory is /workspace.",
+  "Always use absolute paths (e.g. /workspace/repo) rather than bare directory names when referencing cloned repos.",
+  "Each sandbox session starts fresh in /workspace — files from previous sessions are not automatically present.",
+  "If a workflow repeats, use create_tool to define a reusable tool and then call it directly in later steps."
 ].join(" ");
 
-function buildSystemPrompt(knowledge: string, recentSummaries: SessionSummary[]): string {
+function buildSystemPrompt(_knowledge: string, recentSummaries: SessionSummary[]): string {
   let prompt = BASE_SYSTEM_PROMPT;
-
-  const trimmedKnowledge = knowledge.trim();
-  if (trimmedKnowledge) {
-    prompt += `\n\nFollow this AGENT.md knowledge when relevant:\n${trimmedKnowledge}`;
-  }
 
   if (recentSummaries.length > 0) {
     const summariesText = recentSummaries.map((s) => s.summary).join("\n---\n");
@@ -210,6 +224,7 @@ export class AgentDO {
     void work.catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       logAgentEvent(this.db, "global", "background_error", message);
+      this.forwardToGlobalLogs("background_error", message);
     });
   }
 
@@ -289,13 +304,38 @@ export class AgentDO {
     return new Response("bad request", { status: 400 });
   }
 
-  async runAgentLoop(task: string, channel: string, sessionId: string): Promise<{ finalText: string; steps: number }> {
+  async runAgentLoop(
+    task: string,
+    channel: string,
+    sessionId: string,
+    options: { applySelfModificationRateLimit?: boolean } = {}
+  ): Promise<{ finalText: string; steps: number }> {
+    const { applySelfModificationRateLimit = false } = options;
+
     logAgentEvent(this.db, sessionId, "task_received", task);
     this.forwardToGlobalLogs("task_received", `[#${channel}] ${task}`);
 
     // Load history and compact if the context is getting large
     const rawConversation = getHistory(this.db, sessionId);
     const conversation = await this.compactConversationIfNeeded(rawConversation, sessionId);
+
+    // Recover from an interrupted run: if the last saved message is an assistant
+    // message with tool_use blocks but no corresponding tool_result was ever saved
+    // (e.g. the worker was restarted mid-execution), add placeholder tool_results
+    // so the API does not reject the conversation with a missing-tool_result error.
+    const lastSaved = conversation.length > 0 ? conversation[conversation.length - 1] : null;
+    if (lastSaved?.role === "assistant" && Array.isArray(lastSaved.content)) {
+      const orphanedToolUses = (lastSaved.content as Array<{ type: string; id: string }>)
+        .filter((b) => b.type === "tool_use");
+      if (orphanedToolUses.length > 0) {
+        const recoveryResults = orphanedToolUses.map((b) =>
+          formatToolResult(b.id, "Tool execution was interrupted before results were saved.")
+        );
+        const recoveryMsg: ConversationMessage = { role: "user", content: recoveryResults };
+        conversation.push(recoveryMsg);
+        saveMessage(this.db, sessionId, recoveryMsg);
+      }
+    }
 
     saveMessage(this.db, sessionId, { role: "user", content: task });
     conversation.push({ role: "user", content: task });
@@ -307,12 +347,13 @@ export class AgentDO {
     void syncKnowledgeFromSandbox(this.db, this.sandbox);
     const summaries = getRecentSessionSummaries(this.db, SESSION_SUMMARY_RECENT_COUNT);
     const systemPrompt = buildSystemPrompt(getKnowledge(this.db), summaries);
+    const dynamicTools = new Map<string, DynamicToolDefinition>();
 
     let thinkingTimer: ReturnType<typeof setTimeout> | undefined;
     let thinkingMessagePromise: Promise<void> | null = null;
     thinkingTimer = setTimeout(() => {
       thinkingMessagePromise = this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, "Thinking...").then(() => {
-        logAgentEvent(this.db, sessionId, "thinking", "Posted delayed thinking status.");
+        this.logDiagnostic(sessionId, "thinking", "Posted delayed thinking status.", channel);
       });
     }, THINKING_MESSAGE_DELAY_MS);
 
@@ -323,7 +364,7 @@ export class AgentDO {
         apiKey: this.env.ANTHROPIC_API_KEY,
         systemPrompt,
         messages: conversation,
-        tools: [BASH_TOOL]
+        tools: this.buildToolList(dynamicTools)
       }),
       channel
     );
@@ -352,17 +393,27 @@ export class AgentDO {
         if (!sandboxStarted) {
           await this.traceOperation(sessionId, "sandbox_start", () => this.startSandboxSession(sessionId), channel);
           sandboxStarted = true;
-          logAgentEvent(this.db, sessionId, "session", "Sandbox session started.");
+          this.logDiagnostic(sessionId, "session", "Sandbox session started.", channel);
         }
 
-        const decision = await this.processLlmResponse(llmResponse, channel, sessionId);
+        // Save the assistant's LLM response (including tool_use blocks) before execution
+        conversation.push({ role: "assistant", content: llmResponse.content });
+        saveMessage(this.db, sessionId, { role: "assistant", content: llmResponse.content });
+
+        const decision = await this.processLlmResponse(llmResponse, channel, sessionId, {
+          applySelfModificationRateLimit,
+          dynamicTools
+        });
+        if (decision.observations.length > 0) {
+          // Tool results are user-role messages in the Anthropic API, not assistant
+          conversation.push({ role: "user", content: decision.observations });
+          saveMessage(this.db, sessionId, { role: "user", content: decision.observations });
+        }
+
         if (decision.done) {
           finalText = decision.text;
           break;
         }
-
-        conversation.push({ role: "assistant", content: decision.observation });
-        saveMessage(this.db, sessionId, { role: "assistant", content: decision.observation });
 
         llmResponse = await this.traceOperation(
           sessionId,
@@ -371,7 +422,7 @@ export class AgentDO {
             apiKey: this.env.ANTHROPIC_API_KEY,
             systemPrompt,
             messages: conversation,
-            tools: [BASH_TOOL]
+            tools: this.buildToolList(dynamicTools)
           }),
           channel
         );
@@ -379,7 +430,7 @@ export class AgentDO {
     } finally {
       if (sandboxStarted) {
         await this.traceOperation(sessionId, "sandbox_end", () => this.endSandboxSession(sessionId), channel);
-        logAgentEvent(this.db, sessionId, "session", "Sandbox session ended.");
+        this.logDiagnostic(sessionId, "session", "Sandbox session ended.", channel);
       }
     }
 
@@ -417,8 +468,12 @@ export class AgentDO {
   private async processLlmResponse(
     llmResponse: LLMResponse,
     channel: string,
-    sessionId: string
-  ): Promise<{ done: boolean; text: string; observation: string }> {
+    sessionId: string,
+    options: {
+      applySelfModificationRateLimit: boolean;
+      dynamicTools: Map<string, DynamicToolDefinition>;
+    }
+  ): Promise<{ done: boolean; text: string; observations: ToolResult[] }> {
     const blocks = llmResponse.content as Array<ToolUseBlock | TextBlock>;
     const toolBlock = blocks.find((block) => block.type === "tool_use") as ToolUseBlock | undefined;
     if (!toolBlock) {
@@ -428,76 +483,138 @@ export class AgentDO {
         .join("\n")
         .trim();
 
-      return { done: true, text: text || "Done.", observation: "" };
+      return { done: true, text: text || "Done.", observations: [] };
     }
 
-    const command = String(toolBlock.input.command ?? "");
-    logAgentEvent(this.db, sessionId, "command", command);
-    this.forwardToGlobalLogs("command", `[#${channel}] ${command}`);
-    const safety = enforceSafety(command, this.db, sessionId, []);
+    const observations: ToolResult[] = [];
+    let done = false;
+    let doneText = "";
 
-    if (!safety.allowed && safety.requiresApproval) {
-      await createApprovalRequest(
-        this.pendingApprovals,
-        {
-          sessionId,
-          command,
-          channel
-        },
-        this.deps,
-        this.env.SLACK_BOT_TOKEN,
-        this.ctx.storage
-      );
-      return {
-        done: true,
-        text: "Paused pending approval.",
-        observation: ""
-      };
+    const toolBlocks = blocks.filter((block): block is ToolUseBlock => block.type === "tool_use");
+    for (let i = 0; i < toolBlocks.length; i++) {
+      const toolBlock = toolBlocks[i];
+
+      if (done) {
+        observations.push(formatToolResult(toolBlock.id, "Skipped: agent execution already paused."));
+        continue;
+      }
+
+      if (toolBlock.name === CREATE_TOOL_TOOL.name) {
+        const validation = validateDynamicToolDefinition(toolBlock.input);
+        const toolResult = validation.ok
+          ? (() => {
+              options.dynamicTools.set(validation.definition.name, validation.definition);
+              return `Created tool \"${validation.definition.name}\" with args: ${validation.definition.args.join(", ") || "(none)"}.`;
+            })()
+          : `Tool creation failed: ${validation.reason}`;
+
+        observations.push(formatToolResult(toolBlock.id, toolResult));
+        continue;
+      }
+
+      const dynamicTool = options.dynamicTools.get(toolBlock.name);
+      const commandResult = dynamicTool
+        ? compileDynamicToolCommand(dynamicTool, toolBlock.input)
+        : { ok: true as const, command: String(toolBlock.input.command ?? "") };
+
+      if (!commandResult.ok) {
+        observations.push(formatToolResult(toolBlock.id, `Tool execution failed: ${commandResult.reason}`));
+        continue;
+      }
+
+      const command = commandResult.command.trim();
+      if (!command) {
+        const warning = "Tool execution failed: empty command generated. Please provide a non-empty command.";
+        logAgentEvent(this.db, sessionId, "trace_warning", warning);
+        this.forwardToGlobalLogs("trace_warning", `[#${channel}] ${warning}`);
+        observations.push(formatToolResult(toolBlock.id, warning));
+        continue;
+      }
+
+      const sanitizedCommand = this.sanitizeSecrets(command);
+      logAgentEvent(this.db, sessionId, "command", sanitizedCommand);
+      this.forwardToGlobalLogs("command", `[#${channel}] ${sanitizedCommand}`);
+      const safety = enforceSafety(command, this.db, sessionId, [], {
+        applySelfModificationRateLimit: options.applySelfModificationRateLimit
+      });
+
+      if (!safety.allowed && safety.requiresApproval) {
+        await createApprovalRequest(
+          this.pendingApprovals,
+          {
+            sessionId,
+            command,
+            channel
+          },
+          this.deps,
+          this.env.SLACK_BOT_TOKEN,
+          this.ctx.storage
+        );
+        observations.push(formatToolResult(toolBlock.id, "Paused pending approval."));
+        done = true;
+        doneText = "Paused pending approval.";
+        continue;
+      }
+
+      if (!safety.allowed) {
+        const blockedReason = safety.reason ?? "Blocked by safety policy.";
+        observations.push(formatToolResult(toolBlock.id, blockedReason));
+        done = true;
+        doneText = blockedReason;
+        continue;
+      }
+
+      if (options.applySelfModificationRateLimit && isSelfModificationCommand(command)) {
+        incrementRateLimit(this.db, "session", sessionId);
+        const todayKey = new Date().toISOString().slice(0, 10);
+        incrementRateLimit(this.db, "day", todayKey);
+      }
+      const result = await this.traceOperation(sessionId, "command_exec", () => this.executeWithGitSafety(command), channel);
+      if (result.stdout.trim()) {
+        const rawStdout = result.stdout.length > 4000 ? `${result.stdout.slice(0, 4000)}\n...[truncated]` : result.stdout;
+        const stdoutMessage = this.sanitizeSecrets(rawStdout);
+        logAgentEvent(this.db, sessionId, "command_output", stdoutMessage);
+        this.forwardToGlobalLogs("command_output", `[#${channel}] ${stdoutMessage}`);
+      }
+
+      if (result.stderr.trim()) {
+        const rawStderr = result.stderr.length > 4000 ? `${result.stderr.slice(0, 4000)}\n...[truncated]` : result.stderr;
+        const stderrMessage = this.sanitizeSecrets(rawStderr);
+        logAgentEvent(this.db, sessionId, "command_error", stderrMessage);
+        this.forwardToGlobalLogs("command_error", `[#${channel}] ${stderrMessage}`);
+      }
+
+      const exitSummary = `Command finished with exit code ${result.exitCode}.`;
+      const exitEventType = result.exitCode === 0 ? "command_success" : "command_failure";
+      logAgentEvent(this.db, sessionId, exitEventType, exitSummary);
+      this.forwardToGlobalLogs(exitEventType, `[#${channel}] ${exitSummary}`);
+
+      if (result.exitCode === 0 && isCloudflareApplyCommand(command)) {
+        await this.deps.postSlackMessage(
+          this.env.SLACK_BOT_TOKEN,
+          channel,
+          "✅ Cloudflare update applied successfully. Your latest changes should now be effective."
+        );
+      }
+
+      const milestone = detectMilestone(command, result.exitCode, result.stdout);
+      if (milestone) {
+        await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, milestone.message);
+      }
+
+      const toolOutput = this.sanitizeSecrets([result.stdout, result.stderr].filter(Boolean).join("\n"));
+      observations.push(formatToolResult(toolBlock.id, toolOutput));
     }
-
-    if (!safety.allowed) {
-      return { done: true, text: safety.reason ?? "Blocked by safety policy.", observation: "" };
-    }
-
-    incrementRateLimit(this.db, "session", sessionId);
-    const result = await this.traceOperation(sessionId, "command_exec", () => this.executeWithGitSafety(command), channel);
-    if (result.stdout.trim()) {
-      const stdoutMessage = result.stdout.length > 4000 ? `${result.stdout.slice(0, 4000)}\n...[truncated]` : result.stdout;
-      logAgentEvent(this.db, sessionId, "command_output", stdoutMessage);
-      this.forwardToGlobalLogs("command_output", `[#${channel}] ${stdoutMessage}`);
-    }
-
-    if (result.stderr.trim()) {
-      const stderrMessage = result.stderr.length > 4000 ? `${result.stderr.slice(0, 4000)}\n...[truncated]` : result.stderr;
-      logAgentEvent(this.db, sessionId, "command_error", stderrMessage);
-      this.forwardToGlobalLogs("command_error", `[#${channel}] ${stderrMessage}`);
-    }
-
-    const exitSummary = `Command finished with exit code ${result.exitCode}.`;
-    const exitEventType = result.exitCode === 0 ? "command_success" : "command_failure";
-    logAgentEvent(this.db, sessionId, exitEventType, exitSummary);
-    this.forwardToGlobalLogs(exitEventType, `[#${channel}] ${exitSummary}`);
-
-    if (result.exitCode === 0 && isCloudflareApplyCommand(command)) {
-      await this.deps.postSlackMessage(
-        this.env.SLACK_BOT_TOKEN,
-        channel,
-        "✅ Cloudflare update applied successfully. Your latest changes should now be effective."
-      );
-    }
-
-    const milestone = detectMilestone(command, result.exitCode, result.stdout);
-    if (milestone) {
-      await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, milestone.message);
-    }
-
-    const formatted = formatToolResult(toolBlock.id, [result.stdout, result.stderr].filter(Boolean).join("\n"));
 
     return {
-      done: false,
-      text: "",
-      observation: JSON.stringify(formatted)
+      done,
+      text: doneText,
+      observations
     };
+  }
+
+  private buildToolList(dynamicTools: Map<string, DynamicToolDefinition>): unknown[] {
+    return [BASH_TOOL, CREATE_TOOL_TOOL, ...Array.from(dynamicTools.values()).map((tool) => dynamicToolToAnthropicSchema(tool))];
   }
 
   private async executeWithRetry(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -565,6 +682,35 @@ export class AgentDO {
     await this.sandbox.warmUp();
     await restoreRepoSnapshot(this.env.REPO_STORE, sessionId, this.sandbox);
     await syncKnowledgeToSandbox(this.db, this.sandbox);
+    await this.injectSecretsIntoSandbox();
+  }
+
+  // Writes Cloudflare secrets that the sandbox container needs (e.g. GITHUB_TOKEN)
+  // to a sourced env file so they are available to every command executed in the
+  // sandbox without being embedded in individual command strings.
+  private async injectSecretsIntoSandbox(): Promise<void> {
+    const lines: string[] = [];
+    // Prevent git from trying to open /dev/tty for interactive credential prompts,
+    // which causes "No such device or address" errors in non-TTY sandbox environments.
+    lines.push("export GIT_TERMINAL_PROMPT=0");
+    if (this.env.GITHUB_TOKEN) {
+      lines.push(`export GITHUB_TOKEN=${shellEscape(this.env.GITHUB_TOKEN)}`);
+    }
+    if (this.env.GITHUB_USERNAME) {
+      lines.push(`export GITHUB_USERNAME=${shellEscape(this.env.GITHUB_USERNAME)}`);
+    }
+    await this.sandbox.writeFile(SANDBOX_ENV_FILE, lines.join("\n") + "\n");
+  }
+
+  // Replace any known secret values with a placeholder so they are never written
+  // to logs or forwarded to external channels (e.g. Slack, global log DO).
+  private sanitizeSecrets(text: string): string {
+    let result = text;
+    const token = this.env.GITHUB_TOKEN;
+    if (token && token.length > 8) {
+      result = result.split(token).join("[GITHUB_TOKEN]");
+    }
+    return result;
   }
 
   private async endSandboxSession(sessionId: string): Promise<void> {
@@ -583,7 +729,10 @@ export class AgentDO {
     if (messages.length === 0) return;
 
     const history = messages
-      .map((m) => `${m.role === "user" ? "User" : "Blob"}: ${m.content}`)
+      .map((m) => {
+        const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+        return `${m.role === "user" ? "User" : "Blob"}: ${content}`;
+      })
       .join("\n\n");
 
     const currentKnowledge = getKnowledge(this.db);
@@ -653,7 +802,10 @@ export class AgentDO {
   ): Promise<ConversationMessage[]> {
     const KEEP_RECENT = 6;
     const estimatedTokens = conversation.reduce(
-      (sum, m) => sum + Math.ceil(m.content.length / 4),
+      (sum, m) => {
+        const len = typeof m.content === "string" ? m.content.length : JSON.stringify(m.content).length;
+        return sum + Math.ceil(len / 4);
+      },
       0
     );
 
@@ -665,7 +817,10 @@ export class AgentDO {
     const toKeep = conversation.slice(-KEEP_RECENT);
 
     const history = toCompact
-      .map((m) => `${m.role === "user" ? "User" : "Blob"}: ${m.content}`)
+      .map((m) => {
+        const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+        return `${m.role === "user" ? "User" : "Blob"}: ${content}`;
+      })
       .join("\n\n");
 
     const response = await this.deps.llmCall({
@@ -699,13 +854,16 @@ export class AgentDO {
     if (!heartbeat) return;
 
     logAgentEvent(this.db, heartbeat.id.toString(), "heartbeat_start", heartbeat.task);
+    this.forwardToGlobalLogs("heartbeat_start", `[#${heartbeat.channel}] ${heartbeat.task}`);
 
     try {
       const { sessionId, previousSessionId } = resolveOrCreateSession(this.db, this.deps.now());
       if (previousSessionId) {
         await this.summarizePreviousSession(previousSessionId);
       }
-      const { finalText } = await this.runAgentLoop(heartbeat.task, heartbeat.channel, sessionId);
+      const { finalText } = await this.runAgentLoop(heartbeat.task, heartbeat.channel, sessionId, {
+        applySelfModificationRateLimit: true
+      });
       completeHeartbeat(this.db, heartbeat.id, finalText);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);

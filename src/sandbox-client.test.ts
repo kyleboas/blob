@@ -33,7 +33,11 @@ describe("SandboxClient", () => {
     const result = await client.exec("echo ok");
 
     expect(result).toMatchObject({ stdout: "ok", stderr: "", exitCode: 0, timedOut: false });
-    expect(sandbox.exec).toHaveBeenCalledWith("echo ok");
+    // The command is wrapped with bash -c and env file sourcing; check key parts.
+    const calledWith = sandbox.exec.mock.calls[0][0] as string;
+    expect(calledWith).toContain("echo ok");
+    expect(calledWith).toContain(".blob-env");
+    expect(calledWith).toMatch(/^bash -o pipefail -c '/);
   });
 
   it("returns timeout response for long running command", async () => {
@@ -123,7 +127,7 @@ describe("SandboxClient", () => {
       exec: vi.fn(),
       writeFile: vi
         .fn()
-        .mockRejectedValueOnce(new Error("Command timed out after 15 seconds"))
+        .mockRejectedValueOnce(new Error("Command timed out after 90 seconds"))
         .mockResolvedValueOnce(undefined),
       readFile: vi.fn()
     };
@@ -160,5 +164,73 @@ describe("SandboxClient", () => {
     const client = new SandboxClient(sandbox, 10_000, 0);
     await expect(client.warmUp()).rejects.toThrow("permission denied");
     expect(sandbox.writeFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries warmUp when container exits (code: 0)", async () => {
+    const sandbox = {
+      exec: vi.fn(),
+      writeFile: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("Container exited (code: 0)"))
+        .mockResolvedValueOnce(undefined),
+      readFile: vi.fn()
+    };
+
+    // Pass 0 for both delay params so the test runs without sleeping
+    const client = new SandboxClient(sandbox, 10_000, 0, 0);
+    await client.warmUp();
+
+    expect(sandbox.writeFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries warmUp on HTTP 502 container restart error", async () => {
+    const sandbox = {
+      exec: vi.fn(),
+      writeFile: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("HTTP error! Status: 502"))
+        .mockResolvedValueOnce(undefined),
+      readFile: vi.fn()
+    };
+
+    const client = new SandboxClient(sandbox, 10_000, 0, 0);
+    await client.warmUp();
+
+    expect(sandbox.writeFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("exec re-warms and retries when container exits mid-session", async () => {
+    const sandbox = {
+      exec: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("Container exited (code: 0)"))
+        .mockResolvedValueOnce({ stdout: "output", stderr: "", exitCode: 0 }),
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      readFile: vi.fn()
+    };
+
+    const client = new SandboxClient(sandbox, 10_000, 0, 0);
+    const result = await client.exec("echo hi");
+
+    expect(result.stdout).toBe("output");
+    expect(result.exitCode).toBe(0);
+    expect(result.timedOut).toBe(false);
+    // warmUp was called (writes the probe file)
+    expect(sandbox.writeFile).toHaveBeenCalledWith("/tmp/.blob-warmup", "ok");
+    expect(sandbox.exec).toHaveBeenCalledTimes(2);
+  });
+
+  it("exec returns error result when container restart fails after exit", async () => {
+    const sandbox = {
+      exec: vi.fn().mockRejectedValue(new Error("Container exited (code: 0)")),
+      writeFile: vi.fn().mockRejectedValue(new Error("Container exited (code: 0)")),
+      readFile: vi.fn()
+    };
+
+    const client = new SandboxClient(sandbox, 10_000, 0, 0);
+    const result = await client.exec("echo hi");
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
   });
 });
