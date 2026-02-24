@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from fnmatch import fnmatch
 import ipaddress
+import os
+from pathlib import Path
 import re
 import resource
 import subprocess
@@ -15,6 +17,9 @@ import config
 from safety import log_activity
 
 URL_PATTERN = re.compile(r"https?://[^\s'\"]+")
+
+# Path to the ASKPASS helper used to supply GitHub credentials non-interactively.
+_GIT_ASKPASS = Path(__file__).resolve().parent / "scripts" / "git-askpass.py"
 PRIVATE_HOST_PATTERNS = {
     "localhost",
     "127.0.0.1",
@@ -104,6 +109,20 @@ class FlySpriteSandbox:
     def allows_host(self, host: str) -> bool:
         return any(fnmatch(host, pattern) for pattern in self.allowlist)
 
+    def _build_subprocess_env(self) -> dict[str, str]:
+        """Return an env dict for subprocess calls with git auth configured.
+
+        Sets GIT_TERMINAL_PROMPT=0 so git never tries to open /dev/tty for
+        interactive credential prompts (which hang in non-TTY sandbox
+        environments).  When the ASKPASS helper script is present and
+        executable, GIT_ASKPASS is pointed at it so git can still obtain
+        credentials from the environment non-interactively.
+        """
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        if _GIT_ASKPASS.exists() and os.access(_GIT_ASKPASS, os.X_OK):
+            env["GIT_ASKPASS"] = str(_GIT_ASKPASS)
+        return env
+
     def execute(self, command: str, timeout: int = config.COMMAND_TIMEOUT) -> ExecutionResult:
         log_activity("sandbox_execute_start", {"command": command, "timeout": timeout})
         if not is_command_safe(command, self.allowlist):
@@ -129,6 +148,7 @@ class FlySpriteSandbox:
                 text=True,
                 timeout=timeout,
                 preexec_fn=_apply_limits,
+                env=self._build_subprocess_env(),
             )
             result = ExecutionResult(
                 stdout=truncate_output(completed.stdout, self.max_output_chars),
