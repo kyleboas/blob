@@ -79,12 +79,14 @@ class AnthropicClient:
             ]
 
         response = None
+        retriable_status_codes = {429, 529}
         for attempt in range(config.LLM_OVERLOAD_RETRY_MAX + 1):
             try:
                 response = self._client.messages.create(**payload)
                 break
             except Exception as exc:
-                if getattr(exc, "status_code", None) == 529 and attempt < config.LLM_OVERLOAD_RETRY_MAX:
+                status_code = getattr(exc, "status_code", None)
+                if status_code in retriable_status_codes and attempt < config.LLM_OVERLOAD_RETRY_MAX:
                     wait = config.LLM_OVERLOAD_RETRY_BASE_S * (2 ** attempt)
                     time.sleep(wait)
                     continue

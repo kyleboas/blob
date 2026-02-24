@@ -109,16 +109,44 @@ def test_anthropic_client_raises_after_exhausting_529_retries(mock_anthropic: Mo
 
 @patch("llm_client.time.sleep")
 @patch("llm_client.anthropic.Anthropic")
-def test_anthropic_client_does_not_retry_non_529_errors(mock_anthropic: Mock, mock_sleep: Mock) -> None:
+def test_anthropic_client_retries_on_429(mock_anthropic: Mock, mock_sleep: Mock) -> None:
     rate_limit_exc = Exception("rate limited")
     rate_limit_exc.status_code = 429  # type: ignore[attr-defined]
 
+    success_response = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="hello")],
+        stop_reason="end_turn",
+        usage=SimpleNamespace(input_tokens=5, output_tokens=3),
+    )
+
     mocked_api = Mock()
-    mocked_api.messages.create.side_effect = rate_limit_exc
+    mocked_api.messages.create.side_effect = [rate_limit_exc, success_response]
     mock_anthropic.return_value = mocked_api
 
     client = AnthropicClient(api_key="test-key")
-    with pytest.raises(Exception, match="rate limited"):
+    result = client.create_message(
+        model="claude-haiku-4-5",
+        system="sys",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert result.stop_reason == "end_turn"
+    assert mocked_api.messages.create.call_count == 2
+    mock_sleep.assert_called_once_with(5.0)
+
+
+@patch("llm_client.time.sleep")
+@patch("llm_client.anthropic.Anthropic")
+def test_anthropic_client_does_not_retry_non_retriable_errors(mock_anthropic: Mock, mock_sleep: Mock) -> None:
+    generic_exc = Exception("bad request")
+    generic_exc.status_code = 400  # type: ignore[attr-defined]
+
+    mocked_api = Mock()
+    mocked_api.messages.create.side_effect = generic_exc
+    mock_anthropic.return_value = mocked_api
+
+    client = AnthropicClient(api_key="test-key")
+    with pytest.raises(Exception, match="bad request"):
         client.create_message(
             model="claude-haiku-4-5",
             system="sys",
