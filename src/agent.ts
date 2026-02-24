@@ -522,7 +522,15 @@ export class AgentDO {
         continue;
       }
 
-      const command = commandResult.command;
+      const command = commandResult.command.trim();
+      if (!command) {
+        const warning = "Tool execution failed: empty command generated. Please provide a non-empty command.";
+        logAgentEvent(this.db, sessionId, "trace_warning", warning);
+        this.forwardToGlobalLogs("trace_warning", `[#${channel}] ${warning}`);
+        observations.push(formatToolResult(toolBlock.id, warning));
+        continue;
+      }
+
       logAgentEvent(this.db, sessionId, "command", command);
       this.forwardToGlobalLogs("command", `[#${channel}] ${command}`);
       const safety = enforceSafety(command, this.db, sessionId, [], {
