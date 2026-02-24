@@ -69,8 +69,13 @@ function renderLiveLogPage(): string {
     #copy-btn.copied { color: #4ade80; border-color: #4ade80; }
     .build-group { display: block; }
     .build-group + .build-group { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #1e293b; }
-    .build-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; white-space: normal; }
+    .build-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; white-space: normal; cursor: pointer; user-select: none; }
+    .build-header:hover .build-label { color: #94a3b8; }
+    .build-chevron { color: #475569; font-size: 0.7rem; flex-shrink: 0; transition: transform 0.15s ease; display: inline-block; }
+    .build-group.collapsed .build-chevron { transform: rotate(-90deg); }
     .build-label { color: #64748b; font-size: 0.8rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .build-body { display: block; }
+    .build-group.collapsed .build-body { display: none; }
     .build-copy-btn { font-family: inherit; font-size: 0.75rem; background: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 4px; padding: 0.15rem 0.5rem; cursor: pointer; flex-shrink: 0; }
     .build-copy-btn:hover { background: #334155; color: #e2e8f0; }
     .build-copy-btn.copied { color: #4ade80; border-color: #4ade80; }
@@ -87,6 +92,8 @@ function renderLiveLogPage(): string {
     const copyBtn = document.getElementById('copy-btn');
     let lastSnapshotSig = '';
     let currentEvents = [];
+    // Track user-toggled collapsed state: label -> boolean (true = collapsed)
+    const userCollapsedState = new Map();
 
     copyBtn.addEventListener('click', () => {
       const text = currentEvents.map((event) => {
@@ -143,10 +150,28 @@ function renderLiveLogPage(): string {
 
       logNode.innerHTML = builds.map((build, idx) => {
         const labelHtml = build.label !== null ? escHtml(build.label.slice(0, 120)) : 'Events';
-        const header = '<div class="build-header"><span class="build-label">' + labelHtml + '</span><button class="build-copy-btn" data-idx="' + idx + '">Copy</button></div>';
+        const isLast = idx === builds.length - 1;
+        const key = build.label !== null ? build.label : '__events__';
+        const defaultCollapsed = !isLast;
+        const isCollapsed = userCollapsedState.has(key) ? userCollapsedState.get(key) : defaultCollapsed;
+        const collapsedClass = isCollapsed ? ' collapsed' : '';
+        const header = '<div class="build-header"><span class="build-chevron">&#9660;</span><span class="build-label">' + labelHtml + '</span><button class="build-copy-btn" data-idx="' + idx + '">Copy</button></div>';
         const lines = build.events.map(formatLine).join('\\n');
-        return '<div class="build-group">' + header + lines + '</div>';
+        return '<div class="build-group' + collapsedClass + '" data-key="' + escHtml(key.slice(0, 120)) + '">' + header + '<div class="build-body">' + lines + '</div></div>';
       }).join('');
+
+      // Attach collapse toggle handlers
+      logNode.querySelectorAll('.build-header').forEach((header) => {
+        header.addEventListener('click', (e) => {
+          if ((e.target as HTMLElement).classList.contains('build-copy-btn')) return;
+          const group = header.closest('.build-group') as HTMLElement | null;
+          if (group) {
+            group.classList.toggle('collapsed');
+            const key = group.getAttribute('data-key') || '';
+            userCollapsedState.set(key, group.classList.contains('collapsed'));
+          }
+        });
+      });
 
       // Attach per-build copy button handlers
       logNode.querySelectorAll('.build-copy-btn').forEach((btn) => {
