@@ -14,6 +14,23 @@ export interface CallLLMInput {
   model?: string;
   fetchImpl?: typeof fetch;
   sleepImpl?: (ms: number) => Promise<void>;
+  /** Cloudflare account ID – routes requests through AI Gateway when set together with gatewayId */
+  gatewayAccountId?: string;
+  /** AI Gateway name/slug – routes requests through AI Gateway when set together with gatewayAccountId */
+  gatewayId?: string;
+  /**
+   * AI provider slug for the gateway URL (default: "anthropic").
+   * Examples: "openai", "google-ai-studio", "workers-ai".
+   * See https://developers.cloudflare.com/ai-gateway/usage/providers/
+   */
+  gatewayProvider?: string;
+}
+
+const DEFAULT_PROVIDER = "anthropic";
+const ANTHROPIC_DIRECT_URL = "https://api.anthropic.com/v1/messages";
+
+export function buildGatewayUrl(accountId: string, gatewayId: string, provider: string): string {
+  return `https://gateway.ai.cloudflare.com/v1/${accountId}/${gatewayId}/${provider}/v1/messages`;
 }
 
 export interface LLMUsage {
@@ -74,8 +91,14 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
       : {})
   });
 
+  const provider = input.gatewayProvider ?? DEFAULT_PROVIDER;
+  const url =
+    input.gatewayAccountId && input.gatewayId
+      ? buildGatewayUrl(input.gatewayAccountId, input.gatewayId, provider)
+      : ANTHROPIC_DIRECT_URL;
+
   for (let attempt = 0; attempt <= LLM_OVERLOAD_RETRY_MAX; attempt++) {
-    const response = await fetchImpl("https://api.anthropic.com/v1/messages", {
+    const response = await fetchImpl(url, {
       method: "POST",
       headers: {
         "content-type": "application/json",

@@ -8,6 +8,16 @@ export interface Env {
   LOGS_CHANNEL?: string;
   GITHUB_TOKEN?: string;
   GITHUB_USERNAME?: string;
+  /** Cloudflare account ID – required to route requests through AI Gateway */
+  CF_ACCOUNT_ID?: string;
+  /** AI Gateway name/slug created in the Cloudflare dashboard */
+  CF_AI_GATEWAY_ID?: string;
+  /**
+   * AI provider slug used in the gateway URL (default: "anthropic").
+   * Other supported values: "openai", "google-ai-studio", "workers-ai", etc.
+   * See https://developers.cloudflare.com/ai-gateway/usage/providers/
+   */
+  CF_AI_PROVIDER?: string;
 }
 
 export type ConversationRole = "user" | "assistant";

@@ -90,6 +90,7 @@ AUTONOMOUS_DAILY_TASK_LIMIT = int(os.getenv("AUTONOMOUS_DAILY_TASK_LIMIT", "10")
 
 DEFAULT_NETWORK_ALLOWLIST = [
     "api.anthropic.com",
+    "gateway.ai.cloudflare.com",
     "*.pypi.org",
     "files.pythonhosted.org",
     "docs.anthropic.com",
@@ -120,6 +121,14 @@ CLOUDFLARE_WORKERS_AI_MARKDOWN_CONVERSION_URL = os.getenv("CLOUDFLARE_WORKERS_AI
 CLOUDFLARE_MARKDOWN_FETCH_URL = os.getenv("CLOUDFLARE_MARKDOWN_FETCH_URL", "")
 CLOUDFLARE_BROWSER_RENDER_MARKDOWN_URL = os.getenv("CLOUDFLARE_BROWSER_RENDER_MARKDOWN_URL", "")
 CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "")
+
+# Cloudflare AI Gateway – when CF_ACCOUNT_ID and CF_AI_GATEWAY_ID are both set,
+# all LLM calls are routed through the gateway instead of calling the provider directly.
+# CF_AI_PROVIDER selects the upstream provider (default: "anthropic").
+# Supported providers: https://developers.cloudflare.com/ai-gateway/usage/providers/
+CLOUDFLARE_ACCOUNT_ID = os.getenv("CF_ACCOUNT_ID", "")
+CLOUDFLARE_AI_GATEWAY_ID = os.getenv("CF_AI_GATEWAY_ID", "")
+CLOUDFLARE_AI_PROVIDER = os.getenv("CF_AI_PROVIDER", "anthropic")
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GITHUB_USERNAME = os.getenv("GITHUB_USERNAME", "")

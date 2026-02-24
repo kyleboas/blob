@@ -4,7 +4,7 @@ from unittest.mock import Mock, call, patch
 import pytest
 
 import config
-from llm_client import AnthropicClient, LLMResponse, LLMUsage, get_model_for_tier
+from llm_client import AnthropicClient, LLMResponse, LLMUsage, build_gateway_url, get_model_for_tier
 
 
 def test_llm_response_dataclass_construction() -> None:
@@ -27,6 +27,38 @@ def test_get_model_for_tier_uses_config_mapping() -> None:
 def test_get_model_for_tier_raises_for_unknown_tier() -> None:
     with pytest.raises(ValueError):
         get_model_for_tier("unknown")
+
+
+def test_build_gateway_url() -> None:
+    url = build_gateway_url("my-account", "my-gateway", "anthropic")
+    assert url == "https://gateway.ai.cloudflare.com/v1/my-account/my-gateway/anthropic"
+
+
+def test_build_gateway_url_non_anthropic_provider() -> None:
+    url = build_gateway_url("acct123", "gw456", "openai")
+    assert url == "https://gateway.ai.cloudflare.com/v1/acct123/gw456/openai"
+
+
+@patch("llm_client.config.CLOUDFLARE_ACCOUNT_ID", "my-account")
+@patch("llm_client.config.CLOUDFLARE_AI_GATEWAY_ID", "my-gateway")
+@patch("llm_client.config.CLOUDFLARE_AI_PROVIDER", "anthropic")
+@patch("llm_client.anthropic.Anthropic")
+def test_anthropic_client_uses_gateway_base_url_when_configured(mock_anthropic: Mock) -> None:
+    mock_anthropic.return_value = Mock()
+    AnthropicClient(api_key="test-key")
+    mock_anthropic.assert_called_once_with(
+        api_key="test-key",
+        base_url="https://gateway.ai.cloudflare.com/v1/my-account/my-gateway/anthropic",
+    )
+
+
+@patch("llm_client.config.CLOUDFLARE_ACCOUNT_ID", "")
+@patch("llm_client.config.CLOUDFLARE_AI_GATEWAY_ID", "")
+@patch("llm_client.anthropic.Anthropic")
+def test_anthropic_client_uses_direct_url_when_gateway_not_configured(mock_anthropic: Mock) -> None:
+    mock_anthropic.return_value = Mock()
+    AnthropicClient(api_key="test-key")
+    mock_anthropic.assert_called_once_with(api_key="test-key")
 
 
 @patch("llm_client.anthropic.Anthropic")

@@ -48,13 +48,24 @@ def get_model_for_tier(tier: str) -> str:
         raise ValueError(f"Unknown tier: {tier}") from exc
 
 
+def build_gateway_url(account_id: str, gateway_id: str, provider: str) -> str:
+    """Return the Cloudflare AI Gateway base URL for the given provider."""
+    return f"https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/{provider}"
+
+
 class AnthropicClient:
     """Anthropic-backed client implementing LLMClient protocol."""
 
     def __init__(self, api_key: str | None = None) -> None:
         if anthropic.Anthropic is None:
             raise RuntimeError("anthropic package is required to use AnthropicClient")
-        self._client = anthropic.Anthropic(api_key=api_key)
+        kwargs: dict[str, Any] = {"api_key": api_key}
+        account_id = config.CLOUDFLARE_ACCOUNT_ID
+        gateway_id = config.CLOUDFLARE_AI_GATEWAY_ID
+        provider = config.CLOUDFLARE_AI_PROVIDER
+        if account_id and gateway_id:
+            kwargs["base_url"] = build_gateway_url(account_id, gateway_id, provider)
+        self._client = anthropic.Anthropic(**kwargs)
 
     def create_message(
         self,

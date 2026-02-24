@@ -3,6 +3,15 @@ main = "src/index.ts"
 compatibility_date = "2026-02-19"
 compatibility_flags = ["nodejs_compat"]
 
+[vars]
+# Cloudflare AI Gateway – set these to route all LLM calls through the gateway.
+# CF_ACCOUNT_ID and CF_AI_GATEWAY_ID are required to enable the gateway.
+# CF_AI_PROVIDER selects the upstream provider (default: "anthropic").
+# Supported providers: https://developers.cloudflare.com/ai-gateway/usage/providers/
+# CF_ACCOUNT_ID = ""
+# CF_AI_GATEWAY_ID = ""
+# CF_AI_PROVIDER = "anthropic"
+
 [[durable_objects.bindings]]
 name = "AGENT_DO"
 class_name = "AgentDO"

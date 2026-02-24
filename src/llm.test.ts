@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { callLLM, selectModel } from "./llm";
+import { buildGatewayUrl, callLLM, selectModel } from "./llm";
 import { MODEL_COMPLEX, MODEL_ROUTINE } from "./config";
 
 describe("selectModel", () => {
@@ -16,6 +16,18 @@ describe("selectModel", () => {
   it("escalates to complex model when hint is complex", () => {
     const model = selectModel("simple", [{ role: "user", content: "hello" }], "complex");
     expect(model).toBe(MODEL_COMPLEX);
+  });
+});
+
+describe("buildGatewayUrl", () => {
+  it("builds the correct Cloudflare AI Gateway URL for a provider", () => {
+    const url = buildGatewayUrl("my-account", "my-gateway", "anthropic");
+    expect(url).toBe("https://gateway.ai.cloudflare.com/v1/my-account/my-gateway/anthropic/v1/messages");
+  });
+
+  it("supports non-anthropic providers", () => {
+    const url = buildGatewayUrl("acct123", "gw456", "openai");
+    expect(url).toBe("https://gateway.ai.cloudflare.com/v1/acct123/gw456/openai/v1/messages");
   });
 });
 
@@ -47,6 +59,80 @@ describe("callLLM", () => {
       "x-api-key": "test-key",
       "anthropic-beta": "prompt-caching-2024-07-31"
     });
+  });
+
+  it("routes through Cloudflare AI Gateway when gateway params are provided", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: "msg_gw",
+        model: MODEL_ROUTINE,
+        content: [{ type: "text", text: "ok" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 5, output_tokens: 3 }
+      })
+    });
+
+    await callLLM({
+      apiKey: "test-key",
+      systemPrompt: "be helpful",
+      messages: [{ role: "user", content: "hello" }],
+      gatewayAccountId: "my-account",
+      gatewayId: "my-gateway",
+      gatewayProvider: "anthropic",
+      fetchImpl: mockFetch
+    });
+
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toBe("https://gateway.ai.cloudflare.com/v1/my-account/my-gateway/anthropic/v1/messages");
+  });
+
+  it("falls back to direct Anthropic URL when gateway params are absent", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: "msg_direct",
+        model: MODEL_ROUTINE,
+        content: [{ type: "text", text: "ok" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 5, output_tokens: 3 }
+      })
+    });
+
+    await callLLM({
+      apiKey: "test-key",
+      systemPrompt: "be helpful",
+      messages: [{ role: "user", content: "hello" }],
+      fetchImpl: mockFetch
+    });
+
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toBe("https://api.anthropic.com/v1/messages");
+  });
+
+  it("defaults gateway provider to anthropic when only account/gateway IDs are provided", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: "msg_default_provider",
+        model: MODEL_ROUTINE,
+        content: [{ type: "text", text: "ok" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 5, output_tokens: 3 }
+      })
+    });
+
+    await callLLM({
+      apiKey: "test-key",
+      systemPrompt: "be helpful",
+      messages: [{ role: "user", content: "hello" }],
+      gatewayAccountId: "acct",
+      gatewayId: "gw",
+      fetchImpl: mockFetch
+    });
+
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toBe("https://gateway.ai.cloudflare.com/v1/acct/gw/anthropic/v1/messages");
   });
 
   it("retries on 429 rate limit and succeeds", async () => {
