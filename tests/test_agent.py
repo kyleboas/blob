@@ -562,3 +562,47 @@ def test_extract_urls_handles_slack_link_format() -> None:
     )
 
     assert _extract_urls(text) == ["https://blog.cloudflare.com/code-mode-mcp/?utm_source=twitter"]
+
+
+def test_get_authenticated_push_url_embeds_token(tmp_path: Path) -> None:
+    llm = MockLLM([])
+    agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
+
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = "https://github.com/kyleboas/blob.git\n"
+
+    with patch("agent.subprocess.run", return_value=mock_result), \
+         patch.dict("os.environ", {"GITHUB_TOKEN": "ghp_testtoken123"}):
+        url = agent._get_authenticated_push_url("origin")
+
+    assert url == "https://ghp_testtoken123@github.com/kyleboas/blob.git"
+
+
+def test_get_authenticated_push_url_returns_none_without_token(tmp_path: Path) -> None:
+    llm = MockLLM([])
+    agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
+
+    with patch.dict("os.environ", {}, clear=True):
+        # Remove token env vars if present
+        import os
+        os.environ.pop("GITHUB_TOKEN", None)
+        os.environ.pop("GH_TOKEN", None)
+        url = agent._get_authenticated_push_url("origin")
+
+    assert url is None
+
+
+def test_get_authenticated_push_url_returns_none_on_git_failure(tmp_path: Path) -> None:
+    llm = MockLLM([])
+    agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
+
+    mock_result = MagicMock()
+    mock_result.returncode = 128
+    mock_result.stdout = ""
+
+    with patch("agent.subprocess.run", return_value=mock_result), \
+         patch.dict("os.environ", {"GITHUB_TOKEN": "ghp_testtoken123"}):
+        url = agent._get_authenticated_push_url("origin")
+
+    assert url is None
