@@ -788,8 +788,8 @@ export class AgentDO {
       return;
     }
 
-    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    const subAgentDoName = `task-agent:${channel}:${uniqueSuffix}`;
+    const threadId = event.thread_ts ?? event.ts ?? `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const subAgentDoName = `task-agent:${channel}:${threadId}`;
     const orchestratorName = mapChannelToDO(channel);
 
     registerSubAgent(this.db, channel, subAgentDoName);
