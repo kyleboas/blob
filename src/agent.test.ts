@@ -273,6 +273,43 @@ describe("AgentDO runAgentLoop", () => {
     expect(nextContent[0].tool_use_id).toBe("orphaned-1");
   });
 
+  it("repairs orphaned tool_use blocks that are not the last message in history", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+
+    sql.exec(
+      "INSERT INTO conversation_messages (thread_id, role, content) VALUES (?, ?, ?)",
+      "thread-mid-orphan",
+      "assistant",
+      JSON.stringify([{ type: "tool_use", id: "orphaned-mid", name: "bash", input: { command: "ls" } }])
+    );
+    sql.exec(
+      "INSERT INTO conversation_messages (thread_id, role, content) VALUES (?, ?, ?)",
+      "thread-mid-orphan",
+      "assistant",
+      JSON.stringify([{ type: "text", text: "stale assistant reply" }])
+    );
+
+    const llmCall = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Recovered again" }] });
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.runAgentLoop("new question", "C1", "thread-mid-orphan");
+
+    const messagesArg = llmCall.mock.calls[0][0].messages as Array<{ role: string; content: unknown }>;
+    const assistantIdx = messagesArg.findIndex(
+      (m) => m.role === "assistant" && Array.isArray(m.content) && (m.content as Array<{ type?: string }>)[0]?.type === "tool_use"
+    );
+
+    expect(assistantIdx).toBeGreaterThan(-1);
+    expect(messagesArg[assistantIdx + 1].role).toBe("user");
+    const content = messagesArg[assistantIdx + 1].content as Array<{ type: string; tool_use_id: string }>;
+    expect(content[0]).toEqual(expect.objectContaining({ type: "tool_result", tool_use_id: "orphaned-mid" }));
+  });
+
   it("includes a new user message for follow-up thread replies", async () => {
     const sql = new FakeSql();
     const { env } = makeTestEnv();

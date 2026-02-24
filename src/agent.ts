@@ -169,6 +169,58 @@ function extractTextContent(response: LLMResponse): string {
     .trim();
 }
 
+function getToolUseIds(message: ConversationMessage): string[] {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) {
+    return [];
+  }
+
+  return (message.content as Array<{ type?: string; id?: string }>)
+    .filter((b): b is { type: "tool_use"; id: string } => b.type === "tool_use" && typeof b.id === "string")
+    .map((b) => b.id);
+}
+
+function hasImmediateToolResults(message: ConversationMessage | undefined, requiredIds: string[]): boolean {
+  if (!message || message.role !== "user" || !Array.isArray(message.content)) {
+    return false;
+  }
+
+  const resolvedIds = new Set(
+    (message.content as Array<{ type?: string; tool_use_id?: string }>)
+      .filter((b): b is { type: "tool_result"; tool_use_id: string } => b.type === "tool_result" && typeof b.tool_use_id === "string")
+      .map((b) => b.tool_use_id)
+  );
+
+  return requiredIds.every((id) => resolvedIds.has(id));
+}
+
+function repairMissingToolResults(conversation: ConversationMessage[]): { messages: ConversationMessage[]; repaired: boolean } {
+  const repairedMessages: ConversationMessage[] = [];
+  let repaired = false;
+
+  for (let i = 0; i < conversation.length; i += 1) {
+    const current = conversation[i];
+    repairedMessages.push(current);
+
+    const toolUseIds = getToolUseIds(current);
+    if (toolUseIds.length === 0) {
+      continue;
+    }
+
+    const nextMessage = conversation[i + 1];
+    if (hasImmediateToolResults(nextMessage, toolUseIds)) {
+      continue;
+    }
+
+    repaired = true;
+    repairedMessages.push({
+      role: "user",
+      content: toolUseIds.map((id) => formatToolResult(id, "Tool execution was interrupted before results were saved."))
+    });
+  }
+
+  return { messages: repairedMessages, repaired };
+}
+
 export class AgentDO {
   private readonly db: SqlStorage;
   private readonly sandbox: SandboxClient;
@@ -317,24 +369,13 @@ export class AgentDO {
 
     // Load history and compact if the context is getting large
     const rawConversation = getHistory(this.db, sessionId);
-    const conversation = await this.compactConversationIfNeeded(rawConversation, sessionId);
-
-    // Recover from an interrupted run: if the last saved message is an assistant
-    // message with tool_use blocks but no corresponding tool_result was ever saved
-    // (e.g. the worker was restarted mid-execution), add placeholder tool_results
-    // so the API does not reject the conversation with a missing-tool_result error.
-    const lastSaved = conversation.length > 0 ? conversation[conversation.length - 1] : null;
-    if (lastSaved?.role === "assistant" && Array.isArray(lastSaved.content)) {
-      const orphanedToolUses = (lastSaved.content as Array<{ type: string; id: string }>)
-        .filter((b) => b.type === "tool_use");
-      if (orphanedToolUses.length > 0) {
-        const recoveryResults = orphanedToolUses.map((b) =>
-          formatToolResult(b.id, "Tool execution was interrupted before results were saved.")
-        );
-        const recoveryMsg: ConversationMessage = { role: "user", content: recoveryResults };
-        conversation.push(recoveryMsg);
-        saveMessage(this.db, sessionId, recoveryMsg);
-      }
+    const compactedConversation = await this.compactConversationIfNeeded(rawConversation, sessionId);
+    const repairedConversation = repairMissingToolResults(compactedConversation);
+    let conversation = repairedConversation.messages;
+    if (repairedConversation.repaired) {
+      // Persist repaired history to prevent recurring invalid Anthropic message order
+      // errors in future turns for the same thread.
+      compactMessagesInDB(this.db, sessionId, conversation);
     }
 
     saveMessage(this.db, sessionId, { role: "user", content: task });
