@@ -15,3 +15,8 @@
 {"timestamp": "2026-02-21T12:41:38.657329+00:00", "message_ts": "approval-ts", "reaction": "white_check_mark", "decision": "approved"}
 {"timestamp": "2026-02-24T02:32:49.661820+00:00", "message_ts": "approval-ts", "reaction": "white_check_mark", "decision": "approved"}
 {"timestamp": "2026-02-24T03:07:58.406110+00:00", "message_ts": "approval-ts", "reaction": "white_check_mark", "decision": "approved"}
+{"timestamp": "2026-02-24T04:31:21.051052+00:00", "message_ts": "123.456", "action": "edit file", "tier": "conditional", "decision": "requested"}
+{"timestamp": "2026-02-24T04:31:21.101741+00:00", "message_ts": "123.456", "reaction": "white_check_mark", "decision": "approved"}
+{"timestamp": "2026-02-24T04:31:21.110488+00:00", "message_ts": "123.999", "action": "danger", "tier": "always-require-approval", "decision": "requested"}
+{"timestamp": "2026-02-24T04:31:21.112391+00:00", "message_ts": "123.999", "decision": "timeout_reject"}
+{"timestamp": "2026-02-24T04:31:22.414886+00:00", "message_ts": "approval-ts", "reaction": "white_check_mark", "decision": "approved"}
