@@ -124,11 +124,14 @@ CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "")
 
 # Cloudflare AI Gateway – when CF_ACCOUNT_ID and CF_AI_GATEWAY_ID are both set,
 # all LLM calls are routed through the gateway instead of calling the provider directly.
-# CF_AI_PROVIDER selects the upstream provider (default: "anthropic").
-# Supported providers: https://developers.cloudflare.com/ai-gateway/usage/providers/
+# The provider is derived automatically from the model name prefix
+# (e.g. "openai/gpt-4.1-mini" → openai, "anthropic/claude-sonnet-4-6" → anthropic).
 CLOUDFLARE_ACCOUNT_ID = os.getenv("CF_ACCOUNT_ID", "")
 CLOUDFLARE_AI_GATEWAY_ID = os.getenv("CF_AI_GATEWAY_ID", "")
+# Deprecated: provider is now derived from the model name prefix.
 CLOUDFLARE_AI_PROVIDER = os.getenv("CF_AI_PROVIDER", "anthropic")
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GITHUB_USERNAME = os.getenv("GITHUB_USERNAME", "")
@@ -143,8 +146,10 @@ CONSTITUTION_FILES = [
 ]
 
 MODEL_ROUTING = {
-    "routine": os.getenv("MODEL_ROUTINE", "claude-haiku-4-5"),
-    "complex": os.getenv("MODEL_COMPLEX", "claude-sonnet-4-5"),
+    # Format: "provider/model-name". The provider prefix determines which API format
+    # and endpoint to use. Supported: "openai/...", "anthropic/...".
+    "routine": os.getenv("MODEL_ROUTINE", "openai/gpt-4.1-mini"),
+    "complex": os.getenv("MODEL_COMPLEX", "anthropic/claude-sonnet-4-6"),
 }
 
 APPROVAL_AUDIT_LOG = WORKSPACE_ROOT / ".audit" / "approvals.jsonl"

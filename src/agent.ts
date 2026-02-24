@@ -504,9 +504,9 @@ export class AgentDO {
       "llm_call_initial",
       () => this.deps.llmCall({
         apiKey: this.env.ANTHROPIC_API_KEY,
+        openaiApiKey: this.env.OPENAI_API_KEY,
         gatewayAccountId: this.env.CF_ACCOUNT_ID,
         gatewayId: this.env.CF_AI_GATEWAY_ID,
-        gatewayProvider: this.env.CF_AI_PROVIDER,
         systemPrompt,
         messages: conversation,
         tools: this.buildToolList(dynamicTools)
@@ -565,9 +565,9 @@ export class AgentDO {
           "llm_call_follow_up",
           () => this.deps.llmCall({
             apiKey: this.env.ANTHROPIC_API_KEY,
+            openaiApiKey: this.env.OPENAI_API_KEY,
             gatewayAccountId: this.env.CF_ACCOUNT_ID,
             gatewayId: this.env.CF_AI_GATEWAY_ID,
-            gatewayProvider: this.env.CF_AI_PROVIDER,
             systemPrompt,
             messages: conversation,
             tools: this.buildToolList(dynamicTools)
@@ -956,9 +956,9 @@ export class AgentDO {
 
     const response = await this.deps.llmCall({
       apiKey: this.env.ANTHROPIC_API_KEY,
+      openaiApiKey: this.env.OPENAI_API_KEY,
       gatewayAccountId: this.env.CF_ACCOUNT_ID,
       gatewayId: this.env.CF_AI_GATEWAY_ID,
-      gatewayProvider: this.env.CF_AI_PROVIDER,
       taskComplexityHint: "routine",
       systemPrompt: "You maintain concise memory between AI agent sessions.",
       messages: [
@@ -1045,9 +1045,9 @@ export class AgentDO {
 
     const response = await this.deps.llmCall({
       apiKey: this.env.ANTHROPIC_API_KEY,
+      openaiApiKey: this.env.OPENAI_API_KEY,
       gatewayAccountId: this.env.CF_ACCOUNT_ID,
       gatewayId: this.env.CF_AI_GATEWAY_ID,
-      gatewayProvider: this.env.CF_AI_PROVIDER,
       taskComplexityHint: "routine",
       systemPrompt: "Summarise conversation history concisely, preserving key decisions, code changes, and context.",
       messages: [{ role: "user", content: `Summarise:\n\n${history}` }]

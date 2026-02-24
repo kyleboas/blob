@@ -12,12 +12,8 @@ export interface Env {
   CF_ACCOUNT_ID?: string;
   /** AI Gateway name/slug created in the Cloudflare dashboard */
   CF_AI_GATEWAY_ID?: string;
-  /**
-   * AI provider slug used in the gateway URL (default: "anthropic").
-   * Other supported values: "openai", "google-ai-studio", "workers-ai", etc.
-   * See https://developers.cloudflare.com/ai-gateway/usage/providers/
-   */
-  CF_AI_PROVIDER?: string;
+  /** Anthropic API key – used for complex-tier (Anthropic) models */
+  OPENAI_API_KEY?: string;
 }
 
 export type ConversationRole = "user" | "assistant";

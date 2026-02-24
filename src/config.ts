@@ -9,8 +9,10 @@ export const COMPACTION_TOKEN_THRESHOLD = 20_000;
 export const SESSION_SUMMARY_RECENT_COUNT = 5;
 export const THINKING_MESSAGE_DELAY_MS = 6_000;
 
-export const MODEL_ROUTINE = "claude-haiku-4-5";
-export const MODEL_COMPLEX = "claude-sonnet-4-6";
+/** Routine-tier model. Format: "provider/model-name" (e.g. "openai/gpt-4.1-mini"). */
+export const MODEL_ROUTINE = "openai/gpt-4.1-mini";
+/** Complex-tier model. Format: "provider/model-name" (e.g. "anthropic/claude-sonnet-4-6"). */
+export const MODEL_COMPLEX = "anthropic/claude-sonnet-4-6";
 
 export const PROTECTED_FILES = [
   "agent.py",
