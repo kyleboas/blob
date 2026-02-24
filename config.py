@@ -13,6 +13,46 @@ except ImportError:  # pragma: no cover - optional during bootstrap
 
 load_dotenv()
 
+
+def _load_blob_env() -> None:
+    """Load credentials from .blob-env into os.environ if not already set.
+
+    The Cloudflare sandbox environment writes credentials to /workspace/.blob-env
+    using ``export KEY='VALUE'`` syntax.  This function parses that file and
+    injects any missing variables into the current process so that GITHUB_TOKEN
+    is available to git-askpass, github_tools, and all downstream code without
+    requiring an explicit ``source`` call from each shell command.
+    """
+    import shlex
+
+    candidates = [
+        Path("/workspace/.blob-env"),
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[7:]
+            if "=" not in line:
+                continue
+            key, _, raw = line.partition("=")
+            key = key.strip()
+            if not key or not key.replace("_", "").isalnum():
+                continue
+            try:
+                value = shlex.split(raw)[0]
+            except (ValueError, IndexError):
+                value = raw.strip("'\"")
+            os.environ.setdefault(key, value)
+        break
+
+
+_load_blob_env()
+
 # Load user preferences from blob_settings.json (written by `python blob_config.py set KEY VALUE`).
 # Precedence: explicit env var > blob_settings.json > hardcoded default.
 def _apply_user_settings() -> None:

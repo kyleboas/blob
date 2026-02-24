@@ -159,6 +159,9 @@ You have `tasks.json`, git history, audit logs, and this file. Use them.
 - **Rate limit is not calendar-aware**: it resets at midnight UTC, not local midnight
 - **TypeScript agent requires Cloudflare Durable Objects** — it will not run locally without `wrangler dev`
 - **Network is restricted**: only `api.anthropic.com`, `*.pypi.org`, `files.pythonhosted.org`, `docs.anthropic.com`, `api.github.com`, `github.com`, and `*.github.com` are reachable from the sandbox by default
+- **`$()` command substitution is blocked** by the Cloudflare sandbox command policy — never use `` REMOTE=$(python github_tools.py ...) `` or `` git checkout -b branch-$(date +%s) ``; use `python github_tools.py push` instead, which handles auth internally without needing `$()`
+- **`source` does not persist across commands** — each sandbox exec call is a fresh shell, so `source /workspace/.blob-env` in one command does NOT carry over env vars to the next command; credentials are loaded automatically from `/workspace/.blob-env` at Python startup via `config.py` and `github_tools.py`
+- **Multi-line commands with `\` continuation may fail** in some executors — prefer chaining with `&&` on a single line rather than backslash line continuations
 
 ## Files to Never Edit Manually
 
@@ -191,16 +194,11 @@ pytest tests/
 # 3. Commit
 git add -A && git commit -m "short description"
 
-# 4. Push (token in URL so no interactive auth prompt)
-REMOTE=$(python github_tools.py remote-url --owner kyleboas --repo blob)
-git push -u "$REMOTE" blob/description-of-change
+# 4. Push (use github_tools.py push — avoids $() which is blocked by sandbox policy)
+python github_tools.py push --owner kyleboas --repo blob --branch blob/description-of-change
 
 # 5. Open PR
-python github_tools.py create-pr \
-  --owner kyleboas --repo blob \
-  --title "Short title" \
-  --body "What changed and why" \
-  --head blob/description-of-change
+python github_tools.py create-pr --owner kyleboas --repo blob --title "Short title" --body "What changed and why" --head blob/description-of-change
 ```
 
 ### Workflow: improving an external repository
@@ -218,16 +216,11 @@ git checkout -b blob/description-of-change
 # 4. Commit
 git add -A && git commit -m "short description"
 
-# 5. Push using authenticated URL
-REMOTE=$(python /home/user/blob/github_tools.py remote-url --owner owner --repo repo)
-git push -u "$REMOTE" blob/description-of-change
+# 5. Push using github_tools.py push (no $() needed)
+python /home/user/blob/github_tools.py push --owner owner --repo repo --branch blob/description-of-change
 
 # 6. Open PR
-python /home/user/blob/github_tools.py create-pr \
-  --owner owner --repo repo \
-  --title "Short title" \
-  --body "What changed and why" \
-  --head blob/description-of-change
+python /home/user/blob/github_tools.py create-pr --owner owner --repo repo --title "Short title" --body "What changed and why" --head blob/description-of-change
 ```
 
 > **Note**: If you don't have push access to the repo, fork it first with `python github_tools.py fork --owner owner --repo repo`, push to your fork, and use `your-username:blob/description-of-change` as the `--head` value.
