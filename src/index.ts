@@ -163,8 +163,8 @@ function renderLiveLogPage(): string {
       // Attach collapse toggle handlers
       logNode.querySelectorAll('.build-header').forEach((header) => {
         header.addEventListener('click', (e) => {
-          if ((e.target as HTMLElement).classList.contains('build-copy-btn')) return;
-          const group = header.closest('.build-group') as HTMLElement | null;
+          if (e.target.classList.contains('build-copy-btn')) return;
+          const group = header.closest('.build-group');
           if (group) {
             group.classList.toggle('collapsed');
             const key = group.getAttribute('data-key') || '';
