@@ -152,8 +152,13 @@ export class SandboxClient {
     // propagates the non-zero exit code instead of returning head's exit code of 0.
     // Source the secrets env file if present so that GITHUB_TOKEN and other Cloudflare
     // secrets are available to every command without being embedded in the command string.
+    //
+    // Single-quote the bash -c argument to prevent any outer shell layer (e.g. the
+    // Cloudflare sandbox runner) from expanding ${VAR} references before bash sources
+    // the env file.  We escape embedded single quotes using the standard '\\'' trick.
     const innerCommand = `[ -f ${SANDBOX_ENV_FILE} ] && . ${SANDBOX_ENV_FILE} 2>/dev/null; ${command}`;
-    const wrappedCommand = `bash -o pipefail -c ${JSON.stringify(innerCommand)}`;
+    const escapedInner = innerCommand.replace(/'/g, "'\\''");
+    const wrappedCommand = `bash -o pipefail -c '${escapedInner}'`;
 
     try {
       const response = await this.withTransientRetry(

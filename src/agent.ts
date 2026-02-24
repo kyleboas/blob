@@ -531,8 +531,9 @@ export class AgentDO {
         continue;
       }
 
-      logAgentEvent(this.db, sessionId, "command", command);
-      this.forwardToGlobalLogs("command", `[#${channel}] ${command}`);
+      const sanitizedCommand = this.sanitizeSecrets(command);
+      logAgentEvent(this.db, sessionId, "command", sanitizedCommand);
+      this.forwardToGlobalLogs("command", `[#${channel}] ${sanitizedCommand}`);
       const safety = enforceSafety(command, this.db, sessionId, [], {
         applySelfModificationRateLimit: options.applySelfModificationRateLimit
       });
@@ -570,13 +571,15 @@ export class AgentDO {
       }
       const result = await this.traceOperation(sessionId, "command_exec", () => this.executeWithGitSafety(command), channel);
       if (result.stdout.trim()) {
-        const stdoutMessage = result.stdout.length > 4000 ? `${result.stdout.slice(0, 4000)}\n...[truncated]` : result.stdout;
+        const rawStdout = result.stdout.length > 4000 ? `${result.stdout.slice(0, 4000)}\n...[truncated]` : result.stdout;
+        const stdoutMessage = this.sanitizeSecrets(rawStdout);
         logAgentEvent(this.db, sessionId, "command_output", stdoutMessage);
         this.forwardToGlobalLogs("command_output", `[#${channel}] ${stdoutMessage}`);
       }
 
       if (result.stderr.trim()) {
-        const stderrMessage = result.stderr.length > 4000 ? `${result.stderr.slice(0, 4000)}\n...[truncated]` : result.stderr;
+        const rawStderr = result.stderr.length > 4000 ? `${result.stderr.slice(0, 4000)}\n...[truncated]` : result.stderr;
+        const stderrMessage = this.sanitizeSecrets(rawStderr);
         logAgentEvent(this.db, sessionId, "command_error", stderrMessage);
         this.forwardToGlobalLogs("command_error", `[#${channel}] ${stderrMessage}`);
       }
@@ -599,7 +602,8 @@ export class AgentDO {
         await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, milestone.message);
       }
 
-      observations.push(formatToolResult(toolBlock.id, [result.stdout, result.stderr].filter(Boolean).join("\n")));
+      const toolOutput = this.sanitizeSecrets([result.stdout, result.stderr].filter(Boolean).join("\n"));
+      observations.push(formatToolResult(toolBlock.id, toolOutput));
     }
 
     return {
@@ -686,15 +690,27 @@ export class AgentDO {
   // sandbox without being embedded in individual command strings.
   private async injectSecretsIntoSandbox(): Promise<void> {
     const lines: string[] = [];
+    // Prevent git from trying to open /dev/tty for interactive credential prompts,
+    // which causes "No such device or address" errors in non-TTY sandbox environments.
+    lines.push("export GIT_TERMINAL_PROMPT=0");
     if (this.env.GITHUB_TOKEN) {
       lines.push(`export GITHUB_TOKEN=${shellEscape(this.env.GITHUB_TOKEN)}`);
     }
     if (this.env.GITHUB_USERNAME) {
       lines.push(`export GITHUB_USERNAME=${shellEscape(this.env.GITHUB_USERNAME)}`);
     }
-    if (lines.length > 0) {
-      await this.sandbox.writeFile(SANDBOX_ENV_FILE, lines.join("\n") + "\n");
+    await this.sandbox.writeFile(SANDBOX_ENV_FILE, lines.join("\n") + "\n");
+  }
+
+  // Replace any known secret values with a placeholder so they are never written
+  // to logs or forwarded to external channels (e.g. Slack, global log DO).
+  private sanitizeSecrets(text: string): string {
+    let result = text;
+    const token = this.env.GITHUB_TOKEN;
+    if (token && token.length > 8) {
+      result = result.split(token).join("[GITHUB_TOKEN]");
     }
+    return result;
   }
 
   private async endSandboxSession(sessionId: string): Promise<void> {
