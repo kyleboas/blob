@@ -313,6 +313,24 @@ export class AgentDO {
     const rawConversation = getHistory(this.db, sessionId);
     const conversation = await this.compactConversationIfNeeded(rawConversation, sessionId);
 
+    // Recover from an interrupted run: if the last saved message is an assistant
+    // message with tool_use blocks but no corresponding tool_result was ever saved
+    // (e.g. the worker was restarted mid-execution), add placeholder tool_results
+    // so the API does not reject the conversation with a missing-tool_result error.
+    const lastSaved = conversation.length > 0 ? conversation[conversation.length - 1] : null;
+    if (lastSaved?.role === "assistant" && Array.isArray(lastSaved.content)) {
+      const orphanedToolUses = (lastSaved.content as Array<{ type: string; id: string }>)
+        .filter((b) => b.type === "tool_use");
+      if (orphanedToolUses.length > 0) {
+        const recoveryResults = orphanedToolUses.map((b) =>
+          formatToolResult(b.id, "Tool execution was interrupted before results were saved.")
+        );
+        const recoveryMsg: ConversationMessage = { role: "user", content: recoveryResults };
+        conversation.push(recoveryMsg);
+        saveMessage(this.db, sessionId, recoveryMsg);
+      }
+    }
+
     saveMessage(this.db, sessionId, { role: "user", content: task });
     conversation.push({ role: "user", content: task });
 

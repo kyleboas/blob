@@ -229,6 +229,50 @@ describe("AgentDO runAgentLoop", () => {
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "All done");
   });
 
+  it("recovers when history ends with an orphaned tool_use (interrupted run)", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+
+    // Pre-populate DB simulating a crash: assistant message with tool_use was saved
+    // but the corresponding tool_result message was never saved.
+    sql.exec(
+      "INSERT INTO conversation_messages (thread_id, role, content) VALUES (?, ?, ?)",
+      "thread-interrupted",
+      "user",
+      "previous task"
+    );
+    sql.exec(
+      "INSERT INTO conversation_messages (thread_id, role, content) VALUES (?, ?, ?)",
+      "thread-interrupted",
+      "assistant",
+      JSON.stringify([{ type: "tool_use", id: "orphaned-1", name: "bash", input: { command: "ls" } }])
+    );
+
+    const llmCall = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Recovered!" }] });
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runAgentLoop("new question", "C1", "thread-interrupted");
+
+    expect(result.finalText).toBe("Recovered!");
+
+    // The LLM should have been called with a valid conversation where the orphaned
+    // tool_use is immediately followed by a placeholder tool_result.
+    const messagesArg = llmCall.mock.calls[0][0].messages as Array<{ role: string; content: unknown }>;
+    const assistantIdx = messagesArg.findIndex((m) => m.role === "assistant");
+    expect(assistantIdx).toBeGreaterThan(-1);
+
+    const nextMsg = messagesArg[assistantIdx + 1];
+    expect(nextMsg.role).toBe("user");
+    const nextContent = nextMsg.content as Array<{ type: string; tool_use_id: string }>;
+    expect(nextContent[0].type).toBe("tool_result");
+    expect(nextContent[0].tool_use_id).toBe("orphaned-1");
+  });
+
   it("includes a new user message for follow-up thread replies", async () => {
     const sql = new FakeSql();
     const { env } = makeTestEnv();
