@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import time
 from dataclasses import dataclass
@@ -147,6 +148,30 @@ class Agent:
             },
         )
 
+    def _get_authenticated_push_url(self, remote: str = "origin") -> str | None:
+        """Return a GitHub HTTPS remote URL with the token embedded, or None if unavailable.
+
+        Using a token-embedded URL lets ``git push`` authenticate without an
+        interactive credential prompt, which is necessary in non-TTY sandbox
+        environments where git cannot read a username/password.
+        """
+        token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or ""
+        if not token:
+            return None
+        get_url = subprocess.run(
+            ["git", "remote", "get-url", remote],
+            cwd=config.WORKSPACE_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if get_url.returncode != 0:
+            return None
+        repo = _parse_github_repo(get_url.stdout)
+        if not repo:
+            return None
+        return f"https://{token}@github.com/{repo}.git"
+
     def _push_branch_to_remote(self, tool_input: dict[str, object]) -> str:
         remote = str(tool_input.get("remote", "origin")).strip() or "origin"
 
@@ -166,11 +191,12 @@ class Agent:
         if branch == "HEAD":
             return "error: detached HEAD is not supported; checkout a branch first"
 
+        push_target = self._get_authenticated_push_url(remote) or remote
         set_upstream = bool(tool_input.get("set_upstream", True))
         push_command = ["git", "push"]
         if set_upstream:
             push_command.append("-u")
-        push_command.extend([remote, branch])
+        push_command.extend([push_target, branch])
 
         push = subprocess.run(
             push_command,
@@ -245,8 +271,9 @@ class Agent:
             else:
                 base = "main"
 
+        push_target = self._get_authenticated_push_url("origin") or "origin"
         push = subprocess.run(
-            ["git", "push", "-u", "origin", head],
+            ["git", "push", "-u", push_target, head],
             cwd=config.WORKSPACE_ROOT,
             check=False,
             capture_output=True,
