@@ -26,7 +26,10 @@ import {
   incrementRateLimit,
   initSchema,
   listHeartbeats,
+  listActiveSubAgents,
   logAgentEvent,
+  markSubAgentDone,
+  registerSubAgent,
   resolveOrCreateSession,
   restoreRepoSnapshot,
   saveKnowledge,
@@ -47,7 +50,7 @@ import {
   type DynamicToolDefinition,
   validateDynamicToolDefinition
 } from "./tools";
-import { postApprovalRequest, postMessage } from "./slack";
+import { mapChannelToDO, postApprovalRequest, postMessage } from "./slack";
 import { createApprovalRequest, expireTimedOutApprovals, resolveApprovalReaction, type PendingApproval } from "./approval";
 import type { ConversationMessage, Env, SlackEvent } from "./types";
 import type { ToolResult } from "./types";
@@ -236,6 +239,9 @@ export class AgentDO {
       channel?: string;
       eventType?: string;
       message?: string;
+      orchestratorName?: string;
+      doName?: string;
+      status?: string;
     };
 
     if (body.action === "logs_snapshot") {
@@ -261,6 +267,23 @@ export class AgentDO {
 
     if (body.action === "reaction" && body.event) {
       await this.handleApprovalReaction(body.event);
+      // Broadcast the reaction to all active sub-agents so each agent can
+      // handle its own pending approvals.
+      const reactionChannel = body.event.item?.channel ?? body.event.channel;
+      if (reactionChannel) {
+        const activeSubAgents = listActiveSubAgents(this.db, reactionChannel);
+        await Promise.allSettled(
+          activeSubAgents.map(async (subAgentDoName) => {
+            const subAgentId = this.env.AGENT_DO.idFromName(subAgentDoName);
+            const subAgentStub = this.env.AGENT_DO.get(subAgentId);
+            return subAgentStub.fetch("https://agent.internal/event", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ action: "reaction", event: body.event })
+            });
+          })
+        );
+      }
       return new Response("ok");
     }
 
@@ -268,7 +291,7 @@ export class AgentDO {
       const event = body.event;
       this.runInBackground((async () => {
         try {
-          await this.handleTaskEvent(event);
+          await this.spawnSubAgent(event);
         } catch (error) {
           const channel = event.channel;
           if (channel) {
@@ -278,6 +301,42 @@ export class AgentDO {
         }
       })());
       return new Response("accepted", { status: 202 });
+    }
+
+    if (body.action === "run_task" && body.event) {
+      const event = body.event;
+      const orchestratorName = String(body.orchestratorName ?? "");
+      const doName = String(body.doName ?? "");
+      this.runInBackground((async () => {
+        let completionStatus: "completed" | "failed" = "completed";
+        try {
+          await this.handleTaskEvent(event);
+        } catch (error) {
+          completionStatus = "failed";
+          const channel = event.channel;
+          if (channel) {
+            const message = error instanceof Error ? error.message : "An unexpected error occurred.";
+            await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, `Error: ${message}`);
+          }
+        } finally {
+          if (orchestratorName && doName) {
+            const orchestratorId = this.env.AGENT_DO.idFromName(orchestratorName);
+            const orchestratorStub = this.env.AGENT_DO.get(orchestratorId);
+            void orchestratorStub.fetch("https://agent.internal/event", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ action: "sub_agent_done", doName, status: completionStatus })
+            }).catch(() => {});
+          }
+        }
+      })());
+      return new Response("accepted", { status: 202 });
+    }
+
+    if (body.action === "sub_agent_done" && body.doName) {
+      const status = (body.status as "completed" | "failed") || "completed";
+      markSubAgentDone(this.db, String(body.doName), status);
+      return new Response("ok");
     }
 
     if (body.action === "enqueue_heartbeat" && body.task && body.channel) {
@@ -676,6 +735,37 @@ export class AgentDO {
       this.db,
       async (command) => this.executeWithGitSafety(command)
     );
+  }
+
+  // Spawns a dedicated sub-agent Durable Object instance to handle a single
+  // Slack task, enabling multiple tasks to run concurrently. The orchestrator
+  // (per-channel DO) registers the sub-agent so that subsequent reactions can
+  // be routed to all active sub-agents for that channel.
+  private async spawnSubAgent(event: SlackEvent): Promise<void> {
+    const channel = event.channel;
+    if (!channel || !event.text?.trim()) {
+      return;
+    }
+
+    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const subAgentDoName = `task-agent:${channel}:${uniqueSuffix}`;
+    const orchestratorName = mapChannelToDO(channel);
+
+    registerSubAgent(this.db, channel, subAgentDoName);
+    this.forwardToGlobalLogs("sub_agent_spawned", `[#${channel}] Spawned sub-agent: ${subAgentDoName}`);
+
+    const subAgentId = this.env.AGENT_DO.idFromName(subAgentDoName);
+    const subAgentStub = this.env.AGENT_DO.get(subAgentId);
+    await subAgentStub.fetch("https://agent.internal/event", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "run_task",
+        event,
+        orchestratorName,
+        doName: subAgentDoName
+      })
+    });
   }
 
   private async startSandboxSession(sessionId: string): Promise<void> {

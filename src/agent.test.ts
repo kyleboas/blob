@@ -13,6 +13,15 @@ interface HeartbeatRow {
   updated_at: number;
 }
 
+interface SubAgentRow {
+  id: number;
+  channel: string;
+  do_name: string;
+  status: string;
+  created_at: number;
+  updated_at: number;
+}
+
 class FakeSql implements SqlStorage {
   private messages: Array<{ id: number; threadId: string; role: string; content: string }> = [];
   private rateLimits = new Map<string, number>();
@@ -23,6 +32,8 @@ class FakeSql implements SqlStorage {
   private summaryNextId = 1;
   private heartbeats: HeartbeatRow[] = [];
   private nextHeartbeatId = 1;
+  private subAgents: SubAgentRow[] = [];
+  private nextSubAgentId = 1;
 
   exec(query: string, ...bindings: Array<string | number | null>) {
     const normalized = query.trim().replace(/\s+/g, " ");
@@ -167,6 +178,39 @@ class FakeSql implements SqlStorage {
       return { toArray: () => rows };
     }
 
+    // Sub-agent queries
+    if (normalized.startsWith("INSERT OR IGNORE INTO sub_agents")) {
+      const channel = String(bindings[0]);
+      const doName = String(bindings[1]);
+      if (!this.subAgents.find((s) => s.do_name === doName)) {
+        this.subAgents.push({
+          id: this.nextSubAgentId++,
+          channel,
+          do_name: doName,
+          status: "running",
+          created_at: Math.floor(Date.now() / 1000),
+          updated_at: Math.floor(Date.now() / 1000)
+        });
+      }
+      return { toArray: () => [] };
+    }
+
+    if (normalized.includes("FROM sub_agents") && normalized.includes("status = 'running'")) {
+      const channel = String(bindings[0]);
+      const rows = this.subAgents
+        .filter((s) => s.channel === channel && s.status === "running")
+        .sort((a, b) => b.id - a.id);
+      return { toArray: () => rows.map((s) => ({ do_name: s.do_name })) };
+    }
+
+    if (normalized.startsWith("UPDATE sub_agents SET status =")) {
+      const status = String(bindings[0]);
+      const doName = String(bindings[1]);
+      const sa = this.subAgents.find((s) => s.do_name === doName);
+      if (sa) sa.status = status;
+      return { toArray: () => [] };
+    }
+
     return { toArray: () => [] };
   }
 }
@@ -179,9 +223,16 @@ function makeTestEnv() {
     fileExists: vi.fn().mockResolvedValue(true)
   };
 
+  // Captures fetch calls made to sub-agent or global-logs DO stubs.
+  const agentDOFetch = vi.fn().mockResolvedValue(new Response("ok"));
+  const agentDOStub = { fetch: agentDOFetch };
+
   const r2Store = new Map<string, string>();
   const env: Env = {
-    AGENT_DO: {} as DurableObjectNamespace,
+    AGENT_DO: {
+      idFromName: vi.fn().mockReturnValue({ toString: () => "fake-do-id" }),
+      get: vi.fn().mockReturnValue(agentDOStub)
+    } as unknown as DurableObjectNamespace,
     REPO_STORE: {
       put: vi.fn(async (key: string, value: unknown) => {
         r2Store.set(key, String(value));
@@ -198,7 +249,7 @@ function makeTestEnv() {
     SLACK_SIGNING_SECRET: "secret"
   };
 
-  return { env, sandbox };
+  return { env, sandbox, agentDOFetch };
 }
 
 describe("AgentDO runAgentLoop", () => {
@@ -362,7 +413,7 @@ describe("AgentDO runAgentLoop", () => {
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Recovered");
   });
 
-  it("posts error to Slack when agent loop throws", async () => {
+  it("posts error to Slack when agent loop throws (sub-agent run_task)", async () => {
     const sql = new FakeSql();
     const { env } = makeTestEnv();
     const postSlackMessage = vi.fn().mockResolvedValue(undefined);
@@ -373,11 +424,12 @@ describe("AgentDO runAgentLoop", () => {
       postSlackApproval: vi.fn() as never
     });
 
+    // Sub-agents receive run_task (not message) from the orchestrator.
     const response = await agent.fetch(
       new Request("https://example.com", {
         method: "POST",
         body: JSON.stringify({
-          action: "message",
+          action: "run_task",
           event: { type: "message", text: "hello", channel: "C1", thread_ts: "1711111111.7777" }
         })
       })
@@ -496,7 +548,7 @@ describe("AgentDO runAgentLoop", () => {
     vi.useRealTimers();
   });
 
-  it("handles approval reaction callbacks", async () => {
+  it("handles approval reaction callbacks (sub-agent run_task)", async () => {
     const sql = new FakeSql();
     const { env, sandbox } = makeTestEnv();
     const postSlackMessage = vi.fn().mockResolvedValue(undefined);
@@ -507,11 +559,12 @@ describe("AgentDO runAgentLoop", () => {
       postSlackApproval: vi.fn().mockResolvedValue({ ts: "approval-msg-ts" }) as never
     });
 
+    // Sub-agents receive run_task directly; the orchestrator routes reactions here.
     await agent.fetch(
       new Request("https://example.com", {
         method: "POST",
         body: JSON.stringify({
-          action: "message",
+          action: "run_task",
           event: { type: "message", text: "run", channel: "C1", thread_ts: "1711111111.1111" }
         })
       })
@@ -731,6 +784,174 @@ describe("AgentDO runAgentLoop", () => {
     );
   });
 
+});
+
+describe("AgentDO sub-agent system", () => {
+  it("message action spawns a sub-agent DO instead of running inline", async () => {
+    const sql = new FakeSql();
+    const { env, agentDOFetch } = makeTestEnv();
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: vi.fn() as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const response = await agent.fetch(
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "message",
+          event: { type: "message", text: "do something", channel: "C1" }
+        })
+      })
+    );
+
+    expect(response.status).toBe(202);
+    // The orchestrator should have forwarded a run_task action to the sub-agent DO.
+    expect(agentDOFetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining('"action":"run_task"')
+      })
+    );
+  });
+
+  it("run_task action executes the task and notifies the orchestrator on completion", async () => {
+    const sql = new FakeSql();
+    const { env, agentDOFetch } = makeTestEnv();
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Task done" }] }) as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const response = await agent.fetch(
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "run_task",
+          event: { type: "message", text: "do something", channel: "C1" },
+          orchestratorName: "slack-channel:C1",
+          doName: "task-agent:C1:123"
+        })
+      })
+    );
+
+    expect(response.status).toBe(202);
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Task done");
+    // The sub-agent should notify the orchestrator on completion.
+    expect(agentDOFetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        body: expect.stringContaining('"action":"sub_agent_done"')
+      })
+    );
+  });
+
+  it("sub_agent_done action marks the sub-agent as completed", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+
+    // Register a sub-agent first.
+    sql.exec("INSERT OR IGNORE INTO sub_agents (channel, do_name) VALUES (?, ?)", "C1", "task-agent:C1:abc");
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: vi.fn() as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const response = await agent.fetch(
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "sub_agent_done",
+          doName: "task-agent:C1:abc",
+          status: "completed"
+        })
+      })
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  it("reaction is broadcast to all active sub-agents for the channel", async () => {
+    const sql = new FakeSql();
+    const { env, agentDOFetch } = makeTestEnv();
+
+    // Pre-register two active sub-agents for the channel.
+    sql.exec("INSERT OR IGNORE INTO sub_agents (channel, do_name) VALUES (?, ?)", "C1", "task-agent:C1:agent1");
+    sql.exec("INSERT OR IGNORE INTO sub_agents (channel, do_name) VALUES (?, ?)", "C1", "task-agent:C1:agent2");
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: vi.fn() as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.fetch(
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "reaction",
+          event: { type: "reaction_added", reaction: "thumbsup", item: { channel: "C1", ts: "ts1" } }
+        })
+      })
+    );
+
+    // Two broadcasts (one per active sub-agent) plus any global-logs calls.
+    const reactionBroadcasts = agentDOFetch.mock.calls.filter((args: unknown[]) => {
+      const init = args[1] as RequestInit | undefined;
+      const body = typeof init?.body === "string" ? init.body : "";
+      return body.includes('"action":"reaction"');
+    });
+    expect(reactionBroadcasts).toHaveLength(2);
+  });
+
+  it("multiple concurrent tasks each get their own sub-agent DO name", async () => {
+    const sql = new FakeSql();
+    const { env, agentDOFetch } = makeTestEnv();
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: vi.fn() as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.fetch(
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify({ action: "message", event: { type: "message", text: "task one", channel: "C1" } })
+      })
+    );
+
+    await agent.fetch(
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify({ action: "message", event: { type: "message", text: "task two", channel: "C1" } })
+      })
+    );
+
+    // Both tasks should have triggered sub-agent spawning.
+    const spawnCalls = agentDOFetch.mock.calls.filter((args: unknown[]) => {
+      const init = args[1] as RequestInit | undefined;
+      const body = typeof init?.body === "string" ? init.body : "";
+      return body.includes('"action":"run_task"');
+    });
+    expect(spawnCalls).toHaveLength(2);
+
+    // Each spawn should reference a different sub-agent DO name.
+    const doNames = spawnCalls.map((args: unknown[]) => {
+      const init = args[1] as RequestInit | undefined;
+      const parsed = JSON.parse(init?.body as string) as { doName: string };
+      return parsed.doName;
+    });
+    expect(doNames[0]).not.toBe(doNames[1]);
+  });
 });
 
 describe("AgentDO heartbeat actions", () => {
