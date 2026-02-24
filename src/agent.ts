@@ -9,7 +9,7 @@ import {
 } from "./config";
 import { callLLM, type LLMResponse } from "./llm";
 import { enforceSafety, isSelfModificationCommand } from "./safety";
-import { SandboxClient, type SandboxBinding } from "./sandbox-client";
+import { SandboxClient, SANDBOX_ENV_FILE, type SandboxBinding } from "./sandbox-client";
 import {
   compactMessagesInDB,
   completeHeartbeat,
@@ -85,6 +85,12 @@ const DEFAULT_DEPS: AgentDeps = {
   postSlackApproval: postApprovalRequest,
   now: () => Date.now()
 };
+
+// Wraps a string in single quotes and escapes any embedded single quotes so it
+// can be safely embedded in a shell script written to the sandbox env file.
+function shellEscape(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
 
 // DO name for the global logs channel – matches mapChannelToDO("__global__")
 const GLOBAL_LOGS_DO_NAME = "slack-channel:__global__";
@@ -664,6 +670,23 @@ export class AgentDO {
     await this.sandbox.warmUp();
     await restoreRepoSnapshot(this.env.REPO_STORE, sessionId, this.sandbox);
     await syncKnowledgeToSandbox(this.db, this.sandbox);
+    await this.injectSecretsIntoSandbox();
+  }
+
+  // Writes Cloudflare secrets that the sandbox container needs (e.g. GITHUB_TOKEN)
+  // to a sourced env file so they are available to every command executed in the
+  // sandbox without being embedded in individual command strings.
+  private async injectSecretsIntoSandbox(): Promise<void> {
+    const lines: string[] = [];
+    if (this.env.GITHUB_TOKEN) {
+      lines.push(`export GITHUB_TOKEN=${shellEscape(this.env.GITHUB_TOKEN)}`);
+    }
+    if (this.env.GITHUB_USERNAME) {
+      lines.push(`export GITHUB_USERNAME=${shellEscape(this.env.GITHUB_USERNAME)}`);
+    }
+    if (lines.length > 0) {
+      await this.sandbox.writeFile(SANDBOX_ENV_FILE, lines.join("\n") + "\n");
+    }
   }
 
   private async endSandboxSession(sessionId: string): Promise<void> {

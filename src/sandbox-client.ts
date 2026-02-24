@@ -1,6 +1,7 @@
 import { COMMAND_TIMEOUT } from "./config";
 
 const DEFAULT_MAX_OUTPUT_CHARS = 10_000;
+export const SANDBOX_ENV_FILE = "/workspace/.blob-env";
 const TRANSIENT_SANDBOX_MAX_ATTEMPTS = 5;
 const TRANSIENT_SANDBOX_RETRY_DELAY_MS = 2_000;
 const WARM_UP_MAX_ATTEMPTS = 10;
@@ -149,7 +150,10 @@ export class SandboxClient {
 
     // Wrap with pipefail so that a failing command in a pipeline (e.g. git clone ... | head -20)
     // propagates the non-zero exit code instead of returning head's exit code of 0.
-    const wrappedCommand = `bash -o pipefail -c ${JSON.stringify(command)}`;
+    // Source the secrets env file if present so that GITHUB_TOKEN and other Cloudflare
+    // secrets are available to every command without being embedded in the command string.
+    const innerCommand = `[ -f ${SANDBOX_ENV_FILE} ] && . ${SANDBOX_ENV_FILE} 2>/dev/null; ${command}`;
+    const wrappedCommand = `bash -o pipefail -c ${JSON.stringify(innerCommand)}`;
 
     try {
       const response = await this.withTransientRetry(

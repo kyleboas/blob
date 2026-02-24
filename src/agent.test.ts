@@ -220,7 +220,7 @@ describe("AgentDO runAgentLoop", () => {
     const result = await agent.runAgentLoop("list files", "C1", "thread-1");
 
     expect(result.finalText).toBe("All done");
-    expect(sandbox.exec).toHaveBeenCalledWith("ls");
+    expect(sandbox.exec).toHaveBeenCalledWith(expect.stringContaining("ls"));
     expect(llmCall).toHaveBeenCalledWith(
       expect.objectContaining({
         systemPrompt: expect.stringContaining("You are Blob, a careful coding agent.")
@@ -624,8 +624,8 @@ describe("AgentDO runAgentLoop", () => {
     const result = await agent.runAgentLoop("run two commands", "C1", "thread-multi-tool");
 
     expect(result.finalText).toBe("Done");
-    expect(sandbox.exec).toHaveBeenNthCalledWith(1, "echo one");
-    expect(sandbox.exec).toHaveBeenNthCalledWith(2, "echo two");
+    expect(sandbox.exec).toHaveBeenNthCalledWith(1, expect.stringContaining("echo one"));
+    expect(sandbox.exec).toHaveBeenNthCalledWith(2, expect.stringContaining("echo two"));
 
     const secondCall = llmCall.mock.calls[1]?.[0];
     expect(secondCall.messages).toEqual(
@@ -701,7 +701,7 @@ describe("AgentDO runAgentLoop", () => {
     const result = await agent.runAgentLoop("inspect files", "C1", "thread-dynamic-tool");
 
     expect(result.finalText).toBe("Dynamic tool worked");
-    expect(sandbox.exec).toHaveBeenCalledWith("find /workspace/blob -maxdepth 1 -type f");
+    expect(sandbox.exec).toHaveBeenCalledWith(expect.stringContaining("find /workspace/blob -maxdepth 1 -type f"));
     expect(llmCall).toHaveBeenCalledWith(
       expect.objectContaining({
         tools: expect.arrayContaining([expect.objectContaining({ name: "create_tool" })])
