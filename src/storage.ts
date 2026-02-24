@@ -571,8 +571,7 @@ export function listHeartbeats(sql: SqlStorage, limit = 50): Heartbeat[] {
 
 export function registerSubAgent(sql: SqlStorage, channel: string, doName: string): void {
   sql.exec(
-    `INSERT INTO sub_agents (channel, do_name) VALUES (?, ?)
-     ON CONFLICT(do_name) DO UPDATE SET status = 'running', updated_at = unixepoch()`,
+    `INSERT OR IGNORE INTO sub_agents (channel, do_name) VALUES (?, ?)`,
     channel,
     doName
   );
