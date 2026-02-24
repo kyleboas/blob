@@ -256,3 +256,31 @@ def test_background_worker_uses_heartbeat_approval_gate() -> None:
     assert gate.request_approval("cat file.py", "auto-approve") is True
     assert gate.request_approval("echo hello > AGENT.md", "conditional") is True
     assert gate.request_approval("sed -i 's/x/y/' agent.py", "always-require-approval") is False
+
+
+def test_stop_and_reset_commands_control_message_handling() -> None:
+    client = MockClient()
+    done = Event()
+
+    def factory(gate, on_status):
+        class _Agent(StubAgent):
+            def run_task(self, text: str) -> str:
+                done.set()
+                return super().run_task(text)
+
+        return _Agent(gate, on_status)
+
+    bot = SlackBot(client=client, agent_factory=factory)
+
+    bot.handle_message_event({"channel": "C1", "ts": "1.0", "text": "/stop"})
+    bot.handle_message_event({"channel": "C1", "ts": "1.1", "text": "hello"})
+
+    assert not done.wait(timeout=0.2)
+    assert any("Bot stopped" in post["text"] for post in client.posts)
+    assert any("currently stopped" in post["text"] for post in client.posts)
+
+    bot.handle_message_event({"channel": "C1", "ts": "1.2", "text": "/reset"})
+    bot.handle_message_event({"channel": "C1", "ts": "1.3", "text": "hello again"})
+
+    assert done.wait(timeout=2)
+    assert any("Bot reset" in post["text"] for post in client.posts)
