@@ -158,6 +158,17 @@ export function initSchema(sql: SqlStorage): void {
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )
   `);
+
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS sub_agents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      channel TEXT NOT NULL,
+      do_name TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'running',
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )
+  `);
 }
 
 export function resolveOrCreateSession(
@@ -553,4 +564,33 @@ export function listHeartbeats(sql: SqlStorage, limit = 50): Heartbeat[] {
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at)
   }));
+}
+
+// Sub-agent registry – tracks active sub-agent DOs spawned per channel so that
+// approval reactions and other events can be broadcast to all running agents.
+
+export function registerSubAgent(sql: SqlStorage, channel: string, doName: string): void {
+  sql.exec(
+    `INSERT OR IGNORE INTO sub_agents (channel, do_name) VALUES (?, ?)`,
+    channel,
+    doName
+  );
+}
+
+export function listActiveSubAgents(sql: SqlStorage, channel: string): string[] {
+  const rows = sql
+    .exec(
+      `SELECT do_name FROM sub_agents WHERE channel = ? AND status = 'running' ORDER BY id DESC`,
+      channel
+    )
+    .toArray();
+  return rows.map((row) => String(row.do_name));
+}
+
+export function markSubAgentDone(sql: SqlStorage, doName: string, status: "completed" | "failed"): void {
+  sql.exec(
+    `UPDATE sub_agents SET status = ?, updated_at = unixepoch() WHERE do_name = ?`,
+    status,
+    doName
+  );
 }

@@ -10,7 +10,10 @@ import {
   hasPendingHeartbeats,
   incrementRateLimit,
   initSchema,
+  listActiveSubAgents,
   listHeartbeats,
+  markSubAgentDone,
+  registerSubAgent,
   restoreRepoSnapshot,
   saveKnowledge,
   saveMessage,
@@ -33,6 +36,15 @@ interface HeartbeatRow {
   updated_at: number;
 }
 
+interface SubAgentRow {
+  id: number;
+  channel: string;
+  do_name: string;
+  status: string;
+  created_at: number;
+  updated_at: number;
+}
+
 class FakeSql implements SqlStorage {
   private messages: Array<{ id: number; threadId: string; role: string; content: string }> = [];
   private rateLimits = new Map<string, number>();
@@ -40,6 +52,8 @@ class FakeSql implements SqlStorage {
   private nextMessageId = 1;
   private heartbeats: HeartbeatRow[] = [];
   private nextHeartbeatId = 1;
+  private subAgents: SubAgentRow[] = [];
+  private nextSubAgentId = 1;
 
   exec(query: string, ...bindings: Array<string | number | null>) {
     const normalized = query.trim().replace(/\s+/g, " ");
@@ -152,6 +166,39 @@ class FakeSql implements SqlStorage {
       const limit = Number(bindings[0] ?? 50);
       const rows = [...this.heartbeats].reverse().slice(0, limit);
       return { toArray: () => rows as unknown as Row[] };
+    }
+
+    // Sub-agent queries
+    if (normalized.startsWith("INSERT OR IGNORE INTO sub_agents")) {
+      const channel = String(bindings[0]);
+      const doName = String(bindings[1]);
+      if (!this.subAgents.find((s) => s.do_name === doName)) {
+        this.subAgents.push({
+          id: this.nextSubAgentId++,
+          channel,
+          do_name: doName,
+          status: "running",
+          created_at: Math.floor(Date.now() / 1000),
+          updated_at: Math.floor(Date.now() / 1000)
+        });
+      }
+      return { toArray: () => [] };
+    }
+
+    if (normalized.includes("FROM sub_agents") && normalized.includes("status = 'running'")) {
+      const channel = String(bindings[0]);
+      const rows = this.subAgents
+        .filter((s) => s.channel === channel && s.status === "running")
+        .sort((a, b) => b.id - a.id);
+      return { toArray: () => rows.map((s) => ({ do_name: s.do_name })) as Row[] };
+    }
+
+    if (normalized.startsWith("UPDATE sub_agents SET status =")) {
+      const status = String(bindings[0]);
+      const doName = String(bindings[1]);
+      const sa = this.subAgents.find((s) => s.do_name === doName);
+      if (sa) sa.status = status;
+      return { toArray: () => [] };
     }
 
     throw new Error(`Unhandled query in test fake: ${query}`);
@@ -335,5 +382,42 @@ describe("heartbeat helpers", () => {
     expect(list).toHaveLength(2);
     expect(list[0].task).toBe("second");
     expect(list[1].task).toBe("first");
+  });
+});
+
+describe("sub-agent registry helpers", () => {
+  it("registerSubAgent stores a new entry and listActiveSubAgents returns it", () => {
+    const sql = new FakeSql();
+    registerSubAgent(sql, "C1", "task-agent:C1:abc");
+
+    const active = listActiveSubAgents(sql, "C1");
+    expect(active).toContain("task-agent:C1:abc");
+  });
+
+  it("listActiveSubAgents only returns agents for the requested channel", () => {
+    const sql = new FakeSql();
+    registerSubAgent(sql, "C1", "task-agent:C1:one");
+    registerSubAgent(sql, "C2", "task-agent:C2:two");
+
+    expect(listActiveSubAgents(sql, "C1")).toEqual(["task-agent:C1:one"]);
+    expect(listActiveSubAgents(sql, "C2")).toEqual(["task-agent:C2:two"]);
+  });
+
+  it("markSubAgentDone removes the agent from the active list", () => {
+    const sql = new FakeSql();
+    registerSubAgent(sql, "C1", "task-agent:C1:abc");
+    expect(listActiveSubAgents(sql, "C1")).toHaveLength(1);
+
+    markSubAgentDone(sql, "task-agent:C1:abc", "completed");
+    expect(listActiveSubAgents(sql, "C1")).toHaveLength(0);
+  });
+
+  it("registerSubAgent is idempotent for the same do_name", () => {
+    const sql = new FakeSql();
+    registerSubAgent(sql, "C1", "task-agent:C1:xyz");
+    registerSubAgent(sql, "C1", "task-agent:C1:xyz"); // duplicate
+
+    const active = listActiveSubAgents(sql, "C1");
+    expect(active).toHaveLength(1);
   });
 });
