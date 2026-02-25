@@ -630,6 +630,20 @@ export function listHeartbeats(sql: SqlStorage, limit = 50): Heartbeat[] {
   }));
 }
 
+export function getLastHeartbeatChannel(sql: SqlStorage): string | null {
+  const rows = sql
+    .exec(
+      `SELECT channel
+       FROM heartbeats
+       ORDER BY updated_at DESC, id DESC
+       LIMIT 1`
+    )
+    .toArray();
+
+  const channel = rows[0]?.channel;
+  return channel == null ? null : String(channel);
+}
+
 // Sub-agent registry – tracks active sub-agent DOs spawned per channel so that
 // approval reactions and other events can be broadcast to all running agents.
 
