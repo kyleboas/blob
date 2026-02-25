@@ -6,7 +6,9 @@ import {
   SESSION_SUMMARY_RECENT_COUNT,
   THINKING_MESSAGE_DELAY_MS,
   BACKGROUND_TASK_INTERVAL_MS,
-  MODEL_ROUTINE,
+  MODEL_ROUTER,
+  MODEL_CHAT,
+  MODEL_SIMPLE,
   MODEL_COMPLEX
 } from "./config";
 import { callLLM, type LLMResponse } from "./llm";
@@ -25,7 +27,9 @@ import {
   getRecentSessionSummaries,
   getCurrentSession,
   getModelSettings,
-  setRoutineModel,
+  setRouterModel,
+  setChatModel,
+  setSimpleModel,
   setComplexModel,
   hasPendingHeartbeats,
   incrementRateLimit,
@@ -126,13 +130,15 @@ function buildSystemPrompt(_knowledge: string, recentSummaries: SessionSummary[]
 
 
 interface RuntimeModelSettings {
-  routineModel: string;
+  routerModel: string;
+  chatModel: string;
+  simpleModel: string;
   complexModel: string;
 }
 
 type SettingsCommand =
   | { type: "show" }
-  | { type: "set"; target: "routine" | "complex"; model: string };
+  | { type: "set"; target: "router" | "chat" | "simple" | "complex"; model: string };
 
 function parseSettingsCommand(rawText: string): SettingsCommand | null {
   const text = rawText.trim();
@@ -143,24 +149,25 @@ function parseSettingsCommand(rawText: string): SettingsCommand | null {
     return { type: "show" };
   }
 
-  const setMatch = text.match(/^set\s+(routine|complex)\s+model\s+(?:to\s+)?(.+)$/i)
-    ?? text.match(/^set\s+model\s+(routine|complex)\s+(?:to\s+)?(.+)$/i)
-    ?? text.match(/^use\s+(.+)\s+for\s+(routine|complex)(?:\s+tasks?)?$/i);
+  const setMatch = text.match(/^set\s+(router|chat|simple|routine|complex)\s+model\s+(?:to\s+)?(.+)$/i)
+    ?? text.match(/^set\s+model\s+(router|chat|simple|routine|complex)\s+(?:to\s+)?(.+)$/i)
+    ?? text.match(/^use\s+(.+)\s+for\s+(router|chat|simple|routine|complex)(?:\s+tasks?)?$/i);
 
   if (!setMatch) return null;
 
-  let target: "routine" | "complex";
+  let rawTarget: "router" | "chat" | "simple" | "routine" | "complex";
   let model: string;
   if (/^use\s+/i.test(text)) {
     model = setMatch[1].trim();
-    target = setMatch[2].toLowerCase() as "routine" | "complex";
+    rawTarget = setMatch[2].toLowerCase() as "router" | "chat" | "simple" | "routine" | "complex";
   } else {
-    target = setMatch[1].toLowerCase() as "routine" | "complex";
+    rawTarget = setMatch[1].toLowerCase() as "router" | "chat" | "simple" | "routine" | "complex";
     model = setMatch[2].trim();
   }
 
   if (!model) return null;
-  return { type: "set", target, model };
+  const normalizedTarget: "router" | "chat" | "simple" | "complex" = rawTarget === "routine" ? "simple" : rawTarget;
+  return { type: "set", target: normalizedTarget, model };
 }
 
 const UNCONFIGURED_SANDBOX: SandboxBinding = {
@@ -495,7 +502,9 @@ export class AgentDO {
 
   private getRuntimeModelSettings(): RuntimeModelSettings {
     return getModelSettings(this.db, {
-      routineModel: MODEL_ROUTINE,
+      routerModel: MODEL_ROUTER,
+      chatModel: MODEL_CHAT,
+      simpleModel: MODEL_SIMPLE,
       complexModel: MODEL_COMPLEX
     });
   }
@@ -519,16 +528,22 @@ export class AgentDO {
         channel,
         [
           "Current model settings:",
-          `• routine: ${settings.routineModel}`,
+          `• router: ${settings.routerModel}`,
+          `• chat: ${settings.chatModel}`,
+          `• simple: ${settings.simpleModel}`,
           `• complex: ${settings.complexModel}`,
-          "You can update by saying: set routine model to <model> or set complex model to <model>."
+          "You can update by saying: set chat model to <model>, set simple model to <model>, set router model to <model>, or set complex model to <model>."
         ].join("\n")
       );
       return true;
     }
 
-    if (parsed.target === "routine") {
-      setRoutineModel(this.db, parsed.model);
+    if (parsed.target === "router") {
+      setRouterModel(this.db, parsed.model);
+    } else if (parsed.target === "chat") {
+      setChatModel(this.db, parsed.model);
+    } else if (parsed.target === "simple") {
+      setSimpleModel(this.db, parsed.model);
     } else {
       setComplexModel(this.db, parsed.model);
     }
@@ -540,7 +555,9 @@ export class AgentDO {
       [
         `Saved ${parsed.target} model: ${parsed.model}`,
         "Updated model settings:",
-        `• routine: ${settings.routineModel}`,
+        `• router: ${settings.routerModel}`,
+        `• chat: ${settings.chatModel}`,
+        `• simple: ${settings.simpleModel}`,
         `• complex: ${settings.complexModel}`
       ].join("\n")
     );
@@ -557,7 +574,9 @@ export class AgentDO {
   }): {
     aiGatewayToken?: string;
     aiGatewayBaseUrl?: string;
-    routineModel: string;
+    routerModel: string;
+    chatModel: string;
+    simpleModel: string;
     complexModel: string;
     systemPrompt: string;
     messages: ConversationMessage[];
@@ -570,7 +589,9 @@ export class AgentDO {
     return {
       aiGatewayToken: this.env.AI_GATEWAY_TOKEN,
       aiGatewayBaseUrl: this.env.AI_GATEWAY_BASE_URL,
-      routineModel: settings.routineModel,
+      routerModel: settings.routerModel,
+      chatModel: settings.chatModel,
+      simpleModel: settings.simpleModel,
       complexModel: settings.complexModel,
       ...overrides
     };
@@ -643,7 +664,7 @@ export class AgentDO {
         systemPrompt,
         messages: conversation,
         tools: this.buildToolList(dynamicTools),
-        taskComplexityHint: options.priorMessages ? "routine" : undefined
+        taskComplexityHint: undefined
       })),
       channel
     );
@@ -701,7 +722,7 @@ export class AgentDO {
             systemPrompt,
             messages: conversation,
             tools: this.buildToolList(dynamicTools),
-            taskComplexityHint: options.priorMessages ? "routine" : undefined
+            taskComplexityHint: undefined
           })),
           channel
         );
@@ -1087,7 +1108,7 @@ export class AgentDO {
 
     const response = await this.deps.llmCall(this.buildLlmInput({
       taskComplexityHint: "routine",
-      model: this.getRuntimeModelSettings().routineModel,
+      model: this.getRuntimeModelSettings().chatModel,
       systemPrompt: "You maintain concise memory between AI agent sessions.",
       messages: [
         {
@@ -1173,7 +1194,7 @@ export class AgentDO {
 
     const response = await this.deps.llmCall(this.buildLlmInput({
       taskComplexityHint: "routine",
-      model: this.getRuntimeModelSettings().routineModel,
+      model: this.getRuntimeModelSettings().chatModel,
       systemPrompt: "Summarise conversation history concisely, preserving key decisions, code changes, and context.",
       messages: [{ role: "user", content: `Summarise:
 

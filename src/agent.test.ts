@@ -282,9 +282,11 @@ describe("AgentDO runAgentLoop", () => {
 
 
 
-  it("passes persisted routine/complex model settings into llmCall", async () => {
+  it("passes persisted 4-tier model settings into llmCall", async () => {
     const sql = new FakeSql();
-    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "model_routine", "openai/gpt-4.1-mini");
+    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "model_router", "@cf/ibm-granite/granite-4.0-h-micro");
+    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "model_chat", "@cf/zai-org/glm-4.7-flash");
+    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "model_simple", "@cf/qwen/qwen2.5-coder-32b-instruct");
     sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "model_complex", "anthropic/claude-sonnet-4-6");
 
     const { env } = makeTestEnv();
@@ -300,7 +302,9 @@ describe("AgentDO runAgentLoop", () => {
 
     expect(llmCall).toHaveBeenCalledWith(
       expect.objectContaining({
-        routineModel: "openai/gpt-4.1-mini",
+        routerModel: "@cf/ibm-granite/granite-4.0-h-micro",
+        chatModel: "@cf/zai-org/glm-4.7-flash",
+        simpleModel: "@cf/qwen/qwen2.5-coder-32b-instruct",
         complexModel: "anthropic/claude-sonnet-4-6"
       })
     );
@@ -899,7 +903,7 @@ describe("AgentDO sub-agent system", () => {
         method: "POST",
         body: JSON.stringify({
           action: "message",
-          event: { type: "message", text: "set routine model to openai/gpt-4.1-mini", channel: "C1" }
+          event: { type: "message", text: "set simple model to @cf/qwen/qwen2.5-coder-32b-instruct", channel: "C1" }
         })
       })
     );
@@ -908,7 +912,7 @@ describe("AgentDO sub-agent system", () => {
     expect(postSlackMessage).toHaveBeenCalledWith(
       "token",
       "C1",
-      expect.stringContaining("Saved routine model: openai/gpt-4.1-mini")
+      expect.stringContaining("Saved simple model: @cf/qwen/qwen2.5-coder-32b-instruct")
     );
 
     const spawnCalls = agentDOFetch.mock.calls.filter((args: unknown[]) => {
