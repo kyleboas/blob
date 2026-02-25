@@ -1060,11 +1060,13 @@ describe("AgentDO heartbeat actions", () => {
     const sql = new FakeSql();
     const { env } = makeTestEnv();
     const setAlarm = vi.fn().mockResolvedValue(undefined);
+    const now = 1_700_000_000_000;
 
     const agent = new AgentDO({ storage: { sql, setAlarm } }, env, {
       llmCall: vi.fn() as never,
       postSlackMessage: vi.fn() as never,
-      postSlackApproval: vi.fn() as never
+      postSlackApproval: vi.fn() as never,
+      now: () => now
     });
 
     const request = new Request("https://agent.internal/event", {
@@ -1078,7 +1080,7 @@ describe("AgentDO heartbeat actions", () => {
 
     const body = await response.json() as { id: number };
     expect(typeof body.id).toBe("number");
-    expect(setAlarm).toHaveBeenCalled();
+    expect(setAlarm).toHaveBeenCalledWith(now);
   });
 
   it("list_heartbeats action returns the queue", async () => {

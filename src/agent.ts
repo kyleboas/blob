@@ -468,7 +468,9 @@ export class AgentDO {
 
     if (body.action === "enqueue_heartbeat" && body.task && body.channel) {
       const id = enqueueHeartbeat(this.db, body.task, body.channel);
-      await this.ctx.storage.setAlarm?.(this.deps.now() + BACKGROUND_TASK_INTERVAL_MS);
+      // Kick the queue immediately when a new heartbeat arrives so users don't
+      // have to wait up to the full background interval before the first run.
+      await this.ctx.storage.setAlarm?.(this.deps.now());
       return Response.json({ id });
     }
 
