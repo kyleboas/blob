@@ -218,3 +218,13 @@ When using `AI_GATEWAY_BASE_URL`, models are sent using provider prefixes on the
 - complex Anthropic model: `anthropic/claude-sonnet-4-6`
 
 You can still pass an already-prefixed model explicitly, and it will be preserved.
+
+
+### Configure models by talking to Blob
+
+After deployment, teammates can configure models in Slack without editing code or setting extra model env vars:
+- `set routine model to openai/gpt-4.1-mini`
+- `set complex model to anthropic/claude-sonnet-4-6`
+- `show model settings`
+
+Blob persists these model settings in Durable Object SQLite storage for the deployment.

@@ -17,6 +17,17 @@ describe("selectModel", () => {
     const model = selectModel("simple", [{ role: "user", content: "hello" }], "complex");
     expect(model).toBe(MODEL_COMPLEX);
   });
+
+  it("uses provided routine/complex model overrides", () => {
+    const model = selectModel(
+      "simple",
+      [{ role: "user", content: "hello" }],
+      undefined,
+      "openai/gpt-4.1-mini",
+      "anthropic/claude-sonnet-4-6"
+    );
+    expect(model).toBe("openai/gpt-4.1-mini");
+  });
 });
 
 describe("callLLM", () => {

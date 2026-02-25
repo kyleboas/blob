@@ -280,6 +280,32 @@ describe("AgentDO runAgentLoop", () => {
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "All done");
   });
 
+
+
+  it("passes persisted routine/complex model settings into llmCall", async () => {
+    const sql = new FakeSql();
+    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "model_routine", "openai/gpt-4.1-mini");
+    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "model_complex", "anthropic/claude-sonnet-4-6");
+
+    const { env } = makeTestEnv();
+    const llmCall = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Done" }] });
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn().mockResolvedValue(undefined) as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.runAgentLoop("hi", "C1", "thread-model-settings");
+
+    expect(llmCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        routineModel: "openai/gpt-4.1-mini",
+        complexModel: "anthropic/claude-sonnet-4-6"
+      })
+    );
+  });
+
   it("recovers when history ends with an orphaned tool_use (interrupted run)", async () => {
     const sql = new FakeSql();
     const { env } = makeTestEnv();
@@ -853,6 +879,44 @@ describe("AgentDO sub-agent system", () => {
         body: expect.stringContaining('"action":"run_task"')
       })
     );
+  });
+
+
+
+  it("handles model settings commands inline without spawning a sub-agent", async () => {
+    const sql = new FakeSql();
+    const { env, agentDOFetch } = makeTestEnv();
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: vi.fn() as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const response = await agent.fetch(
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "message",
+          event: { type: "message", text: "set routine model to openai/gpt-4.1-mini", channel: "C1" }
+        })
+      })
+    );
+
+    expect(response.status).toBe(202);
+    expect(postSlackMessage).toHaveBeenCalledWith(
+      "token",
+      "C1",
+      expect.stringContaining("Saved routine model: openai/gpt-4.1-mini")
+    );
+
+    const spawnCalls = agentDOFetch.mock.calls.filter((args: unknown[]) => {
+      const init = args[1] as RequestInit | undefined;
+      const body = typeof init?.body === "string" ? init.body : "";
+      return body.includes('"action":"run_task"');
+    });
+    expect(spawnCalls).toHaveLength(0);
   });
 
   it("run_task action executes the task and notifies the orchestrator on completion", async () => {

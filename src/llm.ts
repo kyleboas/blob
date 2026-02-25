@@ -14,6 +14,8 @@ export interface CallLLMInput {
   messages: AnthropicMessage[];
   tools?: unknown[];
   taskComplexityHint?: "routine" | "complex";
+  routineModel?: string;
+  complexModel?: string;
   model?: string;
   fetchImpl?: typeof fetch;
   sleepImpl?: (ms: number) => Promise<void>;
@@ -177,13 +179,19 @@ function toAnthropicLikeResponse(payload: Record<string, any>, fallbackModel: st
   };
 }
 
-export function selectModel(systemPrompt: string, messages: AnthropicMessage[], taskComplexityHint?: "routine" | "complex"): string {
+export function selectModel(
+  systemPrompt: string,
+  messages: AnthropicMessage[],
+  taskComplexityHint?: "routine" | "complex",
+  routineModel: string = MODEL_ROUTINE,
+  complexModel: string = MODEL_COMPLEX
+): string {
   if (taskComplexityHint === "complex") {
-    return MODEL_COMPLEX;
+    return complexModel;
   }
 
   if (COMPLEXITY_PATTERN.test(systemPrompt)) {
-    return MODEL_COMPLEX;
+    return complexModel;
   }
 
   const containsComplexToolIntent = messages.some((msg) => {
@@ -191,13 +199,13 @@ export function selectModel(systemPrompt: string, messages: AnthropicMessage[], 
     return /tool|bash|run command|test suite|migration/i.test(content) && /complex|large|deep/i.test(content);
   });
 
-  return containsComplexToolIntent ? MODEL_COMPLEX : MODEL_ROUTINE;
+  return containsComplexToolIntent ? complexModel : routineModel;
 }
 
 export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
   const fetchImpl = input.fetchImpl ?? fetch;
   const sleepImpl = input.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const model = input.model ?? selectModel(input.systemPrompt, input.messages, input.taskComplexityHint);
+  const model = input.model ?? selectModel(input.systemPrompt, input.messages, input.taskComplexityHint, input.routineModel, input.complexModel);
 
   const viaGateway = Boolean(input.aiGatewayBaseUrl);
   const useOpenAICompat = viaGateway || isOpenAIModel(model);

@@ -5,7 +5,9 @@ import {
   COMPACTION_TOKEN_THRESHOLD,
   SESSION_SUMMARY_RECENT_COUNT,
   THINKING_MESSAGE_DELAY_MS,
-  BACKGROUND_TASK_INTERVAL_MS
+  BACKGROUND_TASK_INTERVAL_MS,
+  MODEL_ROUTINE,
+  MODEL_COMPLEX
 } from "./config";
 import { callLLM, type LLMResponse } from "./llm";
 import { enforceSafety, isSelfModificationCommand } from "./safety";
@@ -22,6 +24,9 @@ import {
   getRecentAgentEvents,
   getRecentSessionSummaries,
   getCurrentSession,
+  getModelSettings,
+  setRoutineModel,
+  setComplexModel,
   hasPendingHeartbeats,
   incrementRateLimit,
   initSchema,
@@ -117,6 +122,45 @@ function buildSystemPrompt(_knowledge: string, recentSummaries: SessionSummary[]
   }
 
   return prompt;
+}
+
+
+interface RuntimeModelSettings {
+  routineModel: string;
+  complexModel: string;
+}
+
+type SettingsCommand =
+  | { type: "show" }
+  | { type: "set"; target: "routine" | "complex"; model: string };
+
+function parseSettingsCommand(rawText: string): SettingsCommand | null {
+  const text = rawText.trim();
+  if (!text) return null;
+
+  if (/^(show|list)\s+(model\s+)?settings\??$/i.test(text)
+    || /^what\s+are\s+my\s+model\s+settings\??$/i.test(text)) {
+    return { type: "show" };
+  }
+
+  const setMatch = text.match(/^set\s+(routine|complex)\s+model\s+(?:to\s+)?(.+)$/i)
+    ?? text.match(/^set\s+model\s+(routine|complex)\s+(?:to\s+)?(.+)$/i)
+    ?? text.match(/^use\s+(.+)\s+for\s+(routine|complex)(?:\s+tasks?)?$/i);
+
+  if (!setMatch) return null;
+
+  let target: "routine" | "complex";
+  let model: string;
+  if (/^use\s+/i.test(text)) {
+    model = setMatch[1].trim();
+    target = setMatch[2].toLowerCase() as "routine" | "complex";
+  } else {
+    target = setMatch[1].toLowerCase() as "routine" | "complex";
+    model = setMatch[2].trim();
+  }
+
+  if (!model) return null;
+  return { type: "set", target, model };
 }
 
 const UNCONFIGURED_SANDBOX: SandboxBinding = {
@@ -347,6 +391,10 @@ export class AgentDO {
       const event = body.event;
       this.runInBackground((async () => {
         try {
+          const handled = await this.handleSettingsCommand(event);
+          if (handled) {
+            return;
+          }
           await this.spawnSubAgent(event);
         } catch (error) {
           const channel = event.channel;
@@ -443,6 +491,61 @@ export class AgentDO {
   }
 
 
+  private getRuntimeModelSettings(): RuntimeModelSettings {
+    return getModelSettings(this.db, {
+      routineModel: MODEL_ROUTINE,
+      complexModel: MODEL_COMPLEX
+    });
+  }
+
+  private async handleSettingsCommand(event: SlackEvent): Promise<boolean> {
+    const channel = event.channel;
+    const text = event.text ?? "";
+    if (!channel) {
+      return false;
+    }
+
+    const parsed = parseSettingsCommand(text);
+    if (!parsed) {
+      return false;
+    }
+
+    if (parsed.type === "show") {
+      const settings = this.getRuntimeModelSettings();
+      await this.deps.postSlackMessage(
+        this.env.SLACK_BOT_TOKEN,
+        channel,
+        [
+          "Current model settings:",
+          `• routine: ${settings.routineModel}`,
+          `• complex: ${settings.complexModel}`,
+          "You can update by saying: set routine model to <model> or set complex model to <model>."
+        ].join("\n")
+      );
+      return true;
+    }
+
+    if (parsed.target === "routine") {
+      setRoutineModel(this.db, parsed.model);
+    } else {
+      setComplexModel(this.db, parsed.model);
+    }
+
+    const settings = this.getRuntimeModelSettings();
+    await this.deps.postSlackMessage(
+      this.env.SLACK_BOT_TOKEN,
+      channel,
+      [
+        `Saved ${parsed.target} model: ${parsed.model}`,
+        "Updated model settings:",
+        `• routine: ${settings.routineModel}`,
+        `• complex: ${settings.complexModel}`
+      ].join("\n")
+    );
+    return true;
+  }
+
+
   private buildLlmInput(overrides: {
     systemPrompt: string;
     messages: ConversationMessage[];
@@ -454,17 +557,23 @@ export class AgentDO {
     openAiApiKey?: string;
     aiGatewayToken?: string;
     aiGatewayBaseUrl?: string;
+    routineModel: string;
+    complexModel: string;
     systemPrompt: string;
     messages: ConversationMessage[];
     tools?: unknown[];
     taskComplexityHint?: "routine" | "complex";
     model?: string;
   } {
+    const settings = this.getRuntimeModelSettings();
+
     return {
       apiKey: this.env.ANTHROPIC_API_KEY,
       openAiApiKey: this.env.OPENAI_API_KEY,
       aiGatewayToken: this.env.AI_GATEWAY_TOKEN,
       aiGatewayBaseUrl: this.env.AI_GATEWAY_BASE_URL,
+      routineModel: settings.routineModel,
+      complexModel: settings.complexModel,
       ...overrides
     };
   }
@@ -980,7 +1089,7 @@ export class AgentDO {
 
     const response = await this.deps.llmCall(this.buildLlmInput({
       taskComplexityHint: "routine",
-      model: "gpt-4.1-mini",
+      model: this.getRuntimeModelSettings().routineModel,
       systemPrompt: "You maintain concise memory between AI agent sessions.",
       messages: [
         {
@@ -1066,7 +1175,7 @@ export class AgentDO {
 
     const response = await this.deps.llmCall(this.buildLlmInput({
       taskComplexityHint: "routine",
-      model: "gpt-4.1-mini",
+      model: this.getRuntimeModelSettings().routineModel,
       systemPrompt: "Summarise conversation history concisely, preserving key decisions, code changes, and context.",
       messages: [{ role: "user", content: `Summarise:
 
