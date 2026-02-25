@@ -6,6 +6,7 @@ import {
   SESSION_SUMMARY_RECENT_COUNT,
   THINKING_MESSAGE_DELAY_MS,
   BACKGROUND_TASK_INTERVAL_MS,
+  PLANNER_AUDIT_MAX_ATTEMPTS,
   MODEL_ROUTER,
   MODEL_CHAT,
   MODEL_PLANNER_SIMPLE,
@@ -98,6 +99,15 @@ interface AgentDeps {
   postSlackMessage: typeof postMessage;
   postSlackApproval: typeof postApprovalRequest;
   now: () => number;
+}
+
+interface PlannerAuditResult {
+  result: "pass" | "fail";
+  reason: string;
+  rootCause: string;
+  missingCriteria: string[];
+  followUpTask: string | null;
+  disposition: "retry" | "escalate" | "defer";
 }
 
 const DEFAULT_DEPS: AgentDeps = {
@@ -468,7 +478,9 @@ export class AgentDO {
         let completionStatus: "completed" | "failed" = "completed";
         let finalText = "";
         try {
-          finalText = await this.handleTaskEvent(event, priorMessages, systemPrompt, taskComplexityHint);
+          const audited = await this.executeTaskWithPlannerAudit(event, priorMessages, systemPrompt, taskComplexityHint);
+          completionStatus = audited.status;
+          finalText = audited.finalText;
         } catch (error) {
           completionStatus = "failed";
           const channel = event.channel;
@@ -1039,12 +1051,13 @@ export class AgentDO {
     event: SlackEvent,
     priorMessages?: ConversationMessage[],
     systemPrompt?: string,
-    taskComplexityHint?: "routine" | "complex"
+    taskComplexityHint?: "routine" | "complex",
+    taskOverride?: string
   ): Promise<string> {
-    const task = event.text ?? "";
+    const task = (taskOverride ?? event.text ?? "").trim();
     const channel = event.channel;
 
-    if (!channel || !task.trim()) {
+    if (!channel || !task) {
       return "";
     }
 
@@ -1059,6 +1072,154 @@ export class AgentDO {
       taskComplexityHint
     });
     return finalText;
+  }
+
+  private async executeTaskWithPlannerAudit(
+    event: SlackEvent,
+    priorMessages?: ConversationMessage[],
+    systemPrompt?: string,
+    taskComplexityHint?: "routine" | "complex"
+  ): Promise<{ status: "completed" | "failed"; finalText: string }> {
+    const originalTask = (event.text ?? "").trim();
+    const channel = event.channel;
+    if (!channel || !originalTask) {
+      return { status: "completed", finalText: "" };
+    }
+
+    let currentTask = originalTask;
+    let finalText = await this.handleTaskEvent(event, priorMessages, systemPrompt, taskComplexityHint, currentTask);
+
+    for (let attempt = 1; attempt <= PLANNER_AUDIT_MAX_ATTEMPTS; attempt += 1) {
+      const audit = await this.runPlannerAudit({
+        originalTask,
+        latestTask: currentTask,
+        latestOutput: finalText,
+        attempt
+      });
+
+      const summary = `attempt=${attempt}/${PLANNER_AUDIT_MAX_ATTEMPTS}; result=${audit.result}; reason=${audit.reason}; root_cause=${audit.rootCause}; missing=${audit.missingCriteria.join(" | ") || "none"}; disposition=${audit.disposition}; follow_up=${audit.followUpTask ?? "none"}`;
+      logAgentEvent(this.db, "global", "planner_audit_attempt", summary);
+      this.forwardToGlobalLogs("planner_audit_attempt", `[#${channel}] ${summary}`);
+
+      if (audit.result === "pass") {
+        logAgentEvent(this.db, "global", "planner_audit_pass", `Task passed planner audit on attempt ${attempt}.`);
+        this.forwardToGlobalLogs("planner_audit_pass", `[#${channel}] Task passed planner audit on attempt ${attempt}.`);
+        return { status: "completed", finalText };
+      }
+
+      if (attempt >= PLANNER_AUDIT_MAX_ATTEMPTS || audit.disposition !== "retry") {
+        const terminationReason = attempt >= PLANNER_AUDIT_MAX_ATTEMPTS
+          ? "max_attempts_reached"
+          : `planner_disposition_${audit.disposition}`;
+        const terminalMessage = [
+          `Planner audit failed after ${attempt} attempt(s).`,
+          `Termination reason: ${terminationReason}.`,
+          `Reason: ${audit.reason}`,
+          `Root cause: ${audit.rootCause}`,
+          `Missing acceptance criteria: ${audit.missingCriteria.join("; ") || "(not provided)"}`,
+          audit.followUpTask ? `Proposed follow-up scope: ${audit.followUpTask}` : "Proposed follow-up scope: (not provided)"
+        ].join("\n");
+        logAgentEvent(this.db, "global", "planner_audit_terminated", terminalMessage);
+        this.forwardToGlobalLogs("planner_audit_terminated", `[#${channel}] ${terminalMessage}`);
+        await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, `⚠️ ${terminalMessage}`);
+        return { status: "failed", finalText: terminalMessage };
+      }
+
+      const followUpTask = audit.followUpTask
+        ?? `Close remaining implementation gaps for task: ${originalTask}. Focus on: ${audit.missingCriteria.join("; ") || audit.reason}.`;
+      logAgentEvent(this.db, "global", "planner_audit_follow_up", followUpTask);
+      this.forwardToGlobalLogs("planner_audit_follow_up", `[#${channel}] ${followUpTask}`);
+
+      const auditContext = [
+        `Audit reason: ${audit.reason}`,
+        `Root cause: ${audit.rootCause}`,
+        `Missing criteria: ${audit.missingCriteria.join("; ") || "(not provided)"}`,
+        `Follow-up scope: ${followUpTask}`
+      ].join("\n");
+      const retryHistory = [
+        ...(priorMessages ?? []),
+        { role: "user" as const, content: originalTask },
+        { role: "assistant" as const, content: finalText },
+        { role: "user" as const, content: `Planner audit remediation context:
+${auditContext}` }
+      ];
+
+      currentTask = followUpTask;
+      finalText = await this.handleTaskEvent(event, retryHistory, systemPrompt, taskComplexityHint, followUpTask);
+    }
+
+    return { status: "failed", finalText };
+  }
+
+  private async runPlannerAudit(input: {
+    originalTask: string;
+    latestTask: string;
+    latestOutput: string;
+    attempt: number;
+  }): Promise<PlannerAuditResult> {
+    const auditResponse = await this.deps.llmCall(this.buildLlmInput({
+      model: this.getRuntimeModelSettings().plannerSimpleModel,
+      modelRole: "planner",
+      systemPrompt: [
+        "You are Blob's planner auditor.",
+        "Audit sub-agent output against task acceptance criteria and implementation expectations.",
+        "On failure, you must include root cause analysis and a targeted remediation task.",
+        "Never return an undiagnosed or silent failure disposition.",
+        "Respond using this exact schema:",
+        "RESULT: pass|fail",
+        "REASON: <short summary>",
+        "ROOT_CAUSE: <why it failed or why it passed>",
+        "MISSING_CRITERIA: <semicolon-separated acceptance criteria gaps, or 'none'>",
+        "FOLLOW_UP_TASK: <targeted remediation task, or 'none' if pass>",
+        "DISPOSITION: retry|escalate|defer"
+      ].join("\n"),
+      messages: [{
+        role: "user",
+        content: [
+          `Audit attempt: ${input.attempt}/${PLANNER_AUDIT_MAX_ATTEMPTS}`,
+          `Original task: ${input.originalTask}`,
+          `Most recent execution task: ${input.latestTask}`,
+          "Sub-agent output:",
+          input.latestOutput || "(empty)",
+          "Determine whether implementation is complete and production-ready for this task."
+        ].join("\n")
+      }]
+    }));
+
+    const raw = extractTextContent(auditResponse);
+    const result = raw.match(/RESULT:\s*(pass|fail)/i)?.[1]?.toLowerCase() === "pass" ? "pass" : "fail";
+    const reason = raw.match(/REASON:\s*([\s\S]*?)(?:\n[A-Z_]+:|$)/)?.[1]?.trim() || "No reason provided.";
+    const rootCause = raw.match(/ROOT_CAUSE:\s*([\s\S]*?)(?:\n[A-Z_]+:|$)/)?.[1]?.trim() || "No root cause provided.";
+    const missingRaw = raw.match(/MISSING_CRITERIA:\s*([\s\S]*?)(?:\n[A-Z_]+:|$)/)?.[1]?.trim() || "none";
+    const followUpRaw = raw.match(/FOLLOW_UP_TASK:\s*([\s\S]*?)(?:\n[A-Z_]+:|$)/)?.[1]?.trim() || "none";
+    const dispositionRaw = raw.match(/DISPOSITION:\s*(retry|escalate|defer)/i)?.[1]?.toLowerCase() ?? "retry";
+
+    const missingCriteria = /^none$/i.test(missingRaw)
+      ? []
+      : missingRaw.split(/[;\n]+/).map((entry) => entry.trim()).filter(Boolean);
+    const followUpTask = /^none$/i.test(followUpRaw) ? null : followUpRaw;
+
+    if (result === "fail") {
+      return {
+        result,
+        reason,
+        rootCause,
+        missingCriteria: missingCriteria.length > 0 ? missingCriteria : ["Acceptance criteria coverage not explicitly provided"],
+        followUpTask: followUpTask ?? `Implement missing acceptance criteria for: ${input.originalTask}`,
+        disposition: (dispositionRaw === "escalate" || dispositionRaw === "defer" || dispositionRaw === "retry")
+          ? dispositionRaw
+          : "retry"
+      };
+    }
+
+    return {
+      result,
+      reason,
+      rootCause,
+      missingCriteria,
+      followUpTask: null,
+      disposition: "retry"
+    };
   }
 
   private async handleApprovalReaction(event: SlackEvent): Promise<void> {

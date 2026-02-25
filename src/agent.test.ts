@@ -996,7 +996,11 @@ describe("AgentDO sub-agent system", () => {
     const postSlackMessage = vi.fn().mockResolvedValue(undefined);
 
     const agent = new AgentDO({ storage: { sql } }, env, {
-      llmCall: vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Task done" }] }) as never,
+      llmCall: vi.fn()
+        .mockResolvedValueOnce({ content: [{ type: "text", text: "Task done" }] })
+        .mockResolvedValueOnce({
+          content: [{ type: "text", text: "RESULT: pass\nREASON: done\nROOT_CAUSE: none\nMISSING_CRITERIA: none\nFOLLOW_UP_TASK: none\nDISPOSITION: retry" }]
+        }) as never,
       postSlackMessage: postSlackMessage as never,
       postSlackApproval: vi.fn() as never
     });
@@ -1022,6 +1026,104 @@ describe("AgentDO sub-agent system", () => {
         body: expect.stringContaining('"action":"sub_agent_done"')
       })
     );
+  });
+
+  it("planner audit passes immediately and sub-agent completes", async () => {
+    const sql = new FakeSql();
+    const { env, agentDOFetch } = makeTestEnv();
+    const llmCall = vi.fn()
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Implemented." }] })
+      .mockResolvedValueOnce({
+        content: [{ type: "text", text: "RESULT: pass\nREASON: all criteria satisfied\nROOT_CAUSE: complete\nMISSING_CRITERIA: none\nFOLLOW_UP_TASK: none\nDISPOSITION: retry" }]
+      });
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn().mockResolvedValue(undefined) as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.fetch(new Request("https://example.com", {
+      method: "POST",
+      body: JSON.stringify({
+        action: "run_task",
+        event: { type: "message", text: "ship fix", channel: "C1" },
+        orchestratorName: "slack-channel:C1",
+        doName: "task-agent:C1:ok"
+      })
+    }));
+
+    const completionBody = String((agentDOFetch.mock.calls.at(-1)?.[1] as RequestInit)?.body ?? "");
+    expect(completionBody).toContain('"status":"completed"');
+    expect(llmCall).toHaveBeenCalledTimes(2);
+  });
+
+  it("planner audit creates targeted follow-up and passes after retry", async () => {
+    const sql = new FakeSql();
+    const { env, agentDOFetch } = makeTestEnv();
+    const llmCall = vi.fn()
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "First attempt output" }] })
+      .mockResolvedValueOnce({
+        content: [{ type: "text", text: "RESULT: fail\nREASON: missing tests\nROOT_CAUSE: implementation incomplete\nMISSING_CRITERIA: add regression test; verify alarm behavior\nFOLLOW_UP_TASK: Add regression tests for alarm behavior\nDISPOSITION: retry" }]
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Follow-up completed" }] })
+      .mockResolvedValueOnce({
+        content: [{ type: "text", text: "RESULT: pass\nREASON: complete\nROOT_CAUSE: fixed\nMISSING_CRITERIA: none\nFOLLOW_UP_TASK: none\nDISPOSITION: retry" }]
+      });
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn().mockResolvedValue(undefined) as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.fetch(new Request("https://example.com", {
+      method: "POST",
+      body: JSON.stringify({
+        action: "run_task",
+        event: { type: "message", text: "ship fix", channel: "C1" },
+        orchestratorName: "slack-channel:C1",
+        doName: "task-agent:C1:retry"
+      })
+    }));
+
+    expect(llmCall.mock.calls[2]?.[0]?.messages?.[0]?.content).toContain("Add regression tests for alarm behavior");
+    const completionBody = String((agentDOFetch.mock.calls.at(-1)?.[1] as RequestInit)?.body ?? "");
+    expect(completionBody).toContain('"status":"completed"');
+  });
+
+  it("planner audit stops at max attempts with diagnosed terminal failure", async () => {
+    const sql = new FakeSql();
+    const { env, agentDOFetch } = makeTestEnv();
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+    const llmCall = vi.fn()
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Attempt 1" }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "RESULT: fail\nREASON: gap 1\nROOT_CAUSE: rc1\nMISSING_CRITERIA: c1\nFOLLOW_UP_TASK: fix c1\nDISPOSITION: retry" }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Attempt 2" }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "RESULT: fail\nREASON: gap 2\nROOT_CAUSE: rc2\nMISSING_CRITERIA: c2\nFOLLOW_UP_TASK: fix c2\nDISPOSITION: retry" }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Attempt 3" }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "RESULT: fail\nREASON: gap 3\nROOT_CAUSE: rc3\nMISSING_CRITERIA: c3\nFOLLOW_UP_TASK: fix c3\nDISPOSITION: retry" }] });
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.fetch(new Request("https://example.com", {
+      method: "POST",
+      body: JSON.stringify({
+        action: "run_task",
+        event: { type: "message", text: "ship fix", channel: "C1" },
+        orchestratorName: "slack-channel:C1",
+        doName: "task-agent:C1:max"
+      })
+    }));
+
+    const completionBody = String((agentDOFetch.mock.calls.at(-1)?.[1] as RequestInit)?.body ?? "");
+    expect(completionBody).toContain('"status":"failed"');
+    expect(completionBody).toContain("max_attempts_reached");
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", expect.stringContaining("Planner audit failed"));
   });
 
   it("sub_agent_done action marks the sub-agent as completed", async () => {
@@ -1449,4 +1551,3 @@ describe("AgentDO heartbeat actions", () => {
     expect(tasks).not.toContain("Harden heartbeat resume logic");
   });
 });
-
