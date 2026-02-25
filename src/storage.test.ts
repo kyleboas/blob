@@ -15,6 +15,8 @@ import {
   listHeartbeats,
   markSubAgentDone,
   registerSubAgent,
+  listRecentOperatorFeedback,
+  saveOperatorFeedback,
   restoreRepoSnapshot,
   saveKnowledge,
   saveMessage,
@@ -37,6 +39,14 @@ interface HeartbeatRow {
   updated_at: number;
 }
 
+interface OperatorFeedbackRow {
+  id: number;
+  feedback: string;
+  channel: string | null;
+  session_id: string | null;
+  created_at: number;
+}
+
 interface SubAgentRow {
   id: number;
   channel: string;
@@ -56,6 +66,8 @@ class FakeSql implements SqlStorage {
   private heartbeatTimestamp = 1;
   private subAgents: SubAgentRow[] = [];
   private nextSubAgentId = 1;
+  private operatorFeedback: OperatorFeedbackRow[] = [];
+  private nextFeedbackId = 1;
 
   exec(query: string, ...bindings: Array<string | number | null>) {
     const normalized = query.trim().replace(/\s+/g, " ");
@@ -126,8 +138,9 @@ class FakeSql implements SqlStorage {
     }
 
     if (normalized.startsWith("SELECT last_insert_rowid()")) {
-      const last = this.heartbeats.at(-1);
-      return { toArray: () => (last ? [{ id: last.id }] : [{ id: 0 }]) };
+      const heartbeatId = this.heartbeats.at(-1)?.id ?? 0;
+      const feedbackId = this.operatorFeedback.at(-1)?.id ?? 0;
+      return { toArray: () => [{ id: Math.max(heartbeatId, feedbackId) }] };
     }
 
     if (normalized.includes("FROM heartbeats") && normalized.includes("status = 'pending'") && normalized.includes("LIMIT 1")) {
@@ -175,6 +188,24 @@ class FakeSql implements SqlStorage {
       const latest = [...this.heartbeats]
         .sort((a, b) => (b.updated_at - a.updated_at) || (b.id - a.id))[0];
       return { toArray: () => (latest ? [{ channel: latest.channel }] : []) };
+    }
+
+    if (normalized.startsWith("INSERT INTO operator_feedback")) {
+      const id = this.nextFeedbackId++;
+      this.operatorFeedback.push({
+        id,
+        feedback: String(bindings[0]),
+        channel: bindings[1] == null ? null : String(bindings[1]),
+        session_id: bindings[2] == null ? null : String(bindings[2]),
+        created_at: Math.floor(Date.now() / 1000)
+      });
+      return { toArray: () => [] };
+    }
+
+    if (normalized.includes("FROM operator_feedback") && normalized.includes("ORDER BY id DESC")) {
+      const limit = Number(bindings[0] ?? 5);
+      const rows = [...this.operatorFeedback].reverse().slice(0, limit);
+      return { toArray: () => rows as unknown as Row[] };
     }
 
     // Sub-agent queries
@@ -322,6 +353,21 @@ describe("knowledge sync", () => {
     await syncKnowledgeFromSandbox(sql, { readFile });
 
     expect(getKnowledge(sql)).toBe("");
+  });
+});
+
+describe("operator feedback helpers", () => {
+  it("stores feedback with metadata and returns newest first", () => {
+    const sql = new FakeSql();
+
+    const firstId = saveOperatorFeedback(sql, "Focus on reliability", "C-ops", "session-1");
+    const secondId = saveOperatorFeedback(sql, "Avoid frontend tasks", null, null);
+
+    const feedback = listRecentOperatorFeedback(sql, 5);
+    expect(firstId).toBeGreaterThan(0);
+    expect(secondId).toBeGreaterThanOrEqual(firstId);
+    expect(feedback[0]).toMatchObject({ feedback: "Avoid frontend tasks", channel: null, sessionId: null });
+    expect(feedback[1]).toMatchObject({ feedback: "Focus on reliability", channel: "C-ops", sessionId: "session-1" });
   });
 });
 

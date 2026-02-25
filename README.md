@@ -64,11 +64,27 @@ For Unified Billing, configure:
 - `AI_GATEWAY_TOKEN="<Authenticated Gateway Run token>"`
 
 Do **not** set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` Worker secrets in Unified Billing mode. Blob sends `cf-aig-authorization` for gateway auth on every request and omits provider `Authorization` unless you explicitly pass a provider key for BYOK passthrough.
-Default model routing is `gpt-4.1-mini` for routine/simple tasks and `claude-sonnet-4-6` for complex planning.
+Default model routing separates planning from execution: planner models are used for task planning/dedup decisions, while execution models are used by tool-calling sub-agents.
 
 You can change models at runtime by talking to Blob in Slack (no code changes needed):
-- `set routine model to openai/gpt-4.1-mini`
-- `set complex model to anthropic/claude-sonnet-4-6`
+- `set planner-simple model to openai/gpt-4.1-mini`
+- `set planner-complex model to anthropic/claude-sonnet-4-6`
+- `set execution-simple model to @cf/qwen/qwen2.5-coder-7b-instruct`
+- `set execution-complex model to @cf/qwen/qwen2.5-coder-14b-instruct`
 - `show model settings`
 
 These settings are persisted in Durable Object storage for that deployment.
+
+## Autonomous heartbeat steering feedback
+
+Operators can steer autonomous planning at any time by posting feedback to the agent endpoint:
+
+```json
+{
+  "action": "submit_feedback",
+  "feedback": "Prioritize reliability improvements over UI work",
+  "channel": "C123"
+}
+```
+
+Feedback is persisted with timestamp/channel metadata and is injected into the next autonomous planning cycle.

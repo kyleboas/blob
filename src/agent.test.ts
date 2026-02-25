@@ -13,6 +13,14 @@ interface HeartbeatRow {
   updated_at: number;
 }
 
+interface OperatorFeedbackRow {
+  id: number;
+  feedback: string;
+  channel: string | null;
+  session_id: string | null;
+  created_at: number;
+}
+
 interface SubAgentRow {
   id: number;
   channel: string;
@@ -35,6 +43,8 @@ class FakeSql implements SqlStorage {
   private nextHeartbeatId = 1;
   private subAgents: SubAgentRow[] = [];
   private nextSubAgentId = 1;
+  private operatorFeedback: OperatorFeedbackRow[] = [];
+  private nextFeedbackId = 1;
 
   exec(query: string, ...bindings: Array<string | number | null>) {
     const normalized = query.trim().replace(/\s+/g, " ");
@@ -145,8 +155,9 @@ class FakeSql implements SqlStorage {
     }
 
     if (normalized.startsWith("SELECT last_insert_rowid()")) {
-      const last = this.heartbeats.at(-1);
-      return { toArray: () => (last ? [{ id: last.id }] : [{ id: 0 }]) };
+      const heartbeatId = this.heartbeats.at(-1)?.id ?? 0;
+      const feedbackId = this.operatorFeedback.at(-1)?.id ?? 0;
+      return { toArray: () => [{ id: Math.max(heartbeatId, feedbackId) }] };
     }
 
     if (normalized.includes("FROM heartbeats") && normalized.includes("status = 'pending'") && normalized.includes("LIMIT 1")) {
@@ -193,6 +204,24 @@ class FakeSql implements SqlStorage {
     if (normalized.includes("FROM heartbeats") && normalized.includes("ORDER BY id DESC")) {
       const limit = Number(bindings[0] ?? 50);
       const rows = [...this.heartbeats].reverse().slice(0, limit);
+      return { toArray: () => rows };
+    }
+
+    if (normalized.startsWith("INSERT INTO operator_feedback")) {
+      const id = this.nextFeedbackId++;
+      this.operatorFeedback.push({
+        id,
+        feedback: String(bindings[0]),
+        channel: bindings[1] == null ? null : String(bindings[1]),
+        session_id: bindings[2] == null ? null : String(bindings[2]),
+        created_at: Math.floor(Date.now() / 1000)
+      });
+      return { toArray: () => [] };
+    }
+
+    if (normalized.includes("FROM operator_feedback") && normalized.includes("ORDER BY id DESC")) {
+      const limit = Number(bindings[0] ?? 5);
+      const rows = [...this.operatorFeedback].reverse().slice(0, limit);
       return { toArray: () => rows };
     }
 
@@ -300,12 +329,32 @@ describe("AgentDO runAgentLoop", () => {
 
 
 
-  it("passes persisted 4-tier model settings into llmCall", async () => {
+  it("adds execution guardrails to sub-agent prompts", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const llmCall = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Done" }] });
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn().mockResolvedValue(undefined) as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.runAgentLoop("hi", "C1", "thread-execution-guardrails", { taskComplexityHint: "routine" });
+
+    expect(llmCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemPrompt: expect.stringContaining("Execution mode: follow the approved plan")
+      })
+    );
+  });
+
+  it("uses execution models for task execution calls", async () => {
     const sql = new FakeSql();
     sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "model_router", "@cf/ibm-granite/granite-4.0-h-micro");
     sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "model_chat", "@cf/zai-org/glm-4.7-flash");
-    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "model_simple", "@cf/qwen/qwen2.5-coder-32b-instruct");
-    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "model_complex", "anthropic/claude-sonnet-4-6");
+    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "model_execution_simple", "@cf/qwen/qwen2.5-coder-3b-instruct");
+    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "model_execution_complex", "@cf/qwen/qwen2.5-coder-14b-instruct");
 
     const { env } = makeTestEnv();
     const llmCall = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Done" }] });
@@ -316,14 +365,14 @@ describe("AgentDO runAgentLoop", () => {
       postSlackApproval: vi.fn() as never
     });
 
-    await agent.runAgentLoop("hi", "C1", "thread-model-settings");
+    await agent.runAgentLoop("hi", "C1", "thread-model-settings", { taskComplexityHint: "routine" });
 
     expect(llmCall).toHaveBeenCalledWith(
       expect.objectContaining({
         routerModel: "@cf/ibm-granite/granite-4.0-h-micro",
         chatModel: "@cf/zai-org/glm-4.7-flash",
-        simpleModel: "@cf/qwen/qwen2.5-coder-32b-instruct",
-        complexModel: "anthropic/claude-sonnet-4-6"
+        simpleModel: "@cf/qwen/qwen2.5-coder-3b-instruct",
+        complexModel: "@cf/qwen/qwen2.5-coder-14b-instruct"
       })
     );
   });
@@ -1275,6 +1324,85 @@ describe("AgentDO heartbeat actions", () => {
     const hints = runTaskCalls.map((args: unknown[]) => JSON.parse(String((args[1] as RequestInit | undefined)?.body ?? "")).taskComplexityHint);
     expect(hints).toEqual(["routine", "complex"]);
     vi.unstubAllGlobals();
+  });
+
+
+  it("uses planner models for autonomous planning and execution models for queued task runs", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const setAlarm = vi.fn().mockResolvedValue(undefined);
+
+    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "autonomous_channel", "C-auto");
+    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "model_planner_simple", "planner-simple-model");
+    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "model_execution_simple", "execution-simple-model");
+
+    const captured: Array<{ simpleModel?: string; toolsCount: number }> = [];
+    const llmCall = vi.fn().mockImplementation(async (input: { simpleModel?: string; tools?: unknown[] }) => {
+      captured.push({ simpleModel: input.simpleModel, toolsCount: input.tools?.length ?? 0 });
+      if (captured.length === 1) return { content: [{ type: "text", text: "Write stronger alarm-loop tests" }] };
+      if (captured.length === 2) return { content: [{ type: "text", text: "DECISION: accept\nTASK:" }] };
+      return { content: [{ type: "text", text: "done" }] };
+    });
+
+    const agent = new AgentDO({ storage: { sql, setAlarm } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn().mockResolvedValue(undefined) as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.alarm();
+    await agent.alarm();
+
+    expect(captured[0].simpleModel).toBe("planner-simple-model");
+    expect(captured[1].simpleModel).toBe("planner-simple-model");
+    expect(captured[2].simpleModel).toBe("execution-simple-model");
+    expect(captured[2].toolsCount).toBeGreaterThan(0);
+  });
+
+  it("applies operator feedback to subsequent autonomous planning", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const setAlarm = vi.fn().mockResolvedValue(undefined);
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "autonomous_channel", "C-auto");
+
+    const llmCall = vi.fn().mockImplementation(async (input: { messages: Array<{ content: string }> }) => {
+      const prompt = input.messages[0]?.content ?? "";
+      if (prompt.includes("Latest operator steering feedback") && prompt.includes("Prioritize reliability work")) {
+        return { content: [{ type: "text", text: "Improve reliability alerting coverage" }] };
+      }
+      return { content: [{ type: "text", text: "DECISION: accept\nTASK:" }] };
+    });
+
+    const agent = new AgentDO({ storage: { sql, setAlarm } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const feedbackResp = await agent.fetch(new Request("https://agent.internal/event", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "submit_feedback", feedback: "Prioritize reliability work", channel: "C-auto" })
+    }));
+
+    expect(feedbackResp.status).toBe(200);
+    await agent.alarm();
+
+    const listResp = await agent.fetch(new Request("https://agent.internal/event", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "list_heartbeats" })
+    }));
+
+    const tasks = ((await listResp.json()) as { heartbeats: Array<{ task: string }> }).heartbeats.map((h) => h.task);
+    expect(tasks).toContain("Improve reliability alerting coverage");
+    expect(postSlackMessage).toHaveBeenCalledWith(
+      "token",
+      "C-auto",
+      expect.stringContaining("Feedback recorded")
+    );
   });
 
   it("duplicate prevention rejects exact/semantic near-duplicates and does not rely on regex-only matching", async () => {

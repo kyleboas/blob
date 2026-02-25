@@ -8,6 +8,10 @@ const SETTING_MODEL_CHAT = "model_chat";
 const SETTING_MODEL_SIMPLE = "model_simple";
 const SETTING_MODEL_ROUTINE = "model_routine";
 const SETTING_MODEL_COMPLEX = "model_complex";
+const SETTING_MODEL_PLANNER_SIMPLE = "model_planner_simple";
+const SETTING_MODEL_PLANNER_COMPLEX = "model_planner_complex";
+const SETTING_MODEL_EXECUTION_SIMPLE = "model_execution_simple";
+const SETTING_MODEL_EXECUTION_COMPLEX = "model_execution_complex";
 
 export interface SqlStatementResult<T> {
   toArray(): T[];
@@ -30,6 +34,14 @@ export interface Heartbeat {
   result: string | null;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface OperatorFeedback {
+  id: number;
+  feedback: string;
+  channel: string | null;
+  sessionId: string | null;
+  createdAt: number;
 }
 
 const SNAPSHOT_FILES = ["AGENT.md", "README.md", "package.json", "tsconfig.json"];
@@ -180,6 +192,16 @@ export function initSchema(sql: SqlStorage): void {
       status TEXT NOT NULL DEFAULT 'running',
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )
+  `);
+
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS operator_feedback (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feedback TEXT NOT NULL,
+      channel TEXT,
+      session_id TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
     )
   `);
 }
@@ -441,13 +463,32 @@ export function getSetting(sql: SqlStorage, key: string): string | null {
 
 export function getModelSettings(
   sql: SqlStorage,
-  defaults: { routerModel: string; chatModel: string; simpleModel: string; complexModel: string }
-): { routerModel: string; chatModel: string; simpleModel: string; complexModel: string } {
+  defaults: {
+    routerModel: string;
+    chatModel: string;
+    plannerSimpleModel: string;
+    plannerComplexModel: string;
+    executionSimpleModel: string;
+    executionComplexModel: string;
+  }
+): {
+  routerModel: string;
+  chatModel: string;
+  plannerSimpleModel: string;
+  plannerComplexModel: string;
+  executionSimpleModel: string;
+  executionComplexModel: string;
+} {
+  const legacySimple = getSetting(sql, SETTING_MODEL_SIMPLE) ?? getSetting(sql, SETTING_MODEL_ROUTINE);
+  const legacyComplex = getSetting(sql, SETTING_MODEL_COMPLEX);
+
   return {
     routerModel: getSetting(sql, SETTING_MODEL_ROUTER) ?? defaults.routerModel,
     chatModel: getSetting(sql, SETTING_MODEL_CHAT) ?? defaults.chatModel,
-    simpleModel: getSetting(sql, SETTING_MODEL_SIMPLE) ?? getSetting(sql, SETTING_MODEL_ROUTINE) ?? defaults.simpleModel,
-    complexModel: getSetting(sql, SETTING_MODEL_COMPLEX) ?? defaults.complexModel
+    plannerSimpleModel: getSetting(sql, SETTING_MODEL_PLANNER_SIMPLE) ?? legacySimple ?? defaults.plannerSimpleModel,
+    plannerComplexModel: getSetting(sql, SETTING_MODEL_PLANNER_COMPLEX) ?? legacyComplex ?? defaults.plannerComplexModel,
+    executionSimpleModel: getSetting(sql, SETTING_MODEL_EXECUTION_SIMPLE) ?? defaults.executionSimpleModel,
+    executionComplexModel: getSetting(sql, SETTING_MODEL_EXECUTION_COMPLEX) ?? defaults.executionComplexModel
   };
 }
 
@@ -471,6 +512,26 @@ export function setRoutineModel(sql: SqlStorage, model: string): void {
 
 export function setComplexModel(sql: SqlStorage, model: string): void {
   setSetting(sql, SETTING_MODEL_COMPLEX, model);
+}
+
+export function setPlannerSimpleModel(sql: SqlStorage, model: string): void {
+  setSetting(sql, SETTING_MODEL_PLANNER_SIMPLE, model);
+  // Keep legacy key synchronized for backwards compatibility.
+  setSimpleModel(sql, model);
+}
+
+export function setPlannerComplexModel(sql: SqlStorage, model: string): void {
+  setSetting(sql, SETTING_MODEL_PLANNER_COMPLEX, model);
+  // Keep legacy key synchronized for backwards compatibility.
+  setComplexModel(sql, model);
+}
+
+export function setExecutionSimpleModel(sql: SqlStorage, model: string): void {
+  setSetting(sql, SETTING_MODEL_EXECUTION_SIMPLE, model);
+}
+
+export function setExecutionComplexModel(sql: SqlStorage, model: string): void {
+  setSetting(sql, SETTING_MODEL_EXECUTION_COMPLEX, model);
 }
 
 export async function saveRepoSnapshot(
@@ -642,6 +703,42 @@ export function getLastHeartbeatChannel(sql: SqlStorage): string | null {
 
   const channel = rows[0]?.channel;
   return channel == null ? null : String(channel);
+}
+
+export function saveOperatorFeedback(
+  sql: SqlStorage,
+  feedback: string,
+  channel: string | null,
+  sessionId: string | null
+): number {
+  sql.exec(
+    `INSERT INTO operator_feedback (feedback, channel, session_id) VALUES (?, ?, ?)`,
+    feedback,
+    channel,
+    sessionId
+  );
+  const rows = sql.exec(`SELECT last_insert_rowid() AS id`).toArray();
+  return Number(rows[0]?.id ?? 0);
+}
+
+export function listRecentOperatorFeedback(sql: SqlStorage, limit = 5): OperatorFeedback[] {
+  const rows = sql
+    .exec(
+      `SELECT id, feedback, channel, session_id, created_at
+       FROM operator_feedback
+       ORDER BY id DESC
+       LIMIT ?`,
+      limit
+    )
+    .toArray();
+
+  return rows.map((row) => ({
+    id: Number(row.id),
+    feedback: String(row.feedback),
+    channel: row.channel == null ? null : String(row.channel),
+    sessionId: row.session_id == null ? null : String(row.session_id),
+    createdAt: Number(row.created_at)
+  }));
 }
 
 // Sub-agent registry – tracks active sub-agent DOs spawned per channel so that
