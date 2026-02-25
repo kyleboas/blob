@@ -259,12 +259,13 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
       if (!input.aiGatewayToken) {
         throw new Error("Missing AI Gateway token");
       }
-
-      headers["cf-aig-authorization"] = `Bearer ${input.aiGatewayToken}`;
-
       const providerToken = input.openAiApiKey || input.apiKey;
+
       if (providerToken) {
+        headers["cf-aig-authorization"] = `Bearer ${input.aiGatewayToken}`;
         headers.authorization = `Bearer ${providerToken}`;
+      } else {
+        headers.authorization = `Bearer ${input.aiGatewayToken}`;
       }
     } else {
       const openAiToken = input.openAiApiKey;

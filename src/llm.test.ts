@@ -120,7 +120,7 @@ describe("callLLM", () => {
     const [url, options] = mockFetch.mock.calls[0];
     expect(url).toBe("https://gateway.ai.cloudflare.com/v1/account/gateway/compat/chat/completions");
     expect((options as RequestInit).headers).toMatchObject({
-      "cf-aig-authorization": "Bearer gateway-token"
+      authorization: "Bearer gateway-token"
     });
     const body = JSON.parse(String((options as RequestInit).body));
     expect(body.model).toBe("anthropic/claude-sonnet-4-6");
@@ -168,7 +168,10 @@ describe("callLLM", () => {
     });
 
     const [, options] = mockFetch.mock.calls[0];
-    expect((options as RequestInit).headers).not.toHaveProperty("authorization");
+    expect((options as RequestInit).headers).toMatchObject({
+      authorization: "Bearer gateway-token"
+    });
+    expect((options as RequestInit).headers).not.toHaveProperty("cf-aig-authorization");
   });
 
   it("retries on 429 rate limit and succeeds", async () => {
