@@ -246,15 +246,6 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
       }
 
       headers["cf-aig-authorization"] = `Bearer ${input.aiGatewayToken}`;
-
-      const gatewayModel = toGatewayModel(model);
-      const providerToken = gatewayModel.startsWith("openai/")
-        ? input.openAiApiKey
-        : (gatewayModel.startsWith("anthropic/") ? input.apiKey : undefined);
-
-      if (providerToken) {
-        headers.authorization = `Bearer ${providerToken}`;
-      }
     } else {
       const openAiToken = input.openAiApiKey;
       if (!openAiToken) {

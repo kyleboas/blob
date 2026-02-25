@@ -111,7 +111,6 @@ describe("callLLM", () => {
     await callLLM({
       aiGatewayBaseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway",
       aiGatewayToken: "gateway-token",
-      apiKey: "anthropic-key",
       model: "claude-sonnet-4-6",
       systemPrompt: "be helpful",
       messages: [{ role: "user", content: "hello" }],
@@ -121,9 +120,9 @@ describe("callLLM", () => {
     const [url, options] = mockFetch.mock.calls[0];
     expect(url).toBe("https://gateway.ai.cloudflare.com/v1/account/gateway/compat/chat/completions");
     expect((options as RequestInit).headers).toMatchObject({
-      "cf-aig-authorization": "Bearer gateway-token",
-      authorization: "Bearer anthropic-key"
+      "cf-aig-authorization": "Bearer gateway-token"
     });
+    expect((options as RequestInit).headers).not.toHaveProperty("authorization");
     const body = JSON.parse(String((options as RequestInit).body));
     expect(body.model).toBe("anthropic/claude-sonnet-4-6");
   });
@@ -137,7 +136,6 @@ describe("callLLM", () => {
     await callLLM({
       aiGatewayBaseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/compat",
       aiGatewayToken: "gateway-token",
-      openAiApiKey: "openai-key",
       model: "openai/gpt-4.1-mini",
       systemPrompt: "be helpful",
       messages: [{ role: "user", content: "hello" }],
@@ -147,9 +145,9 @@ describe("callLLM", () => {
     const [url, options] = mockFetch.mock.calls[0];
     expect(url).toBe("https://gateway.ai.cloudflare.com/v1/account/gateway/compat/chat/completions");
     expect((options as RequestInit).headers).toMatchObject({
-      "cf-aig-authorization": "Bearer gateway-token",
-      authorization: "Bearer openai-key"
+      "cf-aig-authorization": "Bearer gateway-token"
     });
+    expect((options as RequestInit).headers).not.toHaveProperty("authorization");
     const body = JSON.parse(String((options as RequestInit).body));
     expect(body.model).toBe("openai/gpt-4.1-mini");
   });
@@ -210,7 +208,6 @@ describe("callLLM", () => {
     await callLLM({
       aiGatewayBaseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway",
       aiGatewayToken: "gateway-token",
-      apiKey: "anthropic-key",
       model: "claude-sonnet-4-6",
       systemPrompt: "be helpful",
       messages: [{ role: "user", content: "hello" }],
@@ -235,7 +232,6 @@ describe("callLLM", () => {
     await callLLM({
       aiGatewayBaseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway",
       aiGatewayToken: "gateway-token",
-      apiKey: "anthropic-key",
       model: "claude-sonnet-4-6",
       systemPrompt: "be helpful",
       messages: [{ role: "user", content: "hello" }],
