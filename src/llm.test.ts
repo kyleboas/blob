@@ -262,4 +262,26 @@ describe("callLLM", () => {
     expect((options as RequestInit).signal).toBeInstanceOf(AbortSignal);
   });
 
+  it("includes attempt count and request identifiers in API errors", async () => {
+    const failedResponse = {
+      ok: false,
+      status: 500,
+      headers: new Headers({
+        "cf-ray": "trace-123",
+        "request-id": "req-abc"
+      }),
+      text: async () => '{"error":"internal server error"}'
+    };
+    const mockFetch = vi.fn().mockResolvedValue(failedResponse);
+
+    await expect(callLLM({
+      aiGatewayBaseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway",
+      aiGatewayToken: "gateway-token",
+      model: "claude-sonnet-4-6",
+      systemPrompt: "be helpful",
+      messages: [{ role: "user", content: "hello" }],
+      fetchImpl: mockFetch
+    })).rejects.toThrow("LLM API error (500, attempt 2/2) [request-id=req-abc cf-ray=trace-123]: {\"error\":\"internal server error\"}");
+  });
+
 });

@@ -201,6 +201,21 @@ function isRetryableTransportError(error: unknown): boolean {
   return /network|fetch|timeout|timed out|socket|econnreset|connection/i.test(maybe.message ?? "");
 }
 
+function summarizeResponseHeaders(response: Response): string {
+  const headerPairs: Array<[label: string, value: string | null]> = [
+    ["request-id", response.headers.get("request-id")],
+    ["x-request-id", response.headers.get("x-request-id")],
+    ["cf-ray", response.headers.get("cf-ray")],
+    ["openai-request-id", response.headers.get("openai-request-id")],
+    ["anthropic-request-id", response.headers.get("anthropic-request-id")]
+  ];
+
+  return headerPairs
+    .filter(([, value]) => Boolean(value))
+    .map(([label, value]) => `${label}=${value}`)
+    .join(" ");
+}
+
 export function selectModel(
   systemPrompt: string,
   messages: AnthropicMessage[],
@@ -331,7 +346,11 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
     }
 
     const errorText = await response.text();
-    throw new Error(`LLM API error (${response.status}): ${errorText}`);
+    const attempts = attempt + 1;
+    const attemptText = `attempt ${attempts}/${LLM_OVERLOAD_RETRY_MAX + 1}`;
+    const responseHeaders = summarizeResponseHeaders(response);
+    const headersText = responseHeaders ? ` [${responseHeaders}]` : "";
+    throw new Error(`LLM API error (${response.status}, ${attemptText})${headersText}: ${errorText}`);
   }
 
   throw new Error("LLM API error: max retries exceeded");
