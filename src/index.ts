@@ -73,7 +73,7 @@ function renderLiveLogPage(): string {
     .build-header:hover .build-label { color: #94a3b8; }
     .build-chevron { color: #475569; font-size: 0.7rem; flex-shrink: 0; transition: transform 0.15s ease; display: inline-block; }
     .build-group.collapsed .build-chevron { transform: rotate(-90deg); }
-    .build-label { color: #64748b; font-size: 0.8rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .build-label { color: #fff; font-size: 0.8rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .build-body { display: block; }
     .build-group.collapsed .build-body { display: none; }
     .build-copy-btn { font-family: inherit; font-size: 0.75rem; background: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 4px; padding: 0.15rem 0.5rem; cursor: pointer; flex-shrink: 0; }
