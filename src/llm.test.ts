@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { callLLM, selectModel } from "./llm";
-import { MODEL_COMPLEX, MODEL_ROUTINE } from "./config";
+import { MODEL_CHAT, MODEL_COMPLEX, MODEL_ROUTINE } from "./config";
 
 describe("selectModel", () => {
   it("defaults to routine model", () => {
@@ -8,9 +8,9 @@ describe("selectModel", () => {
     expect(model).toBe(MODEL_ROUTINE);
   });
 
-  it("escalates to complex model when prompt indicates complex reasoning", () => {
+  it("stays on routine model when no complexity hint is provided", () => {
     const model = selectModel("Perform complex reasoning for architecture migration", []);
-    expect(model).toBe(MODEL_COMPLEX);
+    expect(model).toBe(MODEL_ROUTINE);
   });
 
   it("escalates to complex model when hint is complex", () => {
@@ -22,6 +22,17 @@ describe("selectModel", () => {
     const model = selectModel(
       "simple",
       [{ role: "user", content: "hello" }],
+      undefined,
+      "openai/gpt-4.1-mini",
+      "anthropic/claude-sonnet-4-6"
+    );
+    expect(model).toBe("openai/gpt-4.1-mini");
+  });
+
+  it("uses routine override when no complexity hint is provided", () => {
+    const model = selectModel(
+      "complex-looking prompt",
+      [{ role: "user", content: "please do many steps" }],
       undefined,
       "openai/gpt-4.1-mini",
       "anthropic/claude-sonnet-4-6"
@@ -120,8 +131,9 @@ describe("callLLM", () => {
     const [url, options] = mockFetch.mock.calls[0];
     expect(url).toBe("https://gateway.ai.cloudflare.com/v1/account/gateway/compat/chat/completions");
     expect((options as RequestInit).headers).toMatchObject({
-      authorization: "Bearer gateway-token"
+      "cf-aig-authorization": "Bearer gateway-token"
     });
+    expect((options as RequestInit).headers).not.toHaveProperty("authorization");
     const body = JSON.parse(String((options as RequestInit).body));
     expect(body.model).toBe("anthropic/claude-sonnet-4-6");
   });
@@ -152,6 +164,26 @@ describe("callLLM", () => {
     expect(body.model).toBe("openai/gpt-4.1-mini");
   });
 
+
+  it("uses full compat chat completions URL without appending twice", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "1", model: "openai/gpt-4.1-mini", choices: [{ message: { content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } })
+    });
+
+    await callLLM({
+      aiGatewayBaseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/compat/chat/completions",
+      aiGatewayToken: "gateway-token",
+      model: "openai/gpt-4.1-mini",
+      systemPrompt: "be helpful",
+      messages: [{ role: "user", content: "hello" }],
+      fetchImpl: mockFetch
+    });
+
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toBe("https://gateway.ai.cloudflare.com/v1/account/gateway/compat/chat/completions");
+  });
+
   it("allows gateway requests without provider key for unified billing", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -169,9 +201,9 @@ describe("callLLM", () => {
 
     const [, options] = mockFetch.mock.calls[0];
     expect((options as RequestInit).headers).toMatchObject({
-      authorization: "Bearer gateway-token"
+      "cf-aig-authorization": "Bearer gateway-token"
     });
-    expect((options as RequestInit).headers).not.toHaveProperty("cf-aig-authorization");
+    expect((options as RequestInit).headers).not.toHaveProperty("authorization");
   });
 
   it("retries on 429 rate limit and succeeds", async () => {
@@ -283,6 +315,100 @@ describe("callLLM", () => {
       messages: [{ role: "user", content: "hello" }],
       fetchImpl: mockFetch
     })).rejects.toThrow("LLM API error (500, attempt 2/2) [request-id=req-abc cf-ray=trace-123]: {\"error\":\"internal server error\"}");
+  });
+
+
+  it("uses chat model for top-layer chat turns", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: "msg_chat",
+        model: MODEL_CHAT,
+        choices: [{ message: { content: "hello" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 4, completion_tokens: 2 }
+      })
+    });
+
+    await callLLM({
+      aiGatewayBaseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway",
+      aiGatewayToken: "gateway-token",
+      openAiApiKey: "openai-key",
+      chatModel: MODEL_CHAT,
+      systemPrompt: "be helpful",
+      messages: [{ role: "user", content: "hello" }],
+      fetchImpl: mockFetch
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(mockFetch.mock.calls[0][1]?.body));
+    expect(body.model).toBe(`workers-ai/${MODEL_CHAT}`);
+  });
+
+  it("asks the router model to choose complexity when tools are present and model is not provided", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: "route_1",
+          choices: [{ message: { content: '{"complexity":"complex"}' } }]
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: "msg_7",
+          model: "claude-sonnet-4-6",
+          content: [{ type: "text", text: "done" }],
+          stop_reason: "end_turn",
+          usage: { input_tokens: 9, output_tokens: 3 }
+        })
+      });
+
+    await callLLM({
+      aiGatewayBaseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway",
+      aiGatewayToken: "gateway-token",
+      openAiApiKey: "openai-key",
+      routerModel: "@cf/ibm-granite/granite-4.0-h-micro",
+      simpleModel: "@cf/qwen/qwen2.5-coder-32b-instruct",
+      complexModel: "anthropic/claude-sonnet-4-6",
+      tools: [{ name: "bash", description: "run", input_schema: { type: "object", properties: {} } }],
+      systemPrompt: "be helpful",
+      messages: [{ role: "user", content: "plan a migration" }],
+      fetchImpl: mockFetch
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const routingBody = JSON.parse(String(mockFetch.mock.calls[0][1]?.body));
+    expect(routingBody.model).toBe("workers-ai/@cf/ibm-granite/granite-4.0-h-micro");
+    expect(routingBody.messages[0].content).toContain("Respond with JSON only");
+
+    const generationBody = JSON.parse(String(mockFetch.mock.calls[1][1]?.body));
+    expect(generationBody.model).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  it("skips routing call when simple and complex models are the same", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: "msg_same",
+        model: "openai/gpt-4.1-mini",
+        choices: [{ message: { content: "done" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 5, completion_tokens: 2 }
+      })
+    });
+
+    await callLLM({
+      openAiApiKey: "openai-key",
+      simpleModel: "openai/gpt-4.1-mini",
+      complexModel: "openai/gpt-4.1-mini",
+      tools: [{ name: "bash", description: "run", input_schema: { type: "object", properties: {} } }],
+      systemPrompt: "be helpful",
+      messages: [{ role: "user", content: "hi" }],
+      fetchImpl: mockFetch
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
 });

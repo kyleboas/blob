@@ -2,8 +2,10 @@ import {
   LLM_OVERLOAD_RETRY_BASE_MS,
   LLM_OVERLOAD_RETRY_MAX,
   LLM_REQUEST_TIMEOUT_MS,
-  MODEL_COMPLEX,
-  MODEL_ROUTINE
+  MODEL_ROUTER,
+  MODEL_CHAT,
+  MODEL_SIMPLE,
+  MODEL_COMPLEX
 } from "./config";
 
 export interface AnthropicMessage {
@@ -20,8 +22,12 @@ export interface CallLLMInput {
   messages: AnthropicMessage[];
   tools?: unknown[];
   taskComplexityHint?: "routine" | "complex";
-  routineModel?: string;
+  routerModel?: string;
+  chatModel?: string;
+  simpleModel?: string;
   complexModel?: string;
+  // Backwards-compatible aliases
+  routineModel?: string;
   model?: string;
   fetchImpl?: typeof fetch;
   sleepImpl?: (ms: number) => Promise<void>;
@@ -41,8 +47,6 @@ export interface LLMResponse {
   usage: LLMUsage;
 }
 
-const COMPLEXITY_PATTERN = /(complex|refactor|architecture|multi-step|analy[sz]e|reason)/i;
-
 function isOpenAIModel(model: string): boolean {
   return /^gpt-|^o[1-9]|^o\d/.test(model);
 }
@@ -51,12 +55,23 @@ function normalizeBaseUrl(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
-function ensureCompatBaseUrl(url: string): string {
+function toCompatChatCompletionsUrl(url: string): string {
   const base = normalizeBaseUrl(url);
-  return base.endsWith("/compat") ? base : `${base}/compat`;
+  if (base.endsWith("/compat/chat/completions")) return base;
+  if (base.endsWith("/compat")) return `${base}/chat/completions`;
+  return `${base}/compat/chat/completions`;
+}
+
+function asBearer(token: string): string {
+  const trimmed = token.trim();
+  return /^Bearer\s+/i.test(trimmed) ? trimmed : `Bearer ${trimmed}`;
 }
 
 function toGatewayModel(model: string): string {
+  if (model.startsWith("@cf/")) {
+    return `workers-ai/${model}`;
+  }
+
   if (model.includes("/")) {
     return model;
   }
@@ -217,39 +232,274 @@ function summarizeResponseHeaders(response: Response): string {
 }
 
 export function selectModel(
-  systemPrompt: string,
-  messages: AnthropicMessage[],
+  _systemPrompt: string,
+  _messages: AnthropicMessage[],
   taskComplexityHint?: "routine" | "complex",
-  routineModel: string = MODEL_ROUTINE,
+  simpleModel: string = MODEL_SIMPLE,
   complexModel: string = MODEL_COMPLEX
 ): string {
   if (taskComplexityHint === "complex") {
     return complexModel;
   }
 
-  if (COMPLEXITY_PATTERN.test(systemPrompt)) {
-    return complexModel;
+  return simpleModel;
+}
+
+async function decideTaskComplexityWithModel(input: {
+  fetchImpl: typeof fetch;
+  apiKey?: string;
+  openAiApiKey?: string;
+  aiGatewayToken?: string;
+  aiGatewayBaseUrl?: string;
+  systemPrompt: string;
+  messages: AnthropicMessage[];
+  routerModel: string;
+}): Promise<"routine" | "complex"> {
+  const viaGateway = Boolean(input.aiGatewayBaseUrl);
+  const useOpenAICompat = viaGateway || isOpenAIModel(input.routerModel);
+
+  const endpoint = viaGateway
+    ? toCompatChatCompletionsUrl(input.aiGatewayBaseUrl!)
+    : (useOpenAICompat ? "https://api.openai.com/v1/chat/completions" : "https://api.anthropic.com/v1/messages");
+
+  const headers: Record<string, string> = { "content-type": "application/json" };
+
+  if (useOpenAICompat) {
+    if (viaGateway) {
+      if (!input.aiGatewayToken) {
+        return "routine";
+      }
+
+      headers["cf-aig-authorization"] = asBearer(input.aiGatewayToken);
+      const providerToken = (input.openAiApiKey || input.apiKey || "").trim();
+      if (providerToken) {
+        headers.authorization = asBearer(providerToken);
+      }
+    } else {
+      if (!input.openAiApiKey) {
+        return "routine";
+      }
+      headers.authorization = `Bearer ${input.openAiApiKey}`;
+    }
+  } else {
+    if (!input.apiKey) {
+      return "routine";
+    }
+
+    headers["x-api-key"] = input.apiKey;
+    headers["anthropic-version"] = "2023-06-01";
   }
 
-  const containsComplexToolIntent = messages.some((msg) => {
-    const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
-    return /tool|bash|run command|test suite|migration/i.test(content) && /complex|large|deep/i.test(content);
+  const routingPrompt = [
+    "Classify the task complexity for model routing.",
+    "Respond with JSON only using this schema: {\"complexity\":\"routine\"|\"complex\"}.",
+    "Choose complex only for deep multi-step reasoning, large refactors, or architecture-level decisions."
+  ].join(" ");
+
+  const routingPayload = JSON.stringify({
+    system_prompt: input.systemPrompt,
+    messages: input.messages
   });
 
-  return containsComplexToolIntent ? complexModel : routineModel;
+  const body = useOpenAICompat
+    ? JSON.stringify({
+        model: viaGateway ? toGatewayModel(input.routerModel) : input.routerModel,
+        messages: [
+          { role: "system", content: routingPrompt },
+          { role: "user", content: routingPayload }
+        ],
+        max_tokens: 16,
+        temperature: 0
+      })
+    : JSON.stringify({
+        model: input.routerModel,
+        max_tokens: 16,
+        system: routingPrompt,
+        messages: [{ role: "user", content: routingPayload }]
+      });
+
+  try {
+    const response = await input.fetchImpl(endpoint, { method: "POST", headers, body });
+    if (!response.ok) {
+      return "routine";
+    }
+
+    const payload = await response.json() as Record<string, any>;
+    const decisionText = useOpenAICompat
+      ? String(payload.choices?.[0]?.message?.content ?? "")
+      : String((payload.content ?? []).map((block: { text?: string }) => block.text ?? "").join(" "));
+    return parseComplexityDecision(decisionText);
+  } catch {
+    return "routine";
+  }
+}
+
+function parseComplexityDecision(decisionText: string): "routine" | "complex" {
+  const normalized = decisionText.trim().toLowerCase();
+
+  if (normalized === "routine" || normalized === "complex") {
+    return normalized;
+  }
+
+  try {
+    const parsed = JSON.parse(decisionText) as { complexity?: unknown };
+    return parsed.complexity === "complex" ? "complex" : "routine";
+  } catch {
+    return "routine";
+  }
+}
+
+function parseMessageType(decisionText: string): "chat" | "routine" | "complex" {
+  const normalized = decisionText.trim().toLowerCase();
+
+  if (normalized === "chat" || normalized === "routine" || normalized === "complex") {
+    return normalized as "chat" | "routine" | "complex";
+  }
+
+  try {
+    const parsed = JSON.parse(decisionText) as { type?: unknown };
+    if (parsed.type === "chat") return "chat";
+    if (parsed.type === "complex") return "complex";
+    return "routine";
+  } catch {
+    return "routine";
+  }
+}
+
+/**
+ * Uses the router model to classify an incoming message as "chat" (conversational,
+ * no task execution needed), "routine" (straightforward coding/automation task), or
+ * "complex" (deep multi-step reasoning, large refactor, architecture-level work).
+ *
+ * Falls back to "routine" on any error so the caller always gets a task routed
+ * to a capable model rather than silently dropped.
+ */
+export async function classifyMessage(input: {
+  fetchImpl?: typeof fetch;
+  apiKey?: string;
+  openAiApiKey?: string;
+  aiGatewayToken?: string;
+  aiGatewayBaseUrl?: string;
+  systemPrompt: string;
+  messages: AnthropicMessage[];
+  routerModel: string;
+}): Promise<"chat" | "routine" | "complex"> {
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const viaGateway = Boolean(input.aiGatewayBaseUrl);
+  const useOpenAICompat = viaGateway || isOpenAIModel(input.routerModel);
+
+  const endpoint = viaGateway
+    ? toCompatChatCompletionsUrl(input.aiGatewayBaseUrl!)
+    : (useOpenAICompat ? "https://api.openai.com/v1/chat/completions" : "https://api.anthropic.com/v1/messages");
+
+  const headers: Record<string, string> = { "content-type": "application/json" };
+
+  if (useOpenAICompat) {
+    if (viaGateway) {
+      if (!input.aiGatewayToken) {
+        return "routine";
+      }
+      headers["cf-aig-authorization"] = asBearer(input.aiGatewayToken);
+      const providerToken = (input.openAiApiKey || input.apiKey || "").trim();
+      if (providerToken) {
+        headers.authorization = asBearer(providerToken);
+      }
+    } else {
+      if (!input.openAiApiKey) {
+        return "routine";
+      }
+      headers.authorization = `Bearer ${input.openAiApiKey}`;
+    }
+  } else {
+    if (!input.apiKey) {
+      return "routine";
+    }
+    headers["x-api-key"] = input.apiKey;
+    headers["anthropic-version"] = "2023-06-01";
+  }
+
+  const routingPrompt = [
+    "Classify the message type for model routing.",
+    'Respond with JSON only using this schema: {"type":"chat"|"routine"|"complex"}.',
+    '"chat": conversational reply, question, or comment — no coding or automation task required.',
+    '"routine": coding or automation task that is straightforward to complete.',
+    '"complex": deep multi-step reasoning, large refactors, or architecture-level decisions.'
+  ].join(" ");
+
+  const routingPayload = JSON.stringify({
+    system_prompt: input.systemPrompt,
+    messages: input.messages
+  });
+
+  const body = useOpenAICompat
+    ? JSON.stringify({
+        model: viaGateway ? toGatewayModel(input.routerModel) : input.routerModel,
+        messages: [
+          { role: "system", content: routingPrompt },
+          { role: "user", content: routingPayload }
+        ],
+        max_tokens: 16,
+        temperature: 0
+      })
+    : JSON.stringify({
+        model: input.routerModel,
+        max_tokens: 16,
+        system: routingPrompt,
+        messages: [{ role: "user", content: routingPayload }]
+      });
+
+  try {
+    const response = await fetchImpl(endpoint, { method: "POST", headers, body });
+    if (!response.ok) {
+      return "routine";
+    }
+    const payload = await response.json() as Record<string, any>;
+    const decisionText = useOpenAICompat
+      ? String(payload.choices?.[0]?.message?.content ?? "")
+      : String((payload.content ?? []).map((block: { text?: string }) => block.text ?? "").join(" "));
+    return parseMessageType(decisionText);
+  } catch {
+    return "routine";
+  }
 }
 
 export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
   const fetchImpl = input.fetchImpl ?? fetch;
   const sleepImpl = input.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const model = input.model ?? selectModel(input.systemPrompt, input.messages, input.taskComplexityHint, input.routineModel, input.complexModel);
+  const routerModel = input.routerModel ?? input.routineModel ?? MODEL_ROUTER;
+  const chatModel = input.chatModel ?? MODEL_CHAT;
+  const simpleModel = input.simpleModel ?? input.routineModel ?? MODEL_SIMPLE;
+  const complexModel = input.complexModel ?? MODEL_COMPLEX;
+
+  let model = input.model;
+  if (!model) {
+    const isChatTurn = !input.tools?.length && !input.taskComplexityHint;
+    if (isChatTurn) {
+      model = chatModel;
+    } else {
+      const taskComplexityHint = input.taskComplexityHint
+        ?? (simpleModel === complexModel
+          ? "routine"
+          : await decideTaskComplexityWithModel({
+              fetchImpl,
+              apiKey: input.apiKey,
+              openAiApiKey: input.openAiApiKey,
+              aiGatewayToken: input.aiGatewayToken,
+              aiGatewayBaseUrl: input.aiGatewayBaseUrl,
+              systemPrompt: input.systemPrompt,
+              messages: input.messages,
+              routerModel
+            }));
+      model = selectModel(input.systemPrompt, input.messages, taskComplexityHint, simpleModel, complexModel);
+    }
+  }
 
   const viaGateway = Boolean(input.aiGatewayBaseUrl);
   const useOpenAICompat = viaGateway || isOpenAIModel(model);
   const requestTimeoutMs = input.requestTimeoutMs ?? LLM_REQUEST_TIMEOUT_MS;
 
   const endpoint = viaGateway
-    ? `${ensureCompatBaseUrl(input.aiGatewayBaseUrl!)}/chat/completions`
+    ? toCompatChatCompletionsUrl(input.aiGatewayBaseUrl!)
     : (useOpenAICompat ? "https://api.openai.com/v1/chat/completions" : "https://api.anthropic.com/v1/messages");
 
   const headers: Record<string, string> = { "content-type": "application/json" };
@@ -259,13 +509,13 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
       if (!input.aiGatewayToken) {
         throw new Error("Missing AI Gateway token");
       }
-      const providerToken = input.openAiApiKey || input.apiKey;
+      headers["cf-aig-authorization"] = asBearer(input.aiGatewayToken);
 
+      const providerToken = (input.openAiApiKey || input.apiKey || "").trim();
       if (providerToken) {
-        headers["cf-aig-authorization"] = `Bearer ${input.aiGatewayToken}`;
-        headers.authorization = `Bearer ${providerToken}`;
+        headers.authorization = asBearer(providerToken);
       } else {
-        headers.authorization = `Bearer ${input.aiGatewayToken}`;
+        delete headers.authorization;
       }
     } else {
       const openAiToken = input.openAiApiKey;

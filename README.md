@@ -59,7 +59,11 @@ See `docs/dynamic-tools-example.md` for a full end-to-end transcript-style examp
 ## LLM routing
 
 Blob now supports Cloudflare AI Gateway as the primary provider path.
-Set `AI_GATEWAY_BASE_URL` and `AI_GATEWAY_TOKEN` to route all model calls through Cloudflare AI Gateway unified billing. Use the `/compat` OpenAI-compatible format (the runtime appends `/compat` automatically when omitted). Provider keys are optional when using Unified Billing credits, but can still be supplied for BYOK fallback.
+For Unified Billing, configure:
+- `AI_GATEWAY_BASE_URL="https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_id>"`
+- `AI_GATEWAY_TOKEN="<Authenticated Gateway Run token>"`
+
+Do **not** set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` Worker secrets in Unified Billing mode. Blob sends `cf-aig-authorization` for gateway auth on every request and omits provider `Authorization` unless you explicitly pass a provider key for BYOK passthrough.
 Default model routing is `gpt-4.1-mini` for routine/simple tasks and `claude-sonnet-4-6` for complex planning.
 
 You can change models at runtime by talking to Blob in Slack (no code changes needed):

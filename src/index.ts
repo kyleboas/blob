@@ -47,9 +47,17 @@ function renderLiveLogPage(): string {
     #live-dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; display: inline-block; animation: pulse 2s ease-in-out infinite; }
     #live-dot.error { background: #f87171; animation: none; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-    #status { color: #94a3b8; margin-bottom: 0.75rem; font-size: 0.85rem; }
+    #status { color: #94a3b8; margin-bottom: 0.5rem; font-size: 0.85rem; }
     #status.error { color: #f87171; }
-    #log { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #020617; border: 1px solid #1e293b; border-radius: 8px; padding: 1rem; min-height: 300px; max-height: calc(100vh - 120px); overflow-y: auto; margin: 0; user-select: text; cursor: text; }
+    #tabs { display: flex; gap: 0.4rem; margin-bottom: 0.5rem; flex-wrap: wrap; align-items: center; }
+    .tab { font-family: inherit; font-size: 0.8rem; background: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 4px; padding: 0.2rem 0.6rem; cursor: pointer; }
+    .tab:hover { background: #334155; color: #e2e8f0; }
+    .tab.active { background: #1d4ed8; color: #e2e8f0; border-color: #3b82f6; }
+    .tab-sep { color: #334155; font-size: 0.8rem; padding: 0 0.1rem; }
+    .tab.model-tab { border-color: #4ade8066; color: #86efac; }
+    .tab.model-tab:hover { border-color: #4ade80; }
+    .tab.model-tab.active { background: #14532d; border-color: #4ade80; color: #4ade80; }
+    #log { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #020617; border: 1px solid #1e293b; border-radius: 8px; padding: 1rem; min-height: 300px; max-height: calc(100vh - 140px); overflow-y: auto; margin: 0; user-select: text; cursor: text; }
     #log span { user-select: text; }
     .line-task_received { color: #60a5fa; }
     .line-command { color: #e2e8f0; }
@@ -63,6 +71,7 @@ function renderLiveLogPage(): string {
     .line-trace_warning { color: #f59e0b; }
     .line-trace_error, .line-background_error { color: #f87171; }
     .line-heartbeat_start { color: #22d3ee; }
+    .line-model_used { color: #86efac; }
     .empty { color: #475569; font-style: italic; }
     #copy-btn { margin-left: auto; font-family: inherit; font-size: 0.8rem; background: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 4px; padding: 0.25rem 0.6rem; cursor: pointer; }
     #copy-btn:hover { background: #334155; color: #e2e8f0; }
@@ -83,15 +92,24 @@ function renderLiveLogPage(): string {
 </head>
 <body>
   <h1><span id="live-dot"></span>Blob Live Logs<button id="copy-btn" title="Copy all log text">Copy all</button></h1>
+  <div id="tabs">
+    <button class="tab active" data-tab="all">All</button>
+    <button class="tab" data-tab="tasks">Tasks</button>
+    <button class="tab" data-tab="heartbeats">Heartbeats</button>
+    <span class="tab-sep">|</span>
+  </div>
   <div id="status">Connecting...</div>
   <div id="log"><span class="empty">Waiting for events...</span></div>
   <script>
     const logNode = document.getElementById('log');
     const statusNode = document.getElementById('status');
     const dotNode = document.getElementById('live-dot');
+    const tabsNode = document.getElementById('tabs');
     const copyBtn = document.getElementById('copy-btn');
     let lastSnapshotSig = '';
     let currentEvents = [];
+    let allBuilds = [];
+    let activeTab = 'all';
     // Track user-toggled collapsed state: label -> boolean (true = collapsed)
     const userCollapsedState = new Map();
 
@@ -113,6 +131,19 @@ function renderLiveLogPage(): string {
       });
     });
 
+    // Tab click handlers for static tabs
+    tabsNode.querySelectorAll('.tab[data-tab]').forEach((btn) => {
+      btn.addEventListener('click', () => setTab(btn.getAttribute('data-tab')));
+    });
+
+    function setTab(tab) {
+      activeTab = tab;
+      tabsNode.querySelectorAll('.tab').forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-tab') === tab);
+      });
+      renderBuilds(allBuilds);
+    }
+
     function escHtml(s) {
       return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
@@ -124,38 +155,83 @@ function renderLiveLogPage(): string {
       return '<span class="' + cls + '">' + escHtml(text) + '</span>';
     }
 
-    function renderEvents(events) {
-      currentEvents = events;
-      if (events.length === 0) {
-        logNode.innerHTML = '<span class="empty">No events yet. Blob activity will appear here automatically.</span>';
+    // Extract model name from a model_used event message (strips [#channel] prefix)
+    function extractModel(message) {
+      return message.replace(/^\\[#[^\\]]+\\]\\s*/, '').trim();
+    }
+
+    // Short display name for a model (strips provider prefix, truncates)
+    function shortModel(model) {
+      return model.replace(/^(anthropic\\/|openai\\/)/, '').slice(0, 32);
+    }
+
+    function computeBuilds(events) {
+      const builds = [];
+      let current = null;
+      for (const event of events) {
+        if (event.eventType === 'task_received' || event.eventType === 'heartbeat_start') {
+          current = { label: event.message, type: event.eventType === 'heartbeat_start' ? 'heartbeat' : 'task', model: null, events: [] };
+          builds.push(current);
+        }
+        if (!current) {
+          current = { label: null, type: 'other', model: null, events: [] };
+          builds.push(current);
+        }
+        if (event.eventType === 'model_used' && current.model === null) {
+          current.model = extractModel(event.message);
+        }
+        current.events.push(event);
+      }
+      return builds;
+    }
+
+    function updateModelTabs(builds) {
+      // Collect unique models in order of first appearance
+      const seen = new Set();
+      const models = [];
+      for (const b of builds) {
+        if (b.model && !seen.has(b.model)) { seen.add(b.model); models.push(b.model); }
+      }
+      // Remove stale model tabs
+      tabsNode.querySelectorAll('.model-tab').forEach((t) => t.remove());
+      // Re-add model tabs after the separator
+      for (const model of models) {
+        const btn = document.createElement('button');
+        btn.className = 'tab model-tab' + (activeTab === model ? ' active' : '');
+        btn.setAttribute('data-tab', model);
+        btn.textContent = shortModel(model);
+        btn.title = model;
+        btn.addEventListener('click', () => setTab(model));
+        tabsNode.appendChild(btn);
+      }
+    }
+
+    function filterBuilds(builds) {
+      if (activeTab === 'all') return builds;
+      if (activeTab === 'tasks') return builds.filter((b) => b.type === 'task');
+      if (activeTab === 'heartbeats') return builds.filter((b) => b.type === 'heartbeat');
+      // model tab
+      return builds.filter((b) => b.model === activeTab);
+    }
+
+    function renderBuilds(builds) {
+      const filtered = filterBuilds(builds);
+      if (filtered.length === 0) {
+        logNode.innerHTML = '<span class="empty">No events for this filter yet.</span>';
         return;
       }
 
       const atBottom = logNode.scrollHeight - logNode.scrollTop <= logNode.clientHeight + 50;
 
-      // Group events into builds; a new build starts at each task_received or heartbeat_start event
-      const builds = [];
-      let current = null;
-      for (const event of events) {
-        if (event.eventType === 'task_received' || event.eventType === 'heartbeat_start') {
-          current = { label: event.message, events: [] };
-          builds.push(current);
-        }
-        if (!current) {
-          current = { label: null, events: [] };
-          builds.push(current);
-        }
-        current.events.push(event);
-      }
-
-      logNode.innerHTML = builds.map((build, idx) => {
+      logNode.innerHTML = filtered.map((build, idx) => {
         const labelHtml = build.label !== null ? escHtml(build.label.slice(0, 120)) : 'Events';
-        const isLast = idx === builds.length - 1;
+        const isLast = idx === filtered.length - 1;
         const key = build.label !== null ? build.label : '__events__';
         const defaultCollapsed = !isLast;
         const isCollapsed = userCollapsedState.has(key) ? userCollapsedState.get(key) : defaultCollapsed;
         const collapsedClass = isCollapsed ? ' collapsed' : '';
-        const header = '<div class="build-header"><span class="build-chevron">&#9660;</span><span class="build-label">' + labelHtml + '</span><button class="build-copy-btn" data-idx="' + idx + '">Copy</button></div>';
+        const modelBadge = build.model ? ' <span style="color:#86efac;font-size:0.75rem">' + escHtml(shortModel(build.model)) + '</span>' : '';
+        const header = '<div class="build-header"><span class="build-chevron">&#9660;</span><span class="build-label">' + labelHtml + modelBadge + '</span><button class="build-copy-btn" data-idx="' + idx + '">Copy</button></div>';
         const lines = build.events.map(formatLine).join('\\n');
         return '<div class="build-group' + collapsedClass + '" data-key="' + escHtml(key.slice(0, 120)) + '">' + header + '<div class="build-body">' + lines + '</div></div>';
       }).join('');
@@ -178,7 +254,7 @@ function renderLiveLogPage(): string {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
           const idx = parseInt(btn.getAttribute('data-idx'));
-          const build = builds[idx];
+          const build = filtered[idx];
           const text = build.events.map((event) => {
             const when = new Date(event.createdAt * 1000).toISOString().replace('T', ' ').replace('Z', '');
             return when + '  [' + event.eventType + ']  ' + event.message;
@@ -192,6 +268,16 @@ function renderLiveLogPage(): string {
       });
 
       if (atBottom) logNode.scrollTop = logNode.scrollHeight;
+    }
+
+    function renderEvents(events) {
+      currentEvents = events;
+      allBuilds = computeBuilds(events);
+      updateModelTabs(allBuilds);
+      renderBuilds(allBuilds);
+      if (events.length === 0) {
+        logNode.innerHTML = '<span class="empty">No events yet. Blob activity will appear here automatically.</span>';
+      }
     }
 
     async function refreshLogs() {

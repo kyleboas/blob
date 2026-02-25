@@ -3,6 +3,9 @@ import type { SandboxClient } from "./sandbox-client";
 import { CONVERSATION_TIMEOUT_MINUTES } from "./config";
 
 const KNOWLEDGE_KEY = "knowledge";
+const SETTING_MODEL_ROUTER = "model_router";
+const SETTING_MODEL_CHAT = "model_chat";
+const SETTING_MODEL_SIMPLE = "model_simple";
 const SETTING_MODEL_ROUTINE = "model_routine";
 const SETTING_MODEL_COMPLEX = "model_complex";
 
@@ -436,15 +439,34 @@ export function getSetting(sql: SqlStorage, key: string): string | null {
   return value == null ? null : String(value);
 }
 
-export function getModelSettings(sql: SqlStorage, defaults: { routineModel: string; complexModel: string }): { routineModel: string; complexModel: string } {
+export function getModelSettings(
+  sql: SqlStorage,
+  defaults: { routerModel: string; chatModel: string; simpleModel: string; complexModel: string }
+): { routerModel: string; chatModel: string; simpleModel: string; complexModel: string } {
   return {
-    routineModel: getSetting(sql, SETTING_MODEL_ROUTINE) ?? defaults.routineModel,
+    routerModel: getSetting(sql, SETTING_MODEL_ROUTER) ?? defaults.routerModel,
+    chatModel: getSetting(sql, SETTING_MODEL_CHAT) ?? defaults.chatModel,
+    simpleModel: getSetting(sql, SETTING_MODEL_SIMPLE) ?? getSetting(sql, SETTING_MODEL_ROUTINE) ?? defaults.simpleModel,
     complexModel: getSetting(sql, SETTING_MODEL_COMPLEX) ?? defaults.complexModel
   };
 }
 
-export function setRoutineModel(sql: SqlStorage, model: string): void {
+export function setRouterModel(sql: SqlStorage, model: string): void {
+  setSetting(sql, SETTING_MODEL_ROUTER, model);
+}
+
+export function setChatModel(sql: SqlStorage, model: string): void {
+  setSetting(sql, SETTING_MODEL_CHAT, model);
+}
+
+export function setSimpleModel(sql: SqlStorage, model: string): void {
+  setSetting(sql, SETTING_MODEL_SIMPLE, model);
+  // Keep legacy key synchronized for any existing integrations.
   setSetting(sql, SETTING_MODEL_ROUTINE, model);
+}
+
+export function setRoutineModel(sql: SqlStorage, model: string): void {
+  setSimpleModel(sql, model);
 }
 
 export function setComplexModel(sql: SqlStorage, model: string): void {
