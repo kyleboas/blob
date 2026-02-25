@@ -28,3 +28,4 @@ export const BACKGROUND_TASK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes between b
 
 export const LLM_OVERLOAD_RETRY_MAX = 4;
 export const LLM_OVERLOAD_RETRY_BASE_MS = 5_000;
+export const LLM_REQUEST_TIMEOUT_MS = 120_000;
