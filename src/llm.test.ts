@@ -166,4 +166,27 @@ describe("callLLM", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(mockSleep).toHaveBeenCalledWith(5_000);
   });
+
+  it("retries on 500 upstream failures and succeeds", async () => {
+    const upstreamErrorResponse = { ok: false, status: 500, text: async () => "internal server error" };
+    const successResponse = {
+      ok: true,
+      json: async () => ({ id: "msg_4", model: MODEL_ROUTINE, content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 5 } })
+    };
+    const mockFetch = vi.fn().mockResolvedValueOnce(upstreamErrorResponse).mockResolvedValueOnce(successResponse);
+    const mockSleep = vi.fn().mockResolvedValue(undefined);
+
+    await callLLM({
+      aiGatewayBaseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway",
+      aiGatewayToken: "gateway-token",
+      model: "claude-sonnet-4-6",
+      systemPrompt: "be helpful",
+      messages: [{ role: "user", content: "hello" }],
+      fetchImpl: mockFetch,
+      sleepImpl: mockSleep
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockSleep).toHaveBeenCalledWith(5_000);
+  });
 });
