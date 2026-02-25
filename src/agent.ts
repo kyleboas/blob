@@ -3,7 +3,6 @@ import {
   TOOL_RETRY_MAX,
   TOOL_RETRY_BACKOFF_BASE_MS,
   COMPACTION_TOKEN_THRESHOLD,
-  SESSION_SUMMARY_RECENT_COUNT,
   THINKING_MESSAGE_DELAY_MS,
   BACKGROUND_TASK_INTERVAL_MS,
   PLANNER_AUDIT_MAX_ATTEMPTS,
@@ -28,7 +27,6 @@ import {
   getNextPendingHeartbeat,
   getLastHeartbeatChannel,
   getRecentAgentEvents,
-  getRecentSessionSummaries,
   getSetting,
   getCurrentSession,
   listRecentOperatorFeedback,
@@ -191,7 +189,7 @@ export function parseSessionMemoryUpdate(text: string): SessionMemoryUpdate | nu
   };
 }
 
-function buildSystemPrompt(_knowledge: string, recentSummaries: SessionSummary[], policies: PromptPolicies): string {
+function buildSystemPrompt(_knowledge: string, policies: PromptPolicies): string {
   let prompt = BASE_SYSTEM_PROMPT;
 
   if (_knowledge.trim()) {
@@ -204,11 +202,10 @@ function buildSystemPrompt(_knowledge: string, recentSummaries: SessionSummary[]
     ].join("\n");
   }
 
-  if (recentSummaries.length > 0) {
-    const summariesText = recentSummaries.map((s) => s.summary).join("\n---\n");
-    prompt += `\n\nContext from recent past conversations:\n${summariesText}`;
-  }
-
+  // Keep episodic session summaries out of the system prompt. They can contain
+  // untrusted content (raw tool JSON, auth-like strings, or user-supplied text)
+  // that increases provider-side prompt-injection filtering risk. Summaries are
+  // still persisted in storage for retrieval/auditing outside the system prompt.
   return prompt;
 }
 
@@ -811,7 +808,6 @@ export class AgentDO {
       options.systemPrompt ??
       buildSystemPrompt(
         getKnowledge(this.db),
-        getRecentSessionSummaries(this.db, SESSION_SUMMARY_RECENT_COUNT),
         this.getPromptPolicies()
       );
     const systemPrompt = `${systemPromptBase}\n\n${EXECUTION_SYSTEM_GUARDRAILS}`;
@@ -1332,10 +1328,10 @@ ${auditContext}` }
       );
     }
 
-    // Build the system prompt here using the orchestrator's own summaries so
-    // the sub-agent receives an accurate prompt even though its own DB is empty.
-    const summaries = getRecentSessionSummaries(this.db, SESSION_SUMMARY_RECENT_COUNT);
-    const systemPrompt = buildSystemPrompt(getKnowledge(this.db), summaries, this.getPromptPolicies());
+    // Build the system prompt here from durable knowledge/settings only.
+    // Session summaries are intentionally excluded from the system prompt
+    // to reduce provider prompt-injection false positives.
+    const systemPrompt = buildSystemPrompt(getKnowledge(this.db), this.getPromptPolicies());
 
     // Snapshot the history *before* appending the new user message so that
     // runAgentLoop on the sub-agent can append it itself (preserving the
