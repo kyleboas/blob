@@ -669,6 +669,9 @@ export class AgentDO {
       channel
     );
 
+    logAgentEvent(this.db, sessionId, "model_used", firstResponse.model);
+    this.forwardToGlobalLogs("model_used", `[#${channel}] ${firstResponse.model}`);
+
     let finalText = "";
     let steps = 0;
     let sandboxStarted = false;
