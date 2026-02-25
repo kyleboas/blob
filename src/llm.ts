@@ -237,16 +237,39 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
     ? `${ensureCompatBaseUrl(input.aiGatewayBaseUrl!)}/chat/completions`
     : (useOpenAICompat ? "https://api.openai.com/v1/chat/completions" : "https://api.anthropic.com/v1/messages");
 
-  const authToken = input.aiGatewayToken || (useOpenAICompat ? input.openAiApiKey : input.apiKey);
-  if (!authToken) {
-    throw new Error(viaGateway ? "Missing AI Gateway token" : (useOpenAICompat ? "Missing OpenAI API key" : "Missing Anthropic API key"));
-  }
-
   const headers: Record<string, string> = { "content-type": "application/json" };
+
   if (useOpenAICompat) {
-    headers.authorization = `Bearer ${authToken}`;
+    if (viaGateway) {
+      if (!input.aiGatewayToken) {
+        throw new Error("Missing AI Gateway token");
+      }
+
+      headers["cf-aig-authorization"] = `Bearer ${input.aiGatewayToken}`;
+
+      const gatewayModel = toGatewayModel(model);
+      const providerToken = gatewayModel.startsWith("openai/")
+        ? input.openAiApiKey
+        : (gatewayModel.startsWith("anthropic/") ? input.apiKey : undefined);
+
+      if (providerToken) {
+        headers.authorization = `Bearer ${providerToken}`;
+      }
+    } else {
+      const openAiToken = input.openAiApiKey;
+      if (!openAiToken) {
+        throw new Error("Missing OpenAI API key");
+      }
+
+      headers.authorization = `Bearer ${openAiToken}`;
+    }
   } else {
-    headers["x-api-key"] = authToken;
+    const anthropicKey = input.apiKey;
+    if (!anthropicKey) {
+      throw new Error("Missing Anthropic API key");
+    }
+
+    headers["x-api-key"] = anthropicKey;
     headers["anthropic-version"] = "2023-06-01";
     headers["anthropic-beta"] = "prompt-caching-2024-07-31";
   }
