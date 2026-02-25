@@ -359,10 +359,11 @@ function parseMessageType(decisionText: string): "chat" | "routine" | "complex" 
   try {
     const parsed = JSON.parse(decisionText) as { type?: unknown };
     if (parsed.type === "chat") return "chat";
+    if (parsed.type === "routine") return "routine";
     if (parsed.type === "complex") return "complex";
-    return "routine";
+    return "chat";
   } catch {
-    return "routine";
+    return "chat";
   }
 }
 
@@ -419,17 +420,27 @@ export async function classifyMessage(input: {
   }
 
   const routingPrompt = [
-    "Classify the message type for model routing.",
+    "Classify the last user message for model routing.",
     'Respond with JSON only using this schema: {"type":"chat"|"routine"|"complex"}.',
-    '"chat": conversational reply, question, or comment — no coding or automation task required.',
-    '"routine": coding or automation task that is straightforward to complete.',
-    '"complex": deep multi-step reasoning, large refactors, or architecture-level decisions.'
+    '"chat": conversational — greetings, thanks, questions about the bot, short replies. Examples: "Hello", "thanks", "what can you do?", "how does X work?", "sounds good".',
+    '"routine": a concrete coding or automation task that is straightforward to complete. Examples: "fix the bug in auth.ts", "add a test for this function", "run the linter".',
+    '"complex": deep multi-step reasoning, large refactors, or architecture-level decisions.',
+    'When in doubt between chat and routine, prefer "chat".'
   ].join(" ");
 
-  const routingPayload = JSON.stringify({
-    system_prompt: input.systemPrompt,
-    messages: input.messages
-  });
+  const lastUserMessage = input.messages
+    .filter((m) => m.role === "user")
+    .at(-1);
+  const lastUserText =
+    typeof lastUserMessage?.content === "string"
+      ? lastUserMessage.content
+      : Array.isArray(lastUserMessage?.content)
+        ? (lastUserMessage.content as Array<{ type?: string; text?: string }>)
+            .filter((b) => b.type === "text")
+            .map((b) => b.text ?? "")
+            .join(" ")
+        : "";
+  const routingPayload = lastUserText || "(empty message)";
 
   const body = useOpenAICompat
     ? JSON.stringify({

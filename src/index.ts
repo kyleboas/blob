@@ -42,7 +42,7 @@ function renderLiveLogPage(): string {
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Blob Live Logs</title>
   <style>
-    body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; background: #0f172a; color: #e2e8f0; }
+    body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; background: #0f172a; color: #e2e8f0; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; padding: 0.5rem; box-sizing: border-box; }
     h1 { margin-top: 0; font-size: 1.2rem; display: flex; align-items: center; gap: 0.5rem; }
     #live-dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; display: inline-block; animation: pulse 2s ease-in-out infinite; }
     #live-dot.error { background: #f87171; animation: none; }
@@ -57,7 +57,7 @@ function renderLiveLogPage(): string {
     .tab.model-tab { border-color: #4ade8066; color: #86efac; }
     .tab.model-tab:hover { border-color: #4ade80; }
     .tab.model-tab.active { background: #14532d; border-color: #4ade80; color: #4ade80; }
-    #log { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #020617; border: 1px solid #1e293b; border-radius: 8px; padding: 1rem; min-height: 300px; max-height: calc(100vh - 140px); overflow-y: auto; margin: 0; user-select: text; cursor: text; }
+    #log { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #020617; border: 1px solid #1e293b; border-radius: 8px; padding: 1rem; flex: 1; min-height: 0; overflow-y: auto; margin: 0; user-select: text; cursor: text; }
     #log span { user-select: text; }
     .line-task_received { color: #60a5fa; }
     .line-command { color: #e2e8f0; }
