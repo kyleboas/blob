@@ -202,7 +202,7 @@ class SlackBot:
 
 
 class BackgroundWorker:
-    """Periodically checks tasks.json for pending heartbeats and runs them.
+    """Periodically checks the task queue for pending heartbeats and runs them.
 
     Each interval the worker picks the next pending task from ``tasks_path``,
     runs the self-improvement cycle, and posts the outcome to ``channel``.
@@ -225,7 +225,7 @@ class BackgroundWorker:
         self.channel = channel or None
         self.agent_factory = agent_factory
         self.post_fn = post_fn
-        self.tasks_path = tasks_path or (config.WORKSPACE_ROOT / "tasks.json")
+        self.tasks_path = tasks_path or config.TASK_QUEUE_PATH
         self.interval_seconds = interval_seconds if interval_seconds is not None else self.DEFAULT_INTERVAL_SECONDS
         self.run_on_start = self.RUN_ON_START if run_on_start is None else run_on_start
         self._stop = Event()
