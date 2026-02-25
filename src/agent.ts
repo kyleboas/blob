@@ -555,8 +555,6 @@ export class AgentDO {
     taskComplexityHint?: "routine" | "complex";
     model?: string;
   }): {
-    apiKey?: string;
-    openAiApiKey?: string;
     aiGatewayToken?: string;
     aiGatewayBaseUrl?: string;
     routineModel: string;
@@ -570,8 +568,6 @@ export class AgentDO {
     const settings = this.getRuntimeModelSettings();
 
     return {
-      apiKey: this.env.ANTHROPIC_API_KEY,
-      openAiApiKey: this.env.OPENAI_API_KEY,
       aiGatewayToken: this.env.AI_GATEWAY_TOKEN,
       aiGatewayBaseUrl: this.env.AI_GATEWAY_BASE_URL,
       routineModel: settings.routineModel,
