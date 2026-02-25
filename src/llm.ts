@@ -179,6 +179,14 @@ function toAnthropicLikeResponse(payload: Record<string, any>, fallbackModel: st
   };
 }
 
+function isRetryableLlmStatus(status: number): boolean {
+  if (status === 429 || status === 529) {
+    return true;
+  }
+
+  return status === 408 || (status >= 500 && status <= 504);
+}
+
 export function selectModel(
   systemPrompt: string,
   messages: AnthropicMessage[],
@@ -269,7 +277,7 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
       return useOpenAICompat ? toAnthropicLikeResponse(payload, resolvedModel) : (payload as LLMResponse);
     }
 
-    if ((response.status === 529 || response.status === 429) && attempt < LLM_OVERLOAD_RETRY_MAX) {
+    if (isRetryableLlmStatus(response.status) && attempt < LLM_OVERLOAD_RETRY_MAX) {
       const waitMs = LLM_OVERLOAD_RETRY_BASE_MS * Math.pow(2, attempt);
       await sleepImpl(waitMs);
       continue;
