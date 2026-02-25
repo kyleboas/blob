@@ -23,15 +23,16 @@ import {
   getHistory,
   getKnowledge,
   getNextPendingHeartbeat,
+  getLastHeartbeatChannel,
   getRecentAgentEvents,
   getRecentSessionSummaries,
+  getSetting,
   getCurrentSession,
   getModelSettings,
   setRouterModel,
   setChatModel,
   setSimpleModel,
   setComplexModel,
-  hasPendingHeartbeats,
   incrementRateLimit,
   initSchema,
   listHeartbeats,
@@ -1265,34 +1266,130 @@ ${history}` }]
   }
 
   private async processNextHeartbeat(): Promise<void> {
-    const heartbeat = getNextPendingHeartbeat(this.db);
-    if (!heartbeat) return;
-
-    logAgentEvent(this.db, heartbeat.id.toString(), "heartbeat_start", heartbeat.task);
-    this.forwardToGlobalLogs("heartbeat_start", `[#${heartbeat.channel}] ${heartbeat.task}`);
-
     try {
-      const { sessionId, previousSessionId } = resolveOrCreateSession(this.db, this.deps.now());
-      if (previousSessionId) {
-        await this.summarizePreviousSession(previousSessionId);
+      const heartbeat = getNextPendingHeartbeat(this.db);
+      if (!heartbeat) {
+        await this.generateAutonomousHeartbeat();
+        return;
       }
-      const { finalText } = await this.runAgentLoop(heartbeat.task, heartbeat.channel, sessionId, {
-        applySelfModificationRateLimit: true
-      });
-      completeHeartbeat(this.db, heartbeat.id, finalText);
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      failHeartbeat(this.db, heartbeat.id, errorMessage);
-      await this.deps.postSlackMessage(
-        this.env.SLACK_BOT_TOKEN,
-        heartbeat.channel,
-        `Heartbeat failed: ${errorMessage}`
-      );
-    }
 
-    // Re-schedule the alarm if more heartbeats are queued
-    if (hasPendingHeartbeats(this.db)) {
+      logAgentEvent(this.db, heartbeat.id.toString(), "heartbeat_start", heartbeat.task);
+      this.forwardToGlobalLogs("heartbeat_start", `[#${heartbeat.channel}] ${heartbeat.task}`);
+
+      try {
+        const { sessionId, previousSessionId } = resolveOrCreateSession(this.db, this.deps.now());
+        if (previousSessionId) {
+          await this.summarizePreviousSession(previousSessionId);
+        }
+        const { finalText } = await this.runAgentLoop(heartbeat.task, heartbeat.channel, sessionId, {
+          applySelfModificationRateLimit: true
+        });
+        completeHeartbeat(this.db, heartbeat.id, finalText);
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        failHeartbeat(this.db, heartbeat.id, errorMessage);
+        await this.deps.postSlackMessage(
+          this.env.SLACK_BOT_TOKEN,
+          heartbeat.channel,
+          `Heartbeat failed: ${errorMessage}`
+        );
+      }
+    } finally {
       await this.ctx.storage.setAlarm?.(this.deps.now() + BACKGROUND_TASK_INTERVAL_MS);
     }
+  }
+
+  private async generateAutonomousHeartbeat(): Promise<void> {
+    const configuredChannel = getSetting(this.db, "autonomous_channel");
+    const fallbackChannel = getLastHeartbeatChannel(this.db);
+    const channel = configuredChannel ?? fallbackChannel;
+    if (!channel) {
+      return;
+    }
+
+    const recentHeartbeats = listHeartbeats(this.db, 25);
+    const completedOrPending = recentHeartbeats
+      .filter((h) => h.status === "completed" || h.status === "running" || h.status === "pending")
+      .map((h) => `- [${h.status}] ${h.task}`)
+      .join("\n");
+
+    const generationResponse = await this.deps.llmCall(this.buildLlmInput({
+      model: this.getRuntimeModelSettings().chatModel,
+      systemPrompt: "Propose one autonomous self-improvement heartbeat task. Keep it small, concrete, and actionable. If no meaningful task is available, respond with skip.",
+      messages: [{
+        role: "user",
+        content: [
+          "Generate exactly one task sentence for Blob's heartbeat queue.",
+          "Return only the task text (or skip).",
+          "Recent heartbeat history:",
+          completedOrPending || "- (none)"
+        ].join("\n")
+      }]
+    }));
+
+    const proposedTask = extractTextContent(generationResponse).trim();
+    if (!proposedTask || /^skip\b/i.test(proposedTask)) {
+      return;
+    }
+
+    const dedupDecision = await this.applyAutonomousPlannerGuardrail(proposedTask, recentHeartbeats);
+    if (!dedupDecision) {
+      return;
+    }
+
+    const heartbeatId = enqueueHeartbeat(this.db, dedupDecision, channel);
+    const sourceLabel = configuredChannel ? "setting:autonomous_channel" : "fallback:last_heartbeat_channel";
+    const eventMessage = `Queued autonomous heartbeat #${heartbeatId} (${sourceLabel}): ${dedupDecision}`;
+    logAgentEvent(this.db, "global", "heartbeat_queued", eventMessage);
+    this.forwardToGlobalLogs("heartbeat_queued", `[#${channel}] ${eventMessage}`);
+  }
+
+  private async applyAutonomousPlannerGuardrail(
+    proposedTask: string,
+    recentHeartbeats: Array<{ task: string; status: "pending" | "running" | "completed" | "failed" }>
+  ): Promise<string | null> {
+    const comparableHistory = recentHeartbeats
+      .filter((h) => h.status === "pending" || h.status === "running" || h.status === "completed")
+      .map((h) => `- [${h.status}] ${h.task}`)
+      .join("\n");
+
+    const guardrailResponse = await this.deps.llmCall(this.buildLlmInput({
+      model: this.getRuntimeModelSettings().simpleModel,
+      systemPrompt: [
+        "You are a planning guardrail for autonomous heartbeat tasks.",
+        "Compare the proposed task semantically against pending/running/completed tasks.",
+        "Do not use regex-only checks; decide based on intent and scope overlap.",
+        "If it duplicates or near-duplicates existing work, reject it.",
+        "If it is valuable but too similar, rewrite into a distinct next-step task.",
+        "Respond in this exact format:",
+        "DECISION: accept|rewrite|reject",
+        "TASK: <task text or empty when reject>"
+      ].join("\n"),
+      messages: [{
+        role: "user",
+        content: [
+          `Proposed task: ${proposedTask}`,
+          "Recent comparable tasks:",
+          comparableHistory || "- (none)"
+        ].join("\n")
+      }]
+    }));
+
+    const text = extractTextContent(guardrailResponse);
+    const decision = text.match(/DECISION:\s*(accept|rewrite|reject)/i)?.[1]?.toLowerCase();
+    const candidate = text.match(/TASK:\s*([\s\S]*)$/i)?.[1]?.trim() ?? "";
+
+    if (decision === "accept") {
+      return proposedTask;
+    }
+
+    if (decision === "rewrite") {
+      if (!candidate || /^skip\b/i.test(candidate)) {
+        return null;
+      }
+      return candidate;
+    }
+
+    return null;
   }
 }
