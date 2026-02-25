@@ -34,17 +34,17 @@ Update the file after completing each sub-task, not just after completing an ent
 
 - [ ] 0.0 Create feature branch
   - [ ] 0.1 Create and checkout a new branch for this feature (e.g., `git checkout -b feature/autonomous-heartbeat-loop`)
-- [ ] 1.0 Finalize technical design and acceptance criteria
-  - [ ] 1.1 Confirm intended autonomous behavior when queue is empty (generate, enqueue, re-schedule).
-  - [ ] 1.2 Confirm channel resolution order (`autonomous_channel` first, last-used channel fallback).
-  - [ ] 1.3 Confirm regression requirements for chat-routing behavior (chat always available; task detection still routes simple/complex) and existing rate-limit flow.
-  - [ ] 1.4 Confirm planner/executor model split (simple/complex plan; smaller sub-agents execute).
-  - [ ] 1.5 Confirm duplicate-prevention guardrails are planner-defined and cross-reference completed tasks (non-regex).
-  - [ ] 1.6 Confirm operator-feedback steering behavior and SLA for when feedback affects next tasks.
-- [ ] 2.0 Implement storage support for channel fallback
-  - [ ] 2.1 Add `getLastHeartbeatChannel(sql)` in `src/storage.ts`.
-  - [ ] 2.2 Ensure SQL query uses latest `updated_at` ordering and null-safe return.
-  - [ ] 2.3 Add/update unit tests for populated and empty heartbeat tables.
+- [x] 1.0 Finalize technical design and acceptance criteria
+  - [x] 1.1 Confirm intended autonomous behavior when queue is empty (generate, enqueue, re-schedule).
+  - [x] 1.2 Confirm channel resolution order (`autonomous_channel` first, last-used channel fallback).
+  - [x] 1.3 Confirm regression requirements for chat-routing behavior (chat always available; task detection still routes simple/complex) and existing rate-limit flow.
+  - [x] 1.4 Confirm planner/executor model split (simple/complex plan; smaller sub-agents execute).
+  - [x] 1.5 Confirm duplicate-prevention guardrails are planner-defined and cross-reference completed tasks (non-regex).
+  - [x] 1.6 Confirm operator-feedback steering behavior and SLA for when feedback affects next tasks.
+- [x] 2.0 Implement storage support for channel fallback
+  - [x] 2.1 Add `getLastHeartbeatChannel(sql)` in `src/storage.ts`.
+  - [x] 2.2 Ensure SQL query uses latest `updated_at` ordering and null-safe return.
+  - [x] 2.3 Add/update unit tests for populated and empty heartbeat tables.
 - [ ] 3.0 Implement autonomous heartbeat generation in AgentDO
   - [ ] 3.1 Update `src/agent.ts` imports to include `getSetting` and `getLastHeartbeatChannel`.
   - [ ] 3.2 Add `generateAutonomousHeartbeat()` to resolve channel and skip when unavailable.

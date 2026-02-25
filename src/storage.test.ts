@@ -3,6 +3,7 @@ import {
   completeHeartbeat,
   enqueueHeartbeat,
   failHeartbeat,
+  getLastHeartbeatChannel,
   getHistory,
   getKnowledge,
   getNextPendingHeartbeat,
@@ -52,6 +53,7 @@ class FakeSql implements SqlStorage {
   private nextMessageId = 1;
   private heartbeats: HeartbeatRow[] = [];
   private nextHeartbeatId = 1;
+  private heartbeatTimestamp = 1;
   private subAgents: SubAgentRow[] = [];
   private nextSubAgentId = 1;
 
@@ -116,9 +118,10 @@ class FakeSql implements SqlStorage {
         channel: String(bindings[1]),
         status: "pending",
         result: null,
-        created_at: Math.floor(Date.now() / 1000),
-        updated_at: Math.floor(Date.now() / 1000)
+        created_at: this.heartbeatTimestamp,
+        updated_at: this.heartbeatTimestamp
       });
+      this.heartbeatTimestamp += 1;
       return { toArray: () => [] };
     }
 
@@ -137,7 +140,7 @@ class FakeSql implements SqlStorage {
     if (normalized.startsWith("UPDATE heartbeats SET status = 'running'")) {
       const id = Number(bindings[0]);
       const h = this.heartbeats.find((hb) => hb.id === id);
-      if (h) h.status = "running";
+      if (h) { h.status = "running"; h.updated_at = this.heartbeatTimestamp++; }
       return { toArray: () => [] };
     }
 
@@ -145,7 +148,7 @@ class FakeSql implements SqlStorage {
       const result = String(bindings[0]);
       const id = Number(bindings[1]);
       const h = this.heartbeats.find((hb) => hb.id === id);
-      if (h) { h.status = "completed"; h.result = result; }
+      if (h) { h.status = "completed"; h.result = result; h.updated_at = this.heartbeatTimestamp++; }
       return { toArray: () => [] };
     }
 
@@ -153,7 +156,7 @@ class FakeSql implements SqlStorage {
       const result = String(bindings[0]);
       const id = Number(bindings[1]);
       const h = this.heartbeats.find((hb) => hb.id === id);
-      if (h) { h.status = "failed"; h.result = result; }
+      if (h) { h.status = "failed"; h.result = result; h.updated_at = this.heartbeatTimestamp++; }
       return { toArray: () => [] };
     }
 
@@ -166,6 +169,12 @@ class FakeSql implements SqlStorage {
       const limit = Number(bindings[0] ?? 50);
       const rows = [...this.heartbeats].reverse().slice(0, limit);
       return { toArray: () => rows as unknown as Row[] };
+    }
+
+    if (normalized.includes("SELECT channel FROM heartbeats") && normalized.includes("ORDER BY updated_at DESC")) {
+      const latest = [...this.heartbeats]
+        .sort((a, b) => (b.updated_at - a.updated_at) || (b.id - a.id))[0];
+      return { toArray: () => (latest ? [{ channel: latest.channel }] : []) };
     }
 
     // Sub-agent queries
@@ -382,6 +391,22 @@ describe("heartbeat helpers", () => {
     expect(list).toHaveLength(2);
     expect(list[0].task).toBe("second");
     expect(list[1].task).toBe("first");
+  });
+
+  it("getLastHeartbeatChannel returns the most recently updated heartbeat channel", () => {
+    const sql = new FakeSql();
+    enqueueHeartbeat(sql, "first", "C1");
+    enqueueHeartbeat(sql, "second", "C2");
+
+    // Mark first heartbeat updated after second so it becomes most recent.
+    completeHeartbeat(sql, 1, "done");
+
+    expect(getLastHeartbeatChannel(sql)).toBe("C1");
+  });
+
+  it("getLastHeartbeatChannel returns null when there are no heartbeats", () => {
+    const sql = new FakeSql();
+    expect(getLastHeartbeatChannel(sql)).toBeNull();
   });
 });
 
