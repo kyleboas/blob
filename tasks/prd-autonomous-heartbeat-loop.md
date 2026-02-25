@@ -45,6 +45,11 @@ This feature makes Blob continuously active. When the queue is empty, Blob shoul
 11. The system must proactively post periodic progress updates to the operator channel while running unprompted tasks.
 12. The system must accept operator feedback at any point (e.g., Slack message/command), incorporate it into planning context, and steer subsequent autonomous tasks accordingly.
 13. The system must continue to allow bootstrapping by one initial manual heartbeat that starts the recurring alarm loop.
+14. The system must run a planner audit after each sub-agent execution to verify acceptance criteria are actually implemented.
+15. The system must create and execute follow-up sub-agent tasks when the planner audit finds gaps, repeating until success or a configured max-audit-attempt limit is reached.
+16. The system must enforce a hard max-audit-attempt guardrail with explicit failure logging/termination to prevent infinite retry loops.
+17. The system must require the planner to diagnose every failed audit attempt (why implementation failed and which acceptance criteria remain unmet) and use that diagnosis to generate targeted remediation tasks rather than merely marking work incomplete.
+18. The system must forbid silent abandonment of failed work: each failed audit must end in either a diagnosis-driven retry, explicit escalation, or an intentionally deferred backlog decision with rationale.
 
 ## 5. Non-Goals (Out of Scope)
 - Changing self-modification rate limit values or policy.
@@ -61,6 +66,10 @@ This feature makes Blob continuously active. When the queue is empty, Blob shoul
 - Keep expensive reasoning in planner models; execution agents should prioritize deterministic tool use, bounded context, and low token usage.
 - Deduplication quality should be semantic and planner-judged (task intent/scope), not string-pattern heuristics.
 - Feedback handling should be low-latency and visible, so operators can confirm steering input was received and applied.
+- Planner audit flow should treat sub-agent output as provisional until acceptance criteria are checked, with targeted remediation when gaps remain.
+- Failed audits must produce actionable diagnosis artifacts (root cause + unmet criteria) that directly drive the next remediation step.
+- Retry behavior must be bounded by a strict max-attempt policy so autonomous correction cannot spin forever.
+- Even when retries stop, failures cannot be dropped silently; they require explicit diagnosed disposition (retry/escalate/defer) with rationale.
 
 ## 7. Technical Considerations
 - Add `getLastHeartbeatChannel(sql)` in `src/storage.ts` using `updated_at DESC LIMIT 1`.
@@ -74,6 +83,10 @@ This feature makes Blob continuously active. When the queue is empty, Blob shoul
 - Introduce explicit model-role mapping in orchestration settings/config: planner models (`simple`/`complex`) vs execution model(s) for sub-agents.
 - Add a planner-side guardrail step that receives recent pending/completed heartbeat history and rejects or rewrites duplicate/near-duplicate proposed tasks before enqueue.
 - Add a feedback-ingestion path that persists operator steering input and includes it in planner context for subsequent autonomous task generation cycles.
+- Add a planner audit function that compares sub-agent output against PRD/tasks acceptance criteria and returns pass/fail plus remaining gaps.
+- Add retry-loop control state (attempt counter, max attempts, terminal status) for audit-driven rework cycles.
+- Persist/emit structured failure diagnosis fields per failed audit (e.g., unmet criterion IDs, evidence, hypothesized root cause) and feed them into follow-up task planning.
+- Add terminal-state handling that records diagnosed disposition for max-attempt failures (escalated vs deferred backlog) so no failed task is left unaccounted for.
 
 ## 8. Success Metrics
 - After one manual heartbeat bootstrap, no idle stop occurs while the service is healthy.
@@ -84,6 +97,9 @@ This feature makes Blob continuously active. When the queue is empty, Blob shoul
 - Cost metrics show lower average tokens/$ per completed autonomous task after planner/executor split.
 - Duplicate autonomous tasks per day are reduced to an agreed threshold (e.g., near-zero exact duplicates; materially fewer semantic repeats).
 - Operator feedback is reflected in subsequent autonomous task choices within a target SLA (e.g., next cycle).
+- Planner audits pass on first attempt for a defined share of tasks, and remaining tasks converge within bounded retries.
+- For failed attempts, telemetry shows diagnosis coverage (why failed + unmet criteria) before any retry is launched.
+- Zero production incidents where autonomous remediation loops run indefinitely without hitting a terminal state.
 
 ## 9. Open Questions
 - Should autonomous generation be disabled by a setting for cost-sensitive deployments?
@@ -92,3 +108,6 @@ This feature makes Blob continuously active. When the queue is empty, Blob shoul
 - Should the interval remain fixed at 5 minutes or become configurable per deployment?
 - How far back should semantic deduplication look (last N tasks, last N days, or all completed tasks)?
 - What feedback interface should be canonical for steering (freeform Slack, explicit commands, or both)?
+- What default max-audit-attempt count best balances correctness with cost/latency?
+- Should failure at max attempts auto-escalate to a human, pause the stream, or move to a deferred backlog?
+- What minimum diagnosis schema should be required before retries are allowed (freeform rationale vs structured checklist)?

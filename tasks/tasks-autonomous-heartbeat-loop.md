@@ -82,3 +82,11 @@ Update the file after completing each sub-task, not just after completing an ent
   - [ ] 8.4 Verify duplicate-rate telemetry and sample logs confirm planner prevented repeated tasks.
   - [ ] 8.5 Verify steering-feedback telemetry shows input was received and influenced subsequent planning.
   - [ ] 8.6 Document bootstrap, channel configuration, planner/executor settings, dedup guardrails, and feedback steering behavior.
+- [ ] 9.0 Add planner audit loop with bounded retries for sub-agent completion quality
+  - [ ] 9.1 Add a post-execution planner audit step that verifies sub-agent output against task acceptance criteria and implementation expectations.
+  - [ ] 9.2 If audit fails, require the planner to produce a targeted follow-up task for the sub-agent to close remaining implementation gaps.
+  - [ ] 9.3 Continue audit → follow-up execution cycles until the planner marks the task fully implemented or a retry limit is reached; do not close the task as merely incomplete without diagnosis and a remediation decision.
+  - [ ] 9.4 Add an explicit max-audit-attempt setting/constant and fail-safe terminal state to prevent infinite loops.
+  - [ ] 9.5 Require planner failure analysis on each failed audit attempt (root cause + missing acceptance criteria mapping); the planner cannot simply mark the task incomplete or let it drop without a diagnosed disposition.
+  - [ ] 9.6 Emit logs/telemetry for each audit attempt, including pass/fail reason, diagnosis details, follow-up scope, and termination reason.
+  - [ ] 9.7 Add tests covering: immediate audit pass, pass-after-retry, diagnosis-generated follow-up quality, and stop-on-max-attempt behavior.
