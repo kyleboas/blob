@@ -11,7 +11,7 @@ import {
   MODEL_SIMPLE,
   MODEL_COMPLEX
 } from "./config";
-import { callLLM, type LLMResponse } from "./llm";
+import { callLLM, classifyMessage, type LLMResponse } from "./llm";
 import { enforceSafety, isSelfModificationCommand } from "./safety";
 import { SandboxClient, SANDBOX_ENV_FILE, type SandboxBinding } from "./sandbox-client";
 import {
@@ -349,6 +349,7 @@ export class AgentDO {
       systemPrompt?: string;
       orchestratorSessionId?: string;
       finalText?: string;
+      taskComplexityHint?: "routine" | "complex";
     };
 
     if (body.action === "logs_snapshot") {
@@ -425,11 +426,12 @@ export class AgentDO {
       const orchestratorSessionId = body.orchestratorSessionId
         ? String(body.orchestratorSessionId)
         : undefined;
+      const taskComplexityHint = body.taskComplexityHint;
       this.runInBackground((async () => {
         let completionStatus: "completed" | "failed" = "completed";
         let finalText = "";
         try {
-          finalText = await this.handleTaskEvent(event, priorMessages, systemPrompt);
+          finalText = await this.handleTaskEvent(event, priorMessages, systemPrompt, taskComplexityHint);
         } catch (error) {
           completionStatus = "failed";
           const channel = event.channel;
@@ -606,6 +608,9 @@ export class AgentDO {
       // (empty) DB-derived values so the sub-agent has full conversation context.
       priorMessages?: ConversationMessage[];
       systemPrompt?: string;
+      // Pre-determined by the orchestrator's router call; skips a redundant
+      // router round-trip inside callLLM.
+      taskComplexityHint?: "routine" | "complex";
     } = {}
   ): Promise<{ finalText: string; steps: number }> {
     const { applySelfModificationRateLimit = false } = options;
@@ -664,7 +669,7 @@ export class AgentDO {
         systemPrompt,
         messages: conversation,
         tools: this.buildToolList(dynamicTools),
-        taskComplexityHint: undefined
+        taskComplexityHint: options.taskComplexityHint
       })),
       channel
     );
@@ -722,7 +727,7 @@ export class AgentDO {
             systemPrompt,
             messages: conversation,
             tools: this.buildToolList(dynamicTools),
-            taskComplexityHint: undefined
+            taskComplexityHint: options.taskComplexityHint
           })),
           channel
         );
@@ -951,7 +956,8 @@ export class AgentDO {
   private async handleTaskEvent(
     event: SlackEvent,
     priorMessages?: ConversationMessage[],
-    systemPrompt?: string
+    systemPrompt?: string,
+    taskComplexityHint?: "routine" | "complex"
   ): Promise<string> {
     const task = event.text ?? "";
     const channel = event.channel;
@@ -968,6 +974,7 @@ export class AgentDO {
     const { finalText } = await this.runAgentLoop(task, channel, sessionId, {
       priorMessages,
       systemPrompt,
+      taskComplexityHint
     });
     return finalText;
   }
@@ -1018,9 +1025,42 @@ export class AgentDO {
     // existing load-then-append pattern).
     const priorMessages = getHistory(this.db, sessionId);
 
+    // Use the router model to decide whether this is a conversational message
+    // or a task that needs tool execution. Chat messages are handled inline
+    // by the chat model; tasks are siphoned off to a sub-agent running the
+    // appropriate simple or complex model in the background.
+    const settings = this.getRuntimeModelSettings();
+    const messageType = await classifyMessage({
+      aiGatewayToken: this.env.AI_GATEWAY_TOKEN,
+      aiGatewayBaseUrl: this.env.AI_GATEWAY_BASE_URL,
+      apiKey: this.env.ANTHROPIC_API_KEY,
+      openAiApiKey: this.env.OPENAI_API_KEY,
+      systemPrompt,
+      messages: [...priorMessages, { role: "user" as const, content: task }],
+      routerModel: settings.routerModel
+    });
+
     // Persist the incoming user message on the orchestrator side now so that
     // even if the sub-agent crashes the turn is recorded.
     saveMessage(this.db, sessionId, { role: "user", content: task });
+
+    if (messageType === "chat") {
+      // Respond conversationally without spinning up a sub-agent or using tools.
+      const conversation = [...priorMessages, { role: "user" as const, content: task }];
+      const chatResponse = await this.deps.llmCall(this.buildLlmInput({
+        systemPrompt,
+        messages: conversation
+        // Omitting tools routes callLLM to the chat model automatically.
+      }));
+      const responseText = extractTextContent(chatResponse) || "Done.";
+      saveMessage(this.db, sessionId, { role: "assistant", content: responseText });
+      await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, responseText);
+      return;
+    }
+
+    // Task path: spawn a sub-agent and pass the pre-determined complexity hint
+    // so the sub-agent does not need to run the router a second time.
+    const taskComplexityHint: "routine" | "complex" = messageType;
 
     const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     const subAgentDoName = `task-agent:${channel}:${uniqueSuffix}`;
@@ -1042,7 +1082,8 @@ export class AgentDO {
         // Conversation context from the orchestrator
         priorMessages,
         systemPrompt,
-        orchestratorSessionId: sessionId
+        orchestratorSessionId: sessionId,
+        taskComplexityHint
       })
     });
   }

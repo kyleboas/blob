@@ -349,6 +349,120 @@ function parseComplexityDecision(decisionText: string): "routine" | "complex" {
   }
 }
 
+function parseMessageType(decisionText: string): "chat" | "routine" | "complex" {
+  const normalized = decisionText.trim().toLowerCase();
+
+  if (normalized === "chat" || normalized === "routine" || normalized === "complex") {
+    return normalized as "chat" | "routine" | "complex";
+  }
+
+  try {
+    const parsed = JSON.parse(decisionText) as { type?: unknown };
+    if (parsed.type === "chat") return "chat";
+    if (parsed.type === "complex") return "complex";
+    return "routine";
+  } catch {
+    return "routine";
+  }
+}
+
+/**
+ * Uses the router model to classify an incoming message as "chat" (conversational,
+ * no task execution needed), "routine" (straightforward coding/automation task), or
+ * "complex" (deep multi-step reasoning, large refactor, architecture-level work).
+ *
+ * Falls back to "routine" on any error so the caller always gets a task routed
+ * to a capable model rather than silently dropped.
+ */
+export async function classifyMessage(input: {
+  fetchImpl?: typeof fetch;
+  apiKey?: string;
+  openAiApiKey?: string;
+  aiGatewayToken?: string;
+  aiGatewayBaseUrl?: string;
+  systemPrompt: string;
+  messages: AnthropicMessage[];
+  routerModel: string;
+}): Promise<"chat" | "routine" | "complex"> {
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const viaGateway = Boolean(input.aiGatewayBaseUrl);
+  const useOpenAICompat = viaGateway || isOpenAIModel(input.routerModel);
+
+  const endpoint = viaGateway
+    ? toCompatChatCompletionsUrl(input.aiGatewayBaseUrl!)
+    : (useOpenAICompat ? "https://api.openai.com/v1/chat/completions" : "https://api.anthropic.com/v1/messages");
+
+  const headers: Record<string, string> = { "content-type": "application/json" };
+
+  if (useOpenAICompat) {
+    if (viaGateway) {
+      if (!input.aiGatewayToken) {
+        return "routine";
+      }
+      headers["cf-aig-authorization"] = asBearer(input.aiGatewayToken);
+      const providerToken = (input.openAiApiKey || input.apiKey || "").trim();
+      if (providerToken) {
+        headers.authorization = asBearer(providerToken);
+      }
+    } else {
+      if (!input.openAiApiKey) {
+        return "routine";
+      }
+      headers.authorization = `Bearer ${input.openAiApiKey}`;
+    }
+  } else {
+    if (!input.apiKey) {
+      return "routine";
+    }
+    headers["x-api-key"] = input.apiKey;
+    headers["anthropic-version"] = "2023-06-01";
+  }
+
+  const routingPrompt = [
+    "Classify the message type for model routing.",
+    'Respond with JSON only using this schema: {"type":"chat"|"routine"|"complex"}.',
+    '"chat": conversational reply, question, or comment — no coding or automation task required.',
+    '"routine": coding or automation task that is straightforward to complete.',
+    '"complex": deep multi-step reasoning, large refactors, or architecture-level decisions.'
+  ].join(" ");
+
+  const routingPayload = JSON.stringify({
+    system_prompt: input.systemPrompt,
+    messages: input.messages
+  });
+
+  const body = useOpenAICompat
+    ? JSON.stringify({
+        model: viaGateway ? toGatewayModel(input.routerModel) : input.routerModel,
+        messages: [
+          { role: "system", content: routingPrompt },
+          { role: "user", content: routingPayload }
+        ],
+        max_tokens: 16,
+        temperature: 0
+      })
+    : JSON.stringify({
+        model: input.routerModel,
+        max_tokens: 16,
+        system: routingPrompt,
+        messages: [{ role: "user", content: routingPayload }]
+      });
+
+  try {
+    const response = await fetchImpl(endpoint, { method: "POST", headers, body });
+    if (!response.ok) {
+      return "routine";
+    }
+    const payload = await response.json() as Record<string, any>;
+    const decisionText = useOpenAICompat
+      ? String(payload.choices?.[0]?.message?.content ?? "")
+      : String((payload.content ?? []).map((block: { text?: string }) => block.text ?? "").join(" "));
+    return parseMessageType(decisionText);
+  } catch {
+    return "routine";
+  }
+}
+
 export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
   const fetchImpl = input.fetchImpl ?? fetch;
   const sleepImpl = input.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
