@@ -341,7 +341,7 @@ describe("callLLM", () => {
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
     const body = JSON.parse(String(mockFetch.mock.calls[0][1]?.body));
-    expect(body.model).toBe(MODEL_CHAT);
+    expect(body.model).toBe(`workers-ai/${MODEL_CHAT}`);
   });
 
   it("asks the router model to choose complexity when tools are present and model is not provided", async () => {
@@ -380,7 +380,7 @@ describe("callLLM", () => {
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
     const routingBody = JSON.parse(String(mockFetch.mock.calls[0][1]?.body));
-    expect(routingBody.model).toBe("@cf/ibm-granite/granite-4.0-h-micro");
+    expect(routingBody.model).toBe("workers-ai/@cf/ibm-granite/granite-4.0-h-micro");
     expect(routingBody.messages[0].content).toContain("Respond with JSON only");
 
     const generationBody = JSON.parse(String(mockFetch.mock.calls[1][1]?.body));

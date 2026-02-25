@@ -68,6 +68,10 @@ function asBearer(token: string): string {
 }
 
 function toGatewayModel(model: string): string {
+  if (model.startsWith("@cf/")) {
+    return `workers-ai/${model}`;
+  }
+
   if (model.includes("/")) {
     return model;
   }
