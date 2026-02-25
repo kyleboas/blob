@@ -220,6 +220,18 @@ When using `AI_GATEWAY_BASE_URL`, models are sent using provider prefixes on the
 You can still pass an already-prefixed model explicitly, and it will be preserved.
 
 
+### AI Gateway timeout troubleshooting
+
+If logs show `LLM API error (500)` with Cloudflare code `2002` around ~60-75s, the upstream model call likely timed out before a full response was returned.
+
+- Keep request timeouts above 120s on clients that call Blob directly.
+- Prefer shorter prompts / tool outputs so each generation finishes faster.
+- Confirm only one auth header is set (`Authorization` via AI Gateway token) and avoid conflicting provider headers.
+- Verify `AI_GATEWAY_BASE_URL` points at your gateway path (the runtime appends `/compat` automatically).
+
+Blob now applies a 120s per-attempt LLM request timeout and retries retryable transport failures (network/timeout/connection reset) with exponential backoff.
+
+
 ### Configure models by talking to Blob
 
 After deployment, teammates can configure models in Slack without editing code or setting extra model env vars:

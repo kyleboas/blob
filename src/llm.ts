@@ -1,4 +1,10 @@
-import { LLM_OVERLOAD_RETRY_BASE_MS, LLM_OVERLOAD_RETRY_MAX, MODEL_COMPLEX, MODEL_ROUTINE } from "./config";
+import {
+  LLM_OVERLOAD_RETRY_BASE_MS,
+  LLM_OVERLOAD_RETRY_MAX,
+  LLM_REQUEST_TIMEOUT_MS,
+  MODEL_COMPLEX,
+  MODEL_ROUTINE
+} from "./config";
 
 export interface AnthropicMessage {
   role: "user" | "assistant";
@@ -19,6 +25,7 @@ export interface CallLLMInput {
   model?: string;
   fetchImpl?: typeof fetch;
   sleepImpl?: (ms: number) => Promise<void>;
+  requestTimeoutMs?: number;
 }
 
 export interface LLMUsage {
@@ -187,6 +194,13 @@ function isRetryableLlmStatus(status: number): boolean {
   return status === 408 || (status >= 500 && status <= 504);
 }
 
+function isRetryableTransportError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const maybe = error as { name?: string; message?: string };
+  if (maybe.name === "AbortError") return true;
+  return /network|fetch|timeout|timed out|socket|econnreset|connection/i.test(maybe.message ?? "");
+}
+
 export function selectModel(
   systemPrompt: string,
   messages: AnthropicMessage[],
@@ -217,6 +231,7 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
 
   const viaGateway = Boolean(input.aiGatewayBaseUrl);
   const useOpenAICompat = viaGateway || isOpenAIModel(model);
+  const requestTimeoutMs = input.requestTimeoutMs ?? LLM_REQUEST_TIMEOUT_MS;
 
   const endpoint = viaGateway
     ? `${ensureCompatBaseUrl(input.aiGatewayBaseUrl!)}/chat/completions`
@@ -266,11 +281,29 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
       });
 
   for (let attempt = 0; attempt <= LLM_OVERLOAD_RETRY_MAX; attempt++) {
-    const response = await fetchImpl(endpoint, {
-      method: "POST",
-      headers,
-      body: requestBody
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort(new DOMException(`LLM request timed out after ${requestTimeoutMs}ms`, "AbortError"));
+    }, requestTimeoutMs);
+
+    let response: Response;
+    try {
+      response = await fetchImpl(endpoint, {
+        method: "POST",
+        headers,
+        body: requestBody,
+        signal: controller.signal
+      });
+    } catch (error) {
+      clearTimeout(timeout);
+      if (isRetryableTransportError(error) && attempt < LLM_OVERLOAD_RETRY_MAX) {
+        const waitMs = LLM_OVERLOAD_RETRY_BASE_MS * Math.pow(2, attempt);
+        await sleepImpl(waitMs);
+        continue;
+      }
+      throw error;
+    }
+    clearTimeout(timeout);
 
     if (response.ok) {
       const payload = (await response.json()) as Record<string, any>;

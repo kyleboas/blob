@@ -189,4 +189,48 @@ describe("callLLM", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(mockSleep).toHaveBeenCalledWith(5_000);
   });
+
+  it("retries on transport timeout errors and succeeds", async () => {
+    const timeoutError = new Error("request timed out while waiting for upstream");
+    timeoutError.name = "AbortError";
+    const successResponse = {
+      ok: true,
+      json: async () => ({ id: "msg_5", model: MODEL_ROUTINE, content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 5 } })
+    };
+    const mockFetch = vi.fn().mockRejectedValueOnce(timeoutError).mockResolvedValueOnce(successResponse);
+    const mockSleep = vi.fn().mockResolvedValue(undefined);
+
+    await callLLM({
+      aiGatewayBaseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway",
+      aiGatewayToken: "gateway-token",
+      model: "claude-sonnet-4-6",
+      systemPrompt: "be helpful",
+      messages: [{ role: "user", content: "hello" }],
+      fetchImpl: mockFetch,
+      sleepImpl: mockSleep
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockSleep).toHaveBeenCalledWith(5_000);
+  });
+
+  it("passes an abort signal to fetch", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "msg_6", model: MODEL_ROUTINE, content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 5 } })
+    });
+
+    await callLLM({
+      openAiApiKey: "openai-key",
+      model: "gpt-4.1-mini",
+      systemPrompt: "be helpful",
+      messages: [{ role: "user", content: "hello" }],
+      requestTimeoutMs: 12345,
+      fetchImpl: mockFetch
+    });
+
+    const [, options] = mockFetch.mock.calls[0];
+    expect((options as RequestInit).signal).toBeInstanceOf(AbortSignal);
+  });
+
 });
