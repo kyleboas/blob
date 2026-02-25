@@ -296,10 +296,10 @@ async function decideTaskComplexityWithModel(input: {
     "Choose complex only for deep multi-step reasoning, large refactors, or architecture-level decisions."
   ].join(" ");
 
-  const routingPayload = JSON.stringify({
-    system_prompt: input.systemPrompt,
-    messages: input.messages
-  });
+  const lastUserMessage = [...input.messages].reverse().find((m) => m.role === "user");
+  const routingPayload = typeof lastUserMessage?.content === "string"
+    ? lastUserMessage.content
+    : JSON.stringify(lastUserMessage?.content ?? "");
 
   const body = useOpenAICompat
     ? JSON.stringify({
@@ -426,10 +426,10 @@ export async function classifyMessage(input: {
     '"complex": deep multi-step reasoning, large refactors, or architecture-level decisions.'
   ].join(" ");
 
-  const routingPayload = JSON.stringify({
-    system_prompt: input.systemPrompt,
-    messages: input.messages
-  });
+  const lastUserMessage = [...input.messages].reverse().find((m) => m.role === "user");
+  const routingPayload = typeof lastUserMessage?.content === "string"
+    ? lastUserMessage.content
+    : JSON.stringify(lastUserMessage?.content ?? "");
 
   const body = useOpenAICompat
     ? JSON.stringify({
