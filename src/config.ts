@@ -13,6 +13,10 @@ export const MODEL_ROUTER = "@cf/ibm-granite/granite-4.0-h-micro";
 export const MODEL_CHAT = "@cf/zai-org/glm-4.7-flash";
 export const MODEL_SIMPLE = "@cf/qwen/qwen2.5-coder-32b-instruct";
 export const MODEL_COMPLEX = "claude-sonnet-4-6";
+export const MODEL_PLANNER_SIMPLE = MODEL_SIMPLE;
+export const MODEL_PLANNER_COMPLEX = MODEL_COMPLEX;
+export const MODEL_EXECUTION_SIMPLE = "@cf/qwen/qwen2.5-coder-7b-instruct";
+export const MODEL_EXECUTION_COMPLEX = "@cf/qwen/qwen2.5-coder-14b-instruct";
 
 // Backwards-compatible aliases for older two-tier references.
 export const MODEL_ROUTINE = MODEL_SIMPLE;

@@ -8,8 +8,10 @@ import {
   BACKGROUND_TASK_INTERVAL_MS,
   MODEL_ROUTER,
   MODEL_CHAT,
-  MODEL_SIMPLE,
-  MODEL_COMPLEX
+  MODEL_PLANNER_SIMPLE,
+  MODEL_PLANNER_COMPLEX,
+  MODEL_EXECUTION_SIMPLE,
+  MODEL_EXECUTION_COMPLEX
 } from "./config";
 import { callLLM, classifyMessage, type LLMResponse } from "./llm";
 import { enforceSafety, isSelfModificationCommand } from "./safety";
@@ -28,9 +30,14 @@ import {
   getRecentSessionSummaries,
   getSetting,
   getCurrentSession,
+  listRecentOperatorFeedback,
   getModelSettings,
   setRouterModel,
   setChatModel,
+  setPlannerSimpleModel,
+  setPlannerComplexModel,
+  setExecutionSimpleModel,
+  setExecutionComplexModel,
   setSimpleModel,
   setComplexModel,
   incrementRateLimit,
@@ -43,6 +50,7 @@ import {
   resolveOrCreateSession,
   restoreRepoSnapshot,
   saveKnowledge,
+  saveOperatorFeedback,
   saveMessage,
   saveRepoSnapshot,
   saveSessionSummary,
@@ -133,13 +141,26 @@ function buildSystemPrompt(_knowledge: string, recentSummaries: SessionSummary[]
 interface RuntimeModelSettings {
   routerModel: string;
   chatModel: string;
-  simpleModel: string;
-  complexModel: string;
+  plannerSimpleModel: string;
+  plannerComplexModel: string;
+  executionSimpleModel: string;
+  executionComplexModel: string;
 }
 
 type SettingsCommand =
   | { type: "show" }
-  | { type: "set"; target: "router" | "chat" | "simple" | "complex"; model: string };
+  | {
+      type: "set";
+      target: "router" | "chat" | "planner-simple" | "planner-complex" | "execution-simple" | "execution-complex";
+      model: string;
+    };
+
+const EXECUTION_SYSTEM_GUARDRAILS = [
+  "Execution mode: follow the approved plan and complete the requested task only.",
+  "Prefer deterministic tool use with minimal steps.",
+  "Use only provided tools and avoid speculative or unrelated changes.",
+  "If blocked, report the blocker clearly and stop instead of guessing."
+].join(" ");
 
 function parseSettingsCommand(rawText: string): SettingsCommand | null {
   const text = rawText.trim();
@@ -150,26 +171,40 @@ function parseSettingsCommand(rawText: string): SettingsCommand | null {
     return { type: "show" };
   }
 
-  const setMatch = text.match(/^set\s+(router|chat|simple|routine|complex)\s+model\s+(?:to\s+)?(.+)$/i)
-    ?? text.match(/^set\s+model\s+(router|chat|simple|routine|complex)\s+(?:to\s+)?(.+)$/i)
-    ?? text.match(/^use\s+(.+)\s+for\s+(router|chat|simple|routine|complex)(?:\s+tasks?)?$/i);
+  const setMatch = text.match(/^set\s+(router|chat|simple|routine|complex|planner-simple|planner-complex|execution-simple|execution-complex|executor-simple|executor-complex)\s+model\s+(?:to\s+)?(.+)$/i)
+    ?? text.match(/^set\s+model\s+(router|chat|simple|routine|complex|planner-simple|planner-complex|execution-simple|execution-complex|executor-simple|executor-complex)\s+(?:to\s+)?(.+)$/i)
+    ?? text.match(/^use\s+(.+)\s+for\s+(router|chat|simple|routine|complex|planner-simple|planner-complex|execution-simple|execution-complex|executor-simple|executor-complex)(?:\s+tasks?)?$/i);
 
   if (!setMatch) return null;
 
-  let rawTarget: "router" | "chat" | "simple" | "routine" | "complex";
+  let rawTarget: string;
   let model: string;
   if (/^use\s+/i.test(text)) {
     model = setMatch[1].trim();
-    rawTarget = setMatch[2].toLowerCase() as "router" | "chat" | "simple" | "routine" | "complex";
+    rawTarget = setMatch[2].toLowerCase();
   } else {
-    rawTarget = setMatch[1].toLowerCase() as "router" | "chat" | "simple" | "routine" | "complex";
+    rawTarget = setMatch[1].toLowerCase();
     model = setMatch[2].trim();
   }
 
   if (!model) return null;
-  const normalizedTarget: "router" | "chat" | "simple" | "complex" = rawTarget === "routine" ? "simple" : rawTarget;
-  return { type: "set", target: normalizedTarget, model };
+  const normalizedTarget = rawTarget === "routine" || rawTarget === "simple"
+    ? "planner-simple"
+    : rawTarget === "complex"
+      ? "planner-complex"
+      : rawTarget === "executor-simple"
+        ? "execution-simple"
+        : rawTarget === "executor-complex"
+          ? "execution-complex"
+          : rawTarget;
+
+  if (!["router", "chat", "planner-simple", "planner-complex", "execution-simple", "execution-complex"].includes(normalizedTarget)) {
+    return null;
+  }
+
+  return { type: "set", target: normalizedTarget as "router" | "chat" | "planner-simple" | "planner-complex" | "execution-simple" | "execution-complex", model };
 }
+
 
 const UNCONFIGURED_SANDBOX: SandboxBinding = {
   async exec() {
@@ -351,6 +386,7 @@ export class AgentDO {
       orchestratorSessionId?: string;
       finalText?: string;
       taskComplexityHint?: "routine" | "complex";
+      feedback?: string;
     };
 
     if (body.action === "logs_snapshot") {
@@ -476,6 +512,31 @@ export class AgentDO {
       return new Response("ok");
     }
 
+
+    if (body.action === "submit_feedback" && typeof body.feedback === "string") {
+      const feedback = body.feedback.trim();
+      if (!feedback) {
+        return new Response("feedback is required", { status: 400 });
+      }
+      const feedbackId = saveOperatorFeedback(
+        this.db,
+        feedback,
+        body.channel ? String(body.channel) : null,
+        getCurrentSession(this.db)
+      );
+      const feedbackEvent = `Stored operator feedback #${feedbackId}: ${feedback}`;
+      logAgentEvent(this.db, "global", "operator_feedback_received", feedbackEvent);
+      this.forwardToGlobalLogs("operator_feedback_received", feedbackEvent);
+      if (body.channel) {
+        await this.deps.postSlackMessage(
+          this.env.SLACK_BOT_TOKEN,
+          String(body.channel),
+          `✅ Feedback recorded (#${feedbackId}). It will steer the next autonomous planning cycle.`
+        );
+      }
+      return Response.json({ id: feedbackId });
+    }
+
     if (body.action === "enqueue_heartbeat" && body.task && body.channel) {
       const id = enqueueHeartbeat(this.db, body.task, body.channel);
       // Kick the queue immediately when a new heartbeat arrives so users don't
@@ -507,8 +568,10 @@ export class AgentDO {
     return getModelSettings(this.db, {
       routerModel: MODEL_ROUTER,
       chatModel: MODEL_CHAT,
-      simpleModel: MODEL_SIMPLE,
-      complexModel: MODEL_COMPLEX
+      plannerSimpleModel: MODEL_PLANNER_SIMPLE,
+      plannerComplexModel: MODEL_PLANNER_COMPLEX,
+      executionSimpleModel: MODEL_EXECUTION_SIMPLE,
+      executionComplexModel: MODEL_EXECUTION_COMPLEX
     });
   }
 
@@ -533,9 +596,11 @@ export class AgentDO {
           "Current model settings:",
           `• router: ${settings.routerModel}`,
           `• chat: ${settings.chatModel}`,
-          `• simple: ${settings.simpleModel}`,
-          `• complex: ${settings.complexModel}`,
-          "You can update by saying: set chat model to <model>, set simple model to <model>, set router model to <model>, or set complex model to <model>."
+          `• planner-simple: ${settings.plannerSimpleModel}`,
+          `• planner-complex: ${settings.plannerComplexModel}`,
+          `• execution-simple: ${settings.executionSimpleModel}`,
+          `• execution-complex: ${settings.executionComplexModel}`,
+          "You can update by saying: set planner-simple model to <model>, set planner-complex model to <model>, set execution-simple model to <model>, set execution-complex model to <model>, set chat model to <model>, or set router model to <model>."
         ].join("\n")
       );
       return true;
@@ -545,10 +610,16 @@ export class AgentDO {
       setRouterModel(this.db, parsed.model);
     } else if (parsed.target === "chat") {
       setChatModel(this.db, parsed.model);
-    } else if (parsed.target === "simple") {
+    } else if (parsed.target === "planner-simple") {
+      setPlannerSimpleModel(this.db, parsed.model);
       setSimpleModel(this.db, parsed.model);
-    } else {
+    } else if (parsed.target === "planner-complex") {
+      setPlannerComplexModel(this.db, parsed.model);
       setComplexModel(this.db, parsed.model);
+    } else if (parsed.target === "execution-simple") {
+      setExecutionSimpleModel(this.db, parsed.model);
+    } else {
+      setExecutionComplexModel(this.db, parsed.model);
     }
 
     const settings = this.getRuntimeModelSettings();
@@ -560,8 +631,10 @@ export class AgentDO {
         "Updated model settings:",
         `• router: ${settings.routerModel}`,
         `• chat: ${settings.chatModel}`,
-        `• simple: ${settings.simpleModel}`,
-        `• complex: ${settings.complexModel}`
+        `• planner-simple: ${settings.plannerSimpleModel}`,
+        `• planner-complex: ${settings.plannerComplexModel}`,
+        `• execution-simple: ${settings.executionSimpleModel}`,
+        `• execution-complex: ${settings.executionComplexModel}`
       ].join("\n")
     );
     return true;
@@ -574,6 +647,7 @@ export class AgentDO {
     tools?: unknown[];
     taskComplexityHint?: "routine" | "complex";
     model?: string;
+    modelRole?: "planner" | "execution";
   }): {
     aiGatewayToken?: string;
     aiGatewayBaseUrl?: string;
@@ -588,14 +662,15 @@ export class AgentDO {
     model?: string;
   } {
     const settings = this.getRuntimeModelSettings();
+    const role = overrides.modelRole ?? "planner";
 
     return {
       aiGatewayToken: this.env.AI_GATEWAY_TOKEN,
       aiGatewayBaseUrl: this.env.AI_GATEWAY_BASE_URL,
       routerModel: settings.routerModel,
       chatModel: settings.chatModel,
-      simpleModel: settings.simpleModel,
-      complexModel: settings.complexModel,
+      simpleModel: role === "execution" ? settings.executionSimpleModel : settings.plannerSimpleModel,
+      complexModel: role === "execution" ? settings.executionComplexModel : settings.plannerComplexModel,
       ...overrides
     };
   }
@@ -647,12 +722,13 @@ export class AgentDO {
     void syncKnowledgeFromSandbox(this.db, this.sandbox);
     // Use the orchestrator-supplied system prompt when available (the sub-agent's
     // own DB is empty so its summaries/knowledge would be missing).
-    const systemPrompt =
+    const systemPromptBase =
       options.systemPrompt ??
       buildSystemPrompt(
         getKnowledge(this.db),
         getRecentSessionSummaries(this.db, SESSION_SUMMARY_RECENT_COUNT)
       );
+    const systemPrompt = `${systemPromptBase}\n\n${EXECUTION_SYSTEM_GUARDRAILS}`;
     const dynamicTools = new Map<string, DynamicToolDefinition>();
 
     let thinkingTimer: ReturnType<typeof setTimeout> | undefined;
@@ -670,7 +746,8 @@ export class AgentDO {
         systemPrompt,
         messages: conversation,
         tools: this.buildToolList(dynamicTools),
-        taskComplexityHint: options.taskComplexityHint
+        taskComplexityHint: options.taskComplexityHint,
+        modelRole: "execution"
       })),
       channel
     );
@@ -731,7 +808,8 @@ export class AgentDO {
             systemPrompt,
             messages: conversation,
             tools: this.buildToolList(dynamicTools),
-            taskComplexityHint: options.taskComplexityHint
+            taskComplexityHint: options.taskComplexityHint,
+            modelRole: "execution"
           })),
           channel
         );
@@ -1154,6 +1232,7 @@ export class AgentDO {
     const response = await this.deps.llmCall(this.buildLlmInput({
       taskComplexityHint: "routine",
       model: this.getRuntimeModelSettings().chatModel,
+      modelRole: "planner",
       systemPrompt: "You maintain concise memory between AI agent sessions.",
       messages: [
         {
@@ -1240,6 +1319,7 @@ export class AgentDO {
     const response = await this.deps.llmCall(this.buildLlmInput({
       taskComplexityHint: "routine",
       model: this.getRuntimeModelSettings().chatModel,
+      modelRole: "planner",
       systemPrompt: "Summarise conversation history concisely, preserving key decisions, code changes, and context.",
       messages: [{ role: "user", content: `Summarise:
 
@@ -1308,6 +1388,10 @@ ${history}` }]
     }
 
     const recentHeartbeats = listHeartbeats(this.db, 25);
+    const recentFeedback = listRecentOperatorFeedback(this.db, 5);
+    const feedbackContext = recentFeedback
+      .map((entry) => `- [${entry.channel ?? "unknown"}] ${entry.feedback}`)
+      .join("\n");
     const completedOrPending = recentHeartbeats
       .filter((h) => h.status === "completed" || h.status === "running" || h.status === "pending")
       .map((h) => `- [${h.status}] ${h.task}`)
@@ -1315,12 +1399,22 @@ ${history}` }]
 
     const generationResponse = await this.deps.llmCall(this.buildLlmInput({
       model: this.getRuntimeModelSettings().chatModel,
-      systemPrompt: "Propose one autonomous self-improvement heartbeat task. Keep it small, concrete, and actionable. If no meaningful task is available, respond with skip.",
+      modelRole: "planner",
+      systemPrompt: [
+        "You are Blob's autonomous planner.",
+        "Propose one autonomous self-improvement heartbeat task.",
+        "Cross-reference recent and completed heartbeat history before proposing work.",
+        "Avoid duplicate or near-duplicate tasks by semantic intent and scope.",
+        "Keep it small, concrete, and actionable.",
+        "If no meaningful task is available, respond with skip."
+      ].join("\n"),
       messages: [{
         role: "user",
         content: [
           "Generate exactly one task sentence for Blob's heartbeat queue.",
           "Return only the task text (or skip).",
+          "Latest operator steering feedback:",
+          feedbackContext || "- (none)",
           "Recent heartbeat history:",
           completedOrPending || "- (none)"
         ].join("\n")
@@ -1342,6 +1436,11 @@ ${history}` }]
     const eventMessage = `Queued autonomous heartbeat #${heartbeatId} (${sourceLabel}): ${dedupDecision}`;
     logAgentEvent(this.db, "global", "heartbeat_queued", eventMessage);
     this.forwardToGlobalLogs("heartbeat_queued", `[#${channel}] ${eventMessage}`);
+    if (recentFeedback.length > 0) {
+      const appliedMessage = `Applied operator feedback while planning heartbeat #${heartbeatId}.`;
+      logAgentEvent(this.db, "global", "operator_feedback_applied", appliedMessage);
+      this.forwardToGlobalLogs("operator_feedback_applied", `[#${channel}] ${appliedMessage}`);
+    }
   }
 
   private async applyAutonomousPlannerGuardrail(
@@ -1354,7 +1453,8 @@ ${history}` }]
       .join("\n");
 
     const guardrailResponse = await this.deps.llmCall(this.buildLlmInput({
-      model: this.getRuntimeModelSettings().simpleModel,
+      model: this.getRuntimeModelSettings().plannerSimpleModel,
+      modelRole: "planner",
       systemPrompt: [
         "You are a planning guardrail for autonomous heartbeat tasks.",
         "Compare the proposed task semantically against pending/running/completed tasks.",

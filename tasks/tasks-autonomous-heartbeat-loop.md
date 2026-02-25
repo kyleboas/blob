@@ -63,22 +63,22 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 5.5 Add/confirm regression assertion that detected tasks still route to simple/complex task models.
   - [x] 5.6 Add tests for duplicate prevention against completed tasks (exact and semantic near-duplicate cases).
   - [x] 5.7 Add tests proving deduplication does not depend on regex-only pattern checks.
-- [ ] 6.0 Implement planner/executor model split for cost efficiency
-  - [ ] 6.1 Add explicit config/settings for planner models (simple/complex) vs execution model(s) for sub-agents.
-  - [ ] 6.2 Update orchestrator path so PRD/task planning uses planner models while sub-agents run smaller execution models.
-  - [ ] 6.3 Ensure execution prompts enforce plan-following and tool-bounded execution behavior.
-  - [ ] 6.4 Add tests that verify model selection differs between planning and execution phases.
-  - [ ] 6.5 Ensure planner prompt/instructions explicitly include duplicate guardrail logic and historical cross-reference behavior.
-- [ ] 7.0 Implement operator feedback steering for autonomous planning
-  - [ ] 7.1 Add/extend endpoint or command handling so operator feedback can be submitted at any point during autonomous operation.
-  - [ ] 7.2 Persist feedback in storage with timestamp and channel/session metadata for planner context retrieval.
-  - [ ] 7.3 Include latest feedback context in planner input so subsequent autonomous tasks reflect operator steering.
-  - [ ] 7.4 Emit logs/notifications confirming feedback receipt and when it is applied in planning.
-  - [ ] 7.5 Add tests proving feedback changes subsequent autonomous task selection.
-- [ ] 8.0 Validate behavior end-to-end and document operations
-  - [ ] 8.1 Run automated tests and lint checks relevant to touched files.
-  - [ ] 8.2 Verify log sequence in dev/staging: `heartbeat_start` → completion → autonomous `heartbeat_queued`.
-  - [ ] 8.3 Verify planner/executor split in logs/telemetry (planning model vs execution model IDs).
-  - [ ] 8.4 Verify duplicate-rate telemetry and sample logs confirm planner prevented repeated tasks.
-  - [ ] 8.5 Verify steering-feedback telemetry shows input was received and influenced subsequent planning.
-  - [ ] 8.6 Document bootstrap, channel configuration, planner/executor settings, dedup guardrails, and feedback steering behavior.
+- [x] 6.0 Implement planner/executor model split for cost efficiency
+  - [x] 6.1 Add explicit config/settings for planner models (simple/complex) vs execution model(s) for sub-agents.
+  - [x] 6.2 Update orchestrator path so PRD/task planning uses planner models while sub-agents run smaller execution models.
+  - [x] 6.3 Ensure execution prompts enforce plan-following and tool-bounded execution behavior.
+  - [x] 6.4 Add tests that verify model selection differs between planning and execution phases.
+  - [x] 6.5 Ensure planner prompt/instructions explicitly include duplicate guardrail logic and historical cross-reference behavior.
+- [x] 7.0 Implement operator feedback steering for autonomous planning
+  - [x] 7.1 Add/extend endpoint or command handling so operator feedback can be submitted at any point during autonomous operation.
+  - [x] 7.2 Persist feedback in storage with timestamp and channel/session metadata for planner context retrieval.
+  - [x] 7.3 Include latest feedback context in planner input so subsequent autonomous tasks reflect operator steering.
+  - [x] 7.4 Emit logs/notifications confirming feedback receipt and when it is applied in planning.
+  - [x] 7.5 Add tests proving feedback changes subsequent autonomous task selection.
+- [x] 8.0 Validate behavior end-to-end and document operations
+  - [x] 8.1 Run automated tests and lint checks relevant to touched files.
+  - [x] 8.2 Verify log sequence in dev/staging: `heartbeat_start` → completion → autonomous `heartbeat_queued`.
+  - [x] 8.3 Verify planner/executor split in logs/telemetry (planning model vs execution model IDs).
+  - [x] 8.4 Verify duplicate-rate telemetry and sample logs confirm planner prevented repeated tasks.
+  - [x] 8.5 Verify steering-feedback telemetry shows input was received and influenced subsequent planning.
+  - [x] 8.6 Document bootstrap, channel configuration, planner/executor settings, dedup guardrails, and feedback steering behavior.
