@@ -453,11 +453,17 @@ class Agent:
         return final_text or ""
 
     def _load_task_queue(self, tasks_path: Path) -> list[dict[str, str]]:
-        raw = json.loads(tasks_path.read_text())
+        if not tasks_path.exists():
+            tasks_path.parent.mkdir(parents=True, exist_ok=True)
+            tasks_path.write_text("[]\n", encoding="utf-8")
+            return []
+
+        raw = json.loads(tasks_path.read_text(encoding="utf-8"))
         return [dict(item) for item in raw]
 
     def _write_task_queue(self, tasks_path: Path, tasks: list[dict[str, str]]) -> None:
-        tasks_path.write_text(json.dumps(tasks, indent=2) + "\n")
+        tasks_path.parent.mkdir(parents=True, exist_ok=True)
+        tasks_path.write_text(json.dumps(tasks, indent=2) + "\n", encoding="utf-8")
 
     def get_next_task(self, tasks_path: Path) -> ImprovementTask | None:
         tasks = self._load_task_queue(tasks_path)
@@ -766,7 +772,7 @@ class Agent:
                 f.write(entry)
 
     def run_self_improvement_cycle(self, tasks_path: Path | None = None) -> list[str]:
-        queue_path = tasks_path or (config.WORKSPACE_ROOT / "tasks.json")
+        queue_path = tasks_path or config.TASK_QUEUE_PATH
         summaries: list[str] = []
 
         while True:
@@ -884,7 +890,7 @@ class Agent:
         Respects AUTONOMOUS_DAILY_TASK_LIMIT (default 10) to control API costs.
         Runs until interrupted with Ctrl-C.
         """
-        queue_path = tasks_path or (config.WORKSPACE_ROOT / "tasks.json")
+        queue_path = tasks_path or config.TASK_QUEUE_PATH
         self._emit_status(
             f"Autonomous loop started (daily task limit: {config.AUTONOMOUS_DAILY_TASK_LIMIT})"
         )

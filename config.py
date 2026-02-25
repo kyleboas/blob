@@ -74,6 +74,13 @@ if AGENT_ENV == "prod":
 else:
     WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", Path(__file__).resolve().parent))
 
+
+if AGENT_ENV == "prod":
+    _default_task_queue = Path("/data/tasks.json")
+else:
+    _default_task_queue = Path(os.getenv("HOME", str(Path.home()))) / ".blob" / "tasks.json"
+TASK_QUEUE_PATH = Path(os.getenv("TASK_QUEUE_PATH", str(_default_task_queue)))
+
 MAX_STEPS = int(os.getenv("MAX_STEPS", "25"))
 COMMAND_TIMEOUT = int(os.getenv("COMMAND_TIMEOUT", "30"))
 MEMORY_LIMIT_MB = int(os.getenv("MEMORY_LIMIT_MB", "512"))
