@@ -51,9 +51,16 @@ function normalizeBaseUrl(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
-function ensureCompatBaseUrl(url: string): string {
+function toCompatChatCompletionsUrl(url: string): string {
   const base = normalizeBaseUrl(url);
-  return base.endsWith("/compat") ? base : `${base}/compat`;
+  if (base.endsWith("/compat/chat/completions")) return base;
+  if (base.endsWith("/compat")) return `${base}/chat/completions`;
+  return `${base}/compat/chat/completions`;
+}
+
+function asBearer(token: string): string {
+  const trimmed = token.trim();
+  return /^Bearer\s+/i.test(trimmed) ? trimmed : `Bearer ${trimmed}`;
 }
 
 function toGatewayModel(model: string): string {
@@ -249,7 +256,7 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
   const requestTimeoutMs = input.requestTimeoutMs ?? LLM_REQUEST_TIMEOUT_MS;
 
   const endpoint = viaGateway
-    ? `${ensureCompatBaseUrl(input.aiGatewayBaseUrl!)}/chat/completions`
+    ? toCompatChatCompletionsUrl(input.aiGatewayBaseUrl!)
     : (useOpenAICompat ? "https://api.openai.com/v1/chat/completions" : "https://api.anthropic.com/v1/messages");
 
   const headers: Record<string, string> = { "content-type": "application/json" };
@@ -259,13 +266,13 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
       if (!input.aiGatewayToken) {
         throw new Error("Missing AI Gateway token");
       }
-      const providerToken = input.openAiApiKey || input.apiKey;
+      headers["cf-aig-authorization"] = asBearer(input.aiGatewayToken);
 
+      const providerToken = (input.openAiApiKey || input.apiKey || "").trim();
       if (providerToken) {
-        headers["cf-aig-authorization"] = `Bearer ${input.aiGatewayToken}`;
-        headers.authorization = `Bearer ${providerToken}`;
+        headers.authorization = asBearer(providerToken);
       } else {
-        headers.authorization = `Bearer ${input.aiGatewayToken}`;
+        delete headers.authorization;
       }
     } else {
       const openAiToken = input.openAiApiKey;

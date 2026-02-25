@@ -120,8 +120,9 @@ describe("callLLM", () => {
     const [url, options] = mockFetch.mock.calls[0];
     expect(url).toBe("https://gateway.ai.cloudflare.com/v1/account/gateway/compat/chat/completions");
     expect((options as RequestInit).headers).toMatchObject({
-      authorization: "Bearer gateway-token"
+      "cf-aig-authorization": "Bearer gateway-token"
     });
+    expect((options as RequestInit).headers).not.toHaveProperty("authorization");
     const body = JSON.parse(String((options as RequestInit).body));
     expect(body.model).toBe("anthropic/claude-sonnet-4-6");
   });
@@ -152,6 +153,26 @@ describe("callLLM", () => {
     expect(body.model).toBe("openai/gpt-4.1-mini");
   });
 
+
+  it("uses full compat chat completions URL without appending twice", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "1", model: "openai/gpt-4.1-mini", choices: [{ message: { content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } })
+    });
+
+    await callLLM({
+      aiGatewayBaseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/compat/chat/completions",
+      aiGatewayToken: "gateway-token",
+      model: "openai/gpt-4.1-mini",
+      systemPrompt: "be helpful",
+      messages: [{ role: "user", content: "hello" }],
+      fetchImpl: mockFetch
+    });
+
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toBe("https://gateway.ai.cloudflare.com/v1/account/gateway/compat/chat/completions");
+  });
+
   it("allows gateway requests without provider key for unified billing", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -169,9 +190,9 @@ describe("callLLM", () => {
 
     const [, options] = mockFetch.mock.calls[0];
     expect((options as RequestInit).headers).toMatchObject({
-      authorization: "Bearer gateway-token"
+      "cf-aig-authorization": "Bearer gateway-token"
     });
-    expect((options as RequestInit).headers).not.toHaveProperty("cf-aig-authorization");
+    expect((options as RequestInit).headers).not.toHaveProperty("authorization");
   });
 
   it("retries on 429 rate limit and succeeds", async () => {
