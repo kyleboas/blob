@@ -45,24 +45,24 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 2.1 Add `getLastHeartbeatChannel(sql)` in `src/storage.ts`.
   - [x] 2.2 Ensure SQL query uses latest `updated_at` ordering and null-safe return.
   - [x] 2.3 Add/update unit tests for populated and empty heartbeat tables.
-- [ ] 3.0 Implement autonomous heartbeat generation in AgentDO
-  - [ ] 3.1 Update `src/agent.ts` imports to include `getSetting` and `getLastHeartbeatChannel`.
-  - [ ] 3.2 Add `generateAutonomousHeartbeat()` to resolve channel and skip when unavailable.
-  - [ ] 3.3 Build LLM call using chat-style prompt and no tools.
-  - [ ] 3.4 Parse response, ignore empty/`skip`, enqueue valid task, and emit global log event.
-  - [ ] 3.5 Add planner guardrail step to compare proposed task against recent/completed tasks and reject or rewrite duplicates before enqueue.
-- [ ] 4.0 Update heartbeat processing loop to be self-sustaining
-  - [ ] 4.1 Modify `processNextHeartbeat()` empty-queue path to call autonomous generation.
-  - [ ] 4.2 Remove conditional re-schedule gate and always schedule the next alarm.
-  - [ ] 4.3 Keep existing task execution path unchanged aside from unconditional scheduling.
-- [ ] 5.0 Add or update tests for autonomous loop behavior
-  - [ ] 5.1 Add test: empty queue with channel configured generates one task and schedules next alarm.
-  - [ ] 5.2 Add test: empty queue without channel skips generation but still schedules next alarm.
-  - [ ] 5.3 Add test: non-empty queue executes task and still schedules next alarm.
-  - [ ] 5.4 Add regression test/assertion that chat input like “Hello” remains chat-routed (no heartbeat enqueue).
-  - [ ] 5.5 Add/confirm regression assertion that detected tasks still route to simple/complex task models.
-  - [ ] 5.6 Add tests for duplicate prevention against completed tasks (exact and semantic near-duplicate cases).
-  - [ ] 5.7 Add tests proving deduplication does not depend on regex-only pattern checks.
+- [x] 3.0 Implement autonomous heartbeat generation in AgentDO
+  - [x] 3.1 Update `src/agent.ts` imports to include `getSetting` and `getLastHeartbeatChannel`.
+  - [x] 3.2 Add `generateAutonomousHeartbeat()` to resolve channel and skip when unavailable.
+  - [x] 3.3 Build LLM call using chat-style prompt and no tools.
+  - [x] 3.4 Parse response, ignore empty/`skip`, enqueue valid task, and emit global log event.
+  - [x] 3.5 Add planner guardrail step to compare proposed task against recent/completed tasks and reject or rewrite duplicates before enqueue.
+- [x] 4.0 Update heartbeat processing loop to be self-sustaining
+  - [x] 4.1 Modify `processNextHeartbeat()` empty-queue path to call autonomous generation.
+  - [x] 4.2 Remove conditional re-schedule gate and always schedule the next alarm.
+  - [x] 4.3 Keep existing task execution path unchanged aside from unconditional scheduling.
+- [x] 5.0 Add or update tests for autonomous loop behavior
+  - [x] 5.1 Add test: empty queue with channel configured generates one task and schedules next alarm.
+  - [x] 5.2 Add test: empty queue without channel skips generation but still schedules next alarm.
+  - [x] 5.3 Add test: non-empty queue executes task and still schedules next alarm.
+  - [x] 5.4 Add regression test/assertion that chat input like “Hello” remains chat-routed (no heartbeat enqueue).
+  - [x] 5.5 Add/confirm regression assertion that detected tasks still route to simple/complex task models.
+  - [x] 5.6 Add tests for duplicate prevention against completed tasks (exact and semantic near-duplicate cases).
+  - [x] 5.7 Add tests proving deduplication does not depend on regex-only pattern checks.
 - [ ] 6.0 Implement planner/executor model split for cost efficiency
   - [ ] 6.1 Add explicit config/settings for planner models (simple/complex) vs execution model(s) for sub-agents.
   - [ ] 6.2 Update orchestrator path so PRD/task planning uses planner models while sub-agents run smaller execution models.

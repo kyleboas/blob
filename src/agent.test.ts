@@ -26,6 +26,7 @@ class FakeSql implements SqlStorage {
   private messages: Array<{ id: number; threadId: string; role: string; content: string }> = [];
   private rateLimits = new Map<string, number>();
   private knowledge = "";
+  private settings = new Map<string, string>();
   private nextId = 1;
   private sessionState: { current_session_id: string; last_message_at: number } | null = null;
   private sessionSummaries: Array<{ id: number; session_id: string; summary: string; created_at: number }> = [];
@@ -83,6 +84,17 @@ class FakeSql implements SqlStorage {
 
     if (normalized.startsWith("SELECT content FROM knowledge")) {
       return { toArray: () => (this.knowledge ? [{ content: this.knowledge }] : []) };
+    }
+
+
+    if (normalized.startsWith("INSERT INTO settings")) {
+      this.settings.set(String(bindings[0]), String(bindings[1]));
+      return { toArray: () => [] };
+    }
+
+    if (normalized.startsWith("SELECT value FROM settings WHERE key =")) {
+      const value = this.settings.get(String(bindings[0]));
+      return { toArray: () => (value === undefined ? [] : [{ value }]) };
     }
 
     if (normalized.includes("FROM session_state")) {
@@ -170,6 +182,12 @@ class FakeSql implements SqlStorage {
     if (normalized.startsWith("SELECT 1 FROM heartbeats WHERE status = 'pending'")) {
       const hasPending = this.heartbeats.some((h) => h.status === "pending");
       return { toArray: () => (hasPending ? [{ 1: 1 }] : []) };
+    }
+
+
+    if (normalized.includes("SELECT channel FROM heartbeats") && normalized.includes("ORDER BY updated_at DESC")) {
+      const latest = [...this.heartbeats].sort((a, b) => (b.updated_at - a.updated_at) || (b.id - a.id))[0];
+      return { toArray: () => (latest ? [{ channel: latest.channel }] : []) };
     }
 
     if (normalized.includes("FROM heartbeats") && normalized.includes("ORDER BY id DESC")) {
@@ -1098,7 +1116,6 @@ describe("AgentDO heartbeat actions", () => {
       postSlackApproval: vi.fn() as never
     });
 
-    // Enqueue one item first
     await agent.fetch(new Request("https://agent.internal/event", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -1117,28 +1134,191 @@ describe("AgentDO heartbeat actions", () => {
     expect(body.heartbeats[0].task).toBe("ping");
   });
 
-  it("alarm processes the next pending heartbeat and posts result", async () => {
+  it("empty queue with configured autonomous channel generates one task and schedules the next alarm", async () => {
     const sql = new FakeSql();
     const { env } = makeTestEnv();
     const setAlarm = vi.fn().mockResolvedValue(undefined);
+    const now = 1_700_000_000_000;
+
+    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "autonomous_channel", "C-auto");
+
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Improve test coverage for storage edge cases" }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "DECISION: accept\nTASK:" }] });
+
+    const agent = new AgentDO({ storage: { sql, setAlarm } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never,
+      now: () => now
+    });
+
+    await agent.alarm();
+
+    const listResp = await agent.fetch(new Request("https://agent.internal/event", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "list_heartbeats" })
+    }));
+    const listBody = await listResp.json() as { heartbeats: Array<{ task: string; channel: string }> };
+
+    expect(listBody.heartbeats).toHaveLength(1);
+    expect(listBody.heartbeats[0]).toMatchObject({
+      task: "Improve test coverage for storage edge cases",
+      channel: "C-auto"
+    });
+    expect(setAlarm).toHaveBeenCalledWith(now + 5 * 60 * 1000);
+  });
+
+  it("empty queue without autonomous channel or heartbeat history skips generation but still schedules next alarm", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const setAlarm = vi.fn().mockResolvedValue(undefined);
+    const now = 1_700_000_000_000;
+    const llmCall = vi.fn();
+
+    const agent = new AgentDO({ storage: { sql, setAlarm } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never,
+      now: () => now
+    });
+
+    await agent.alarm();
+
+    expect(llmCall).not.toHaveBeenCalled();
+    expect(setAlarm).toHaveBeenCalledWith(now + 5 * 60 * 1000);
+  });
+
+  it("non-empty queue executes heartbeat and still schedules next alarm", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const setAlarm = vi.fn().mockResolvedValue(undefined);
+    const now = 1_700_000_000_000;
     const postSlackMessage = vi.fn().mockResolvedValue(undefined);
 
     const agent = new AgentDO({ storage: { sql, setAlarm } }, env, {
       llmCall: vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Heartbeat done" }] }) as never,
       postSlackMessage: postSlackMessage as never,
-      postSlackApproval: vi.fn() as never
+      postSlackApproval: vi.fn() as never,
+      now: () => now
     });
 
-    // Enqueue a heartbeat
     await agent.fetch(new Request("https://agent.internal/event", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "enqueue_heartbeat", task: "run health checks", channel: "C-hb" })
     }));
 
-    // Trigger the alarm
+    setAlarm.mockClear();
     await agent.alarm();
 
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C-hb", "Heartbeat done");
+    expect(setAlarm).toHaveBeenCalledWith(now + 5 * 60 * 1000);
+  });
+
+  it("chat message like Hello remains chat-routed and does not enqueue heartbeat", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ content: [{ text: '{"type":"chat"}' }] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sql = new FakeSql();
+    const { env, agentDOFetch } = makeTestEnv();
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Hi there!" }] }) as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.fetch(new Request("https://example.com", {
+      method: "POST",
+      body: JSON.stringify({ action: "message", event: { type: "message", text: "Hello", channel: "C-chat" } })
+    }));
+
+    const spawnCalls = agentDOFetch.mock.calls.filter((args: unknown[]) => {
+      const init = args[1] as RequestInit | undefined;
+      return String(init?.body ?? "").includes('"action":"run_task"');
+    });
+
+    expect(spawnCalls).toHaveLength(0);
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C-chat", "Hi there!");
+    vi.unstubAllGlobals();
+  });
+
+  it("detected routine and complex tasks still route to simple/complex task models", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ content: [{ text: '{"type":"routine"}' }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ content: [{ text: '{"type":"complex"}' }] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sql = new FakeSql();
+    const { env, agentDOFetch } = makeTestEnv();
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: vi.fn() as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.fetch(new Request("https://example.com", {
+      method: "POST",
+      body: JSON.stringify({ action: "message", event: { type: "message", text: "fix lint", channel: "C1" } })
+    }));
+    await agent.fetch(new Request("https://example.com", {
+      method: "POST",
+      body: JSON.stringify({ action: "message", event: { type: "message", text: "redesign architecture", channel: "C1" } })
+    }));
+
+    const runTaskCalls = agentDOFetch.mock.calls.filter((args: unknown[]) => String((args[1] as RequestInit | undefined)?.body ?? "").includes('"action":"run_task"'));
+    const hints = runTaskCalls.map((args: unknown[]) => JSON.parse(String((args[1] as RequestInit | undefined)?.body ?? "")).taskComplexityHint);
+    expect(hints).toEqual(["routine", "complex"]);
+    vi.unstubAllGlobals();
+  });
+
+  it("duplicate prevention rejects exact/semantic near-duplicates and does not rely on regex-only matching", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const setAlarm = vi.fn().mockResolvedValue(undefined);
+
+    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "autonomous_channel", "C-auto");
+
+    const makeAgent = (responses: Array<{ content: Array<{ type: string; text: string }> }>) => new AgentDO({ storage: { sql, setAlarm } }, env, {
+      llmCall: vi.fn().mockImplementation(async () => responses.shift() ?? { content: [{ type: "text", text: "skip" }] }) as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await (makeAgent([
+      { content: [{ type: "text", text: "Refactor approval flow tests" }] },
+      { content: [{ type: "text", text: "DECISION: accept\nTASK:" }] },
+      { content: [{ type: "text", text: "Refactor approval flow tests" }] },
+      { content: [{ type: "text", text: "DECISION: reject\nTASK:" }] },
+      { content: [{ type: "text", text: "Harden heartbeat resume logic" }] },
+      { content: [{ type: "text", text: "DECISION: rewrite\nTASK: Validate heartbeat resume under alarm drift" }] }
+    ]) as unknown as AgentDO).alarm();
+
+    await (makeAgent([]) as unknown as AgentDO).alarm();
+    await (makeAgent([]) as unknown as AgentDO).alarm();
+
+    const listAgent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: vi.fn() as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const listResp = await listAgent.fetch(new Request("https://agent.internal/event", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "list_heartbeats" })
+    }));
+
+    const tasks = ((await listResp.json()) as { heartbeats: Array<{ task: string }> }).heartbeats.map((h) => h.task);
+    expect(tasks).toContain("Refactor approval flow tests");
+    expect(tasks).toContain("Validate heartbeat resume under alarm drift");
+    expect(tasks.filter((task) => task === "Refactor approval flow tests")).toHaveLength(1);
+    expect(tasks).not.toContain("Harden heartbeat resume logic");
   });
 });
+
