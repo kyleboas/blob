@@ -261,6 +261,13 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
       }
 
       headers["cf-aig-authorization"] = `Bearer ${input.aiGatewayToken}`;
+
+      const providerToken = input.openAiApiKey || input.apiKey;
+      if (!providerToken) {
+        throw new Error("Missing provider API key (OpenAI or Anthropic) for AI Gateway proxy");
+      }
+
+      headers.authorization = `Bearer ${providerToken}`;
     } else {
       const openAiToken = input.openAiApiKey;
       if (!openAiToken) {
