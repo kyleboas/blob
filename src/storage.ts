@@ -12,6 +12,8 @@ const SETTING_MODEL_PLANNER_SIMPLE = "model_planner_simple";
 const SETTING_MODEL_PLANNER_COMPLEX = "model_planner_complex";
 const SETTING_MODEL_EXECUTION_SIMPLE = "model_execution_simple";
 const SETTING_MODEL_EXECUTION_COMPLEX = "model_execution_complex";
+const SETTING_PROMPT_KNOWLEDGE_GUARDRAIL = "prompt_knowledge_guardrail";
+const SETTING_PROMPT_SESSION_MEMORY_SYSTEM = "prompt_session_memory_system";
 
 export interface SqlStatementResult<T> {
   toArray(): T[];
@@ -459,6 +461,30 @@ export function getSetting(sql: SqlStorage, key: string): string | null {
   const rows = sql.exec(`SELECT value FROM settings WHERE key = ?`, key).toArray();
   const value = rows[0]?.value;
   return value == null ? null : String(value);
+}
+
+export function getPromptPolicySettings(
+  sql: SqlStorage,
+  defaults: {
+    knowledgeGuardrail: string;
+    sessionMemorySystemPrompt: string;
+  }
+): {
+  knowledgeGuardrail: string;
+  sessionMemorySystemPrompt: string;
+} {
+  return {
+    knowledgeGuardrail: getSetting(sql, SETTING_PROMPT_KNOWLEDGE_GUARDRAIL) ?? defaults.knowledgeGuardrail,
+    sessionMemorySystemPrompt: getSetting(sql, SETTING_PROMPT_SESSION_MEMORY_SYSTEM) ?? defaults.sessionMemorySystemPrompt
+  };
+}
+
+export function setKnowledgeGuardrailPrompt(sql: SqlStorage, prompt: string): void {
+  setSetting(sql, SETTING_PROMPT_KNOWLEDGE_GUARDRAIL, prompt);
+}
+
+export function setSessionMemorySystemPrompt(sql: SqlStorage, prompt: string): void {
+  setSetting(sql, SETTING_PROMPT_SESSION_MEMORY_SYSTEM, prompt);
 }
 
 export function getModelSettings(

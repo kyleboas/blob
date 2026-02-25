@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AgentDO } from "./agent";
+import { AgentDO, parseSessionMemoryUpdate } from "./agent";
 import type { Env } from "./types";
 import type { SqlStorage } from "./storage";
 
@@ -302,6 +302,7 @@ function makeTestEnv() {
 describe("AgentDO runAgentLoop", () => {
   it("runs tool call then final response", async () => {
     const sql = new FakeSql();
+    sql.exec("INSERT INTO knowledge (key, content) VALUES (?, ?)", "knowledge", "- User prefers concise replies");
     const { env, sandbox } = makeTestEnv();
     const llmCall = vi
       .fn()
@@ -324,10 +325,60 @@ describe("AgentDO runAgentLoop", () => {
         systemPrompt: expect.stringContaining("You are Blob, a careful coding agent.")
       })
     );
+    expect(llmCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemPrompt: expect.stringContaining("<knowledge_snapshot>")
+      })
+    );
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "All done");
   });
 
+  it("uses configured knowledge guardrail prompt from settings", async () => {
+    const sql = new FakeSql();
+    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "prompt_knowledge_guardrail", "CUSTOM_GUARDRAIL");
+    sql.exec("INSERT INTO knowledge (key, content) VALUES (?, ?)", "knowledge", "- Keep responses short");
+    const { env } = makeTestEnv();
+    const llmCall = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Done" }] });
 
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn().mockResolvedValue(undefined) as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.runAgentLoop("hi", "C1", "thread-prompt-policy");
+
+    expect(llmCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemPrompt: expect.stringContaining("CUSTOM_GUARDRAIL")
+      })
+    );
+  });
+
+  it("uses configured session memory system prompt from settings", async () => {
+    const sql = new FakeSql();
+    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "prompt_session_memory_system", "CUSTOM_MEMORY_PROMPT");
+    sql.exec("INSERT INTO conversation_messages (thread_id, role, content) VALUES (?, ?, ?)", "session:previous", "user", "hello");
+
+    const { env } = makeTestEnv();
+    const llmCall = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: JSON.stringify({ summary: "Short summary.", updated_agent_md: "(unchanged)", changes_made: false }) }]
+    });
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn().mockResolvedValue(undefined) as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await (agent as any).summarizePreviousSession("session:previous");
+
+    expect(llmCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemPrompt: "CUSTOM_MEMORY_PROMPT"
+      })
+    );
+  });
 
   it("adds execution guardrails to sub-agent prompts", async () => {
     const sql = new FakeSql();
@@ -1549,5 +1600,39 @@ describe("AgentDO heartbeat actions", () => {
     expect(tasks).toContain("Validate heartbeat resume under alarm drift");
     expect(tasks.filter((task) => task === "Refactor approval flow tests")).toHaveLength(1);
     expect(tasks).not.toContain("Harden heartbeat resume logic");
+  });
+});
+
+
+describe("parseSessionMemoryUpdate", () => {
+  it("parses valid JSON memory update payload", () => {
+    const parsed = parseSessionMemoryUpdate(JSON.stringify({
+      summary: "Updated response style preference.",
+      updated_agent_md: "- Keep responses brief",
+      changes_made: true
+    }));
+
+    expect(parsed).toEqual({
+      summary: "Updated response style preference.",
+      updatedAgentMd: "- Keep responses brief",
+      changesMade: true
+    });
+  });
+
+  it("rejects non-JSON and empty summary payloads", () => {
+    expect(parseSessionMemoryUpdate("SUMMARY: hi")).toBeNull();
+    expect(parseSessionMemoryUpdate(JSON.stringify({ updated_agent_md: "(unchanged)" }))).toBeNull();
+  });
+
+  it("defaults updatedAgentMd and changesMade when omitted", () => {
+    const parsed = parseSessionMemoryUpdate(JSON.stringify({
+      summary: "No durable memory changes."
+    }));
+
+    expect(parsed).toEqual({
+      summary: "No durable memory changes.",
+      updatedAgentMd: "(unchanged)",
+      changesMade: false
+    });
   });
 });
