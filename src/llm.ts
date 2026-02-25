@@ -42,6 +42,27 @@ function normalizeBaseUrl(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
+function ensureCompatBaseUrl(url: string): string {
+  const base = normalizeBaseUrl(url);
+  return base.endsWith("/compat") ? base : `${base}/compat`;
+}
+
+function toGatewayModel(model: string): string {
+  if (model.includes("/")) {
+    return model;
+  }
+
+  if (isOpenAIModel(model)) {
+    return `openai/${model}`;
+  }
+
+  if (/^claude-|^anthropic\./.test(model)) {
+    return `anthropic/${model}`;
+  }
+
+  return model;
+}
+
 function toOpenAITools(tools: unknown[] | undefined): Array<Record<string, unknown>> | undefined {
   if (!tools?.length) return undefined;
   return tools.map((tool) => {
@@ -178,20 +199,20 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
   const sleepImpl = input.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const model = input.model ?? selectModel(input.systemPrompt, input.messages, input.taskComplexityHint);
 
-  const useOpenAI = isOpenAIModel(model);
-  const defaultBase = useOpenAI ? "https://api.openai.com" : "https://api.anthropic.com";
-  const rootBase = normalizeBaseUrl(input.aiGatewayBaseUrl || defaultBase);
-  const endpoint = useOpenAI ? `${rootBase}/v1/chat/completions` : `${rootBase}/v1/messages`;
+  const viaGateway = Boolean(input.aiGatewayBaseUrl);
+  const useOpenAICompat = viaGateway || isOpenAIModel(model);
 
-  const authToken = input.aiGatewayToken || (useOpenAI ? input.openAiApiKey : input.apiKey);
+  const endpoint = viaGateway
+    ? `${ensureCompatBaseUrl(input.aiGatewayBaseUrl!)}/chat/completions`
+    : (useOpenAICompat ? "https://api.openai.com/v1/chat/completions" : "https://api.anthropic.com/v1/messages");
+
+  const authToken = input.aiGatewayToken || (useOpenAICompat ? input.openAiApiKey : input.apiKey);
   if (!authToken) {
-    throw new Error(useOpenAI ? "Missing OpenAI or AI Gateway API key/token" : "Missing Anthropic or AI Gateway API key/token");
+    throw new Error(viaGateway ? "Missing AI Gateway token" : (useOpenAICompat ? "Missing OpenAI API key" : "Missing Anthropic API key"));
   }
 
-  const headers: Record<string, string> = {
-    "content-type": "application/json"
-  };
-  if (input.aiGatewayToken || useOpenAI) {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (useOpenAICompat) {
     headers.authorization = `Bearer ${authToken}`;
   } else {
     headers["x-api-key"] = authToken;
@@ -199,15 +220,16 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
     headers["anthropic-beta"] = "prompt-caching-2024-07-31";
   }
 
-  const requestBody = useOpenAI
+  const resolvedModel = viaGateway ? toGatewayModel(model) : model;
+  const requestBody = useOpenAICompat
     ? JSON.stringify({
-        model,
+        model: resolvedModel,
         messages: toOpenAIMessages(input.systemPrompt, input.messages),
         tools: toOpenAITools(input.tools),
         max_tokens: 1024
       })
     : JSON.stringify({
-        model,
+        model: resolvedModel,
         max_tokens: 1024,
         system: [
           {
@@ -236,7 +258,7 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
 
     if (response.ok) {
       const payload = (await response.json()) as Record<string, any>;
-      return useOpenAI ? toAnthropicLikeResponse(payload, model) : (payload as LLMResponse);
+      return useOpenAICompat ? toAnthropicLikeResponse(payload, resolvedModel) : (payload as LLMResponse);
     }
 
     if ((response.status === 529 || response.status === 429) && attempt < LLM_OVERLOAD_RETRY_MAX) {

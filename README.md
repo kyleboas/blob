@@ -59,5 +59,5 @@ See `docs/dynamic-tools-example.md` for a full end-to-end transcript-style examp
 ## LLM routing
 
 Blob now supports Cloudflare AI Gateway as the primary provider path.
-Set `AI_GATEWAY_BASE_URL` and `AI_GATEWAY_TOKEN` to route both Anthropic and OpenAI-compatible requests through Gateway.
+Set `AI_GATEWAY_BASE_URL` and `AI_GATEWAY_TOKEN` to route all model calls through Cloudflare AI Gateway unified billing. Use the `/compat` OpenAI-compatible format (the runtime appends `/compat` automatically when omitted).
 Default model routing is `gpt-4.1-mini` for routine/simple tasks and `claude-sonnet-4-6` for complex planning.

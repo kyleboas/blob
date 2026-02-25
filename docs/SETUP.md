@@ -82,7 +82,7 @@ cp .env.example .env
 
 Open `.env` and fill in your values:
 
-- `AI_GATEWAY_BASE_URL` + `AI_GATEWAY_TOKEN` (recommended for model calls via Cloudflare AI Gateway)
+- `AI_GATEWAY_BASE_URL` + `AI_GATEWAY_TOKEN` (recommended, unified billing via Cloudflare AI Gateway `/compat`)
 - `OPENAI_API_KEY` (optional fallback when not using AI Gateway)
 - `ANTHROPIC_API_KEY` (optional fallback when not using AI Gateway)
 - `SLACK_BOT_TOKEN` (required only for Slack bot mode)
@@ -209,3 +209,12 @@ That’s it—you’re ready to work with the project.
 - Routine chat + simple planning: `gpt-4.1-mini`
 - Complex planning: `claude-sonnet-4-6`
 - Sub-agents start with routine routing and can escalate to complex model when complexity signals are detected.
+
+
+### AI Gateway unified billing model names
+
+When using `AI_GATEWAY_BASE_URL`, models are sent using provider prefixes on the OpenAI-compatible `/compat/chat/completions` endpoint:
+- routine OpenAI model: `openai/gpt-4.1-mini`
+- complex Anthropic model: `anthropic/claude-sonnet-4-6`
+
+You can still pass an already-prefixed model explicitly, and it will be preserved.
