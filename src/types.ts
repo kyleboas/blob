@@ -2,7 +2,10 @@ export interface Env {
   AGENT_DO: DurableObjectNamespace;
   REPO_STORE: R2Bucket;
   SANDBOX?: Fetcher;
-  ANTHROPIC_API_KEY: string;
+  ANTHROPIC_API_KEY?: string;
+  OPENAI_API_KEY?: string;
+  AI_GATEWAY_BASE_URL?: string;
+  AI_GATEWAY_TOKEN?: string;
   SLACK_BOT_TOKEN: string;
   SLACK_SIGNING_SECRET: string;
   LOGS_CHANNEL?: string;

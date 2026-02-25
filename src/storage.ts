@@ -3,6 +3,8 @@ import type { SandboxClient } from "./sandbox-client";
 import { CONVERSATION_TIMEOUT_MINUTES } from "./config";
 
 const KNOWLEDGE_KEY = "knowledge";
+const SETTING_MODEL_ROUTINE = "model_routine";
+const SETTING_MODEL_COMPLEX = "model_complex";
 
 export interface SqlStatementResult<T> {
   toArray(): T[];
@@ -116,6 +118,14 @@ export function initSchema(sql: SqlStorage): void {
     CREATE TABLE IF NOT EXISTS knowledge (
       key TEXT PRIMARY KEY,
       content TEXT NOT NULL,
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )
+  `);
+
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )
   `);
@@ -407,6 +417,38 @@ export function saveKnowledge(sql: SqlStorage, content: string): void {
 export function getKnowledge(sql: SqlStorage): string {
   const rows = sql.exec(`SELECT content FROM knowledge WHERE key = ?`, KNOWLEDGE_KEY).toArray();
   return String(rows[0]?.content ?? "");
+}
+
+export function setSetting(sql: SqlStorage, key: string, value: string): void {
+  sql.exec(
+    `INSERT INTO settings (key, value)
+     VALUES (?, ?)
+     ON CONFLICT(key)
+     DO UPDATE SET value = excluded.value, updated_at = unixepoch()`,
+    key,
+    value
+  );
+}
+
+export function getSetting(sql: SqlStorage, key: string): string | null {
+  const rows = sql.exec(`SELECT value FROM settings WHERE key = ?`, key).toArray();
+  const value = rows[0]?.value;
+  return value == null ? null : String(value);
+}
+
+export function getModelSettings(sql: SqlStorage, defaults: { routineModel: string; complexModel: string }): { routineModel: string; complexModel: string } {
+  return {
+    routineModel: getSetting(sql, SETTING_MODEL_ROUTINE) ?? defaults.routineModel,
+    complexModel: getSetting(sql, SETTING_MODEL_COMPLEX) ?? defaults.complexModel
+  };
+}
+
+export function setRoutineModel(sql: SqlStorage, model: string): void {
+  setSetting(sql, SETTING_MODEL_ROUTINE, model);
+}
+
+export function setComplexModel(sql: SqlStorage, model: string): void {
+  setSetting(sql, SETTING_MODEL_COMPLEX, model);
 }
 
 export async function saveRepoSnapshot(
