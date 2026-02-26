@@ -15,7 +15,7 @@ export const THINKING_MESSAGE_DELAY_MS = 6_000;
 
 export const MODEL_ROUTER = "@cf/ibm-granite/granite-4.0-h-micro";
 export const MODEL_CHAT = "@cf/zai-org/glm-4.7-flash";
-export const MODEL_SIMPLE = "@cf/qwen/qwen2.5-coder-32b-instruct";
+export const MODEL_SIMPLE = "@cf/qwen/qwen3-30b-a3b-fp8";
 export const MODEL_COMPLEX = "claude-sonnet-4-6";
 export const MODEL_PLANNER_SIMPLE = MODEL_SIMPLE;
 export const MODEL_PLANNER_COMPLEX = MODEL_COMPLEX;
