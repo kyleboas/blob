@@ -820,7 +820,9 @@ export class AgentDO {
     // The system prompt uses the knowledge already cached in the DB from the
     // previous sync; any external edits to AGENT.md will be picked up on the
     // next user message.
-    void syncKnowledgeFromSandbox(this.db, this.sandbox);
+    void syncKnowledgeFromSandbox(this.db, this.sandbox).catch((error: unknown) => {
+      this.logDiagnostic(sessionId, "knowledge_sync", `Background knowledge sync failed: ${error instanceof Error ? error.message : String(error)}`, channel);
+    });
     // Use the orchestrator-supplied system prompt when available (the sub-agent's
     // own DB is empty so its summaries/knowledge would be missing).
     const systemPromptBase =
@@ -839,7 +841,8 @@ export class AgentDO {
     let thinkingTimer: ReturnType<typeof setTimeout> | undefined;
     let thinkingMessagePromise: Promise<void> | null = null;
     thinkingTimer = setTimeout(() => {
-      thinkingMessagePromise = this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, "Thinking...").then(() => {
+      const maybePromise = this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, "Thinking...");
+      thinkingMessagePromise = Promise.resolve(maybePromise).then(() => {
         this.logDiagnostic(sessionId, "thinking", "Posted delayed thinking status.", channel);
       });
     }, THINKING_MESSAGE_DELAY_MS);
