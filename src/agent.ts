@@ -1015,19 +1015,6 @@ export class AgentDO {
 
       if (toolBlock.name === CREATE_TOOL_TOOL.name) {
         const validation = validateDynamicToolDefinition(toolBlock.input);
-        const preflightMessage = validation.ok
-          ? [
-              "🔎 TOOL PREVIEW (create_tool)",
-              `name: ${validation.definition.name}`,
-              `description: ${validation.definition.description}`,
-              `command_template: ${this.sanitizeSecrets(validation.definition.commandTemplate)}`
-            ].join("\n")
-          : [
-              "🔎 TOOL PREVIEW (create_tool)",
-              `invalid definition payload: ${this.sanitizeSecrets(JSON.stringify(toolBlock.input))}`
-            ].join("\n");
-        await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, preflightMessage);
-
         const dangerousTemplateReason = validation.ok
           ? this.getDangerousTemplateReason(validation.definition.commandTemplate)
           : null;
@@ -1064,16 +1051,6 @@ export class AgentDO {
       }
 
       const sanitizedCommand = this.sanitizeSecrets(command);
-      await this.deps.postSlackMessage(
-        this.env.SLACK_BOT_TOKEN,
-        channel,
-        [
-          `🔎 TOOL PREVIEW (${toolBlock.name})`,
-          "```bash",
-          sanitizedCommand,
-          "```"
-        ].join("\n")
-      );
       logAgentEvent(this.db, sessionId, "command", sanitizedCommand);
       this.forwardToGlobalLogs("command", `[#${channel}] ${sanitizedCommand}`);
       const safety = enforceSafety(command, this.db, sessionId, [], {
