@@ -918,6 +918,28 @@ describe("AgentDO runAgentLoop", () => {
 
 
 
+  it("splits composite && commands into sequential executions", async () => {
+    const sql = new FakeSql();
+    const { env, sandbox } = makeTestEnv();
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "echo first && echo second" } }]
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Done" }] });
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.runAgentLoop("run chain", "C1", "thread-chain");
+
+    expect(sandbox.exec).toHaveBeenCalledWith(expect.stringContaining("echo first"));
+    expect(sandbox.exec).toHaveBeenCalledWith(expect.stringContaining("echo second"));
+  });
+
   it("returns a tool_result block for every tool_use in a single assistant turn", async () => {
     const sql = new FakeSql();
     const { env, sandbox } = makeTestEnv();
@@ -1069,6 +1091,111 @@ describe("AgentDO runAgentLoop", () => {
     );
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Done");
     expect(sandbox.exec).toHaveBeenCalledWith(expect.stringContaining("find /workspace/blob -maxdepth 1 -type f"));
+  });
+
+
+  it("rewrites git push origin main into branch+PR workflow", async () => {
+    const sql = new FakeSql();
+    const { env, sandbox } = makeTestEnv();
+    env.GITHUB_TOKEN = "ghs_test";
+
+    sandbox.exec = vi.fn(async (cmd: string) => {
+      if (cmd.includes("git remote get-url origin")) {
+        return { stdout: "https://github.com/acme/repo.git", stderr: "", exitCode: 0 };
+      }
+      if (cmd.includes("python github_tools.py whoami")) {
+        return { stdout: "", stderr: "missing helper", exitCode: 1 };
+      }
+      return { stdout: "ok", stderr: "", exitCode: 0 };
+    });
+
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({ content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "git push origin main" } }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Done" }] });
+
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ default_branch: "main" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ html_url: "https://github.com/acme/repo/pull/1", number: 1 }), { status: 201 }));
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.runAgentLoop("ship", "C1", "thread-push-main");
+
+    expect(sandbox.exec).not.toHaveBeenCalledWith(expect.stringContaining("git push origin main"));
+    expect(sandbox.exec).toHaveBeenCalledWith(expect.stringContaining("git checkout main"));
+    expect(sandbox.exec).toHaveBeenCalledWith(expect.stringContaining("git checkout -B blob-auto-"));
+    expect(sandbox.exec).toHaveBeenCalledWith(expect.stringContaining("git push origin blob-auto-"));
+    fetchMock.mockRestore();
+  });
+
+  it("reports actionable error when PR fallback token is missing", async () => {
+    const sql = new FakeSql();
+    const { env, sandbox } = makeTestEnv();
+
+    sandbox.exec = vi.fn(async (cmd: string) => {
+      if (cmd.includes("git remote get-url origin")) {
+        return { stdout: "https://github.com/acme/repo.git", stderr: "", exitCode: 0 };
+      }
+      if (cmd.includes("python github_tools.py whoami")) {
+        return { stdout: "", stderr: "missing helper", exitCode: 1 };
+      }
+      return { stdout: "ok", stderr: "", exitCode: 0 };
+    });
+
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({ content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "git push origin main" } }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Done" }] });
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runAgentLoop("ship", "C1", "thread-push-main-no-token");
+    expect(result.finalText).toContain("GITHUB_TOKEN is not configured");
+  });
+
+  it("sanitizes permission errors from Worker-side PR fallback", async () => {
+    const sql = new FakeSql();
+    const { env, sandbox } = makeTestEnv();
+    env.GITHUB_TOKEN = "ghs_secret_123456";
+
+    sandbox.exec = vi.fn(async (cmd: string) => {
+      if (cmd.includes("git remote get-url origin")) {
+        return { stdout: "https://github.com/acme/repo.git", stderr: "", exitCode: 0 };
+      }
+      if (cmd.includes("python github_tools.py whoami")) {
+        return { stdout: "", stderr: "missing helper", exitCode: 1 };
+      }
+      return { stdout: "ok", stderr: "", exitCode: 0 };
+    });
+
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({ content: [{ type: "tool_use", id: "1", name: "bash", input: { command: "git push origin main" } }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Done" }] });
+
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ default_branch: "main" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response('{"message":"token ghs_secret_123456 forbidden"}', { status: 403 }));
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: vi.fn() as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runAgentLoop("ship", "C1", "thread-push-main-perm");
+    expect(result.finalText).toContain("GitHub PR creation failed (403)");
+    expect(result.finalText).not.toContain("ghs_secret_123456");
+    fetchMock.mockRestore();
   });
 
   it("rejects dangerous create_tool templates that push to main", async () => {

@@ -240,3 +240,24 @@ After deployment, teammates can configure models in Slack without editing code o
 - `show model settings`
 
 Blob persists these model settings in Durable Object SQLite storage for the deployment.
+
+---
+
+## Cloudflare Worker secrets for PR workflow + diagnostics
+
+Set these secrets in your Worker:
+
+- `GITHUB_TOKEN` (preferred) or `GH_TOKEN`
+- `GITHUB_USERNAME`
+- `DIAG_TOKEN`
+- `SLACK_BOT_TOKEN`
+- `SLACK_SIGNING_SECRET`
+
+Use `/diag/run` to validate deployment readiness:
+
+```bash
+curl -X POST https://<your-worker-domain>/diag/run \
+  -H "Authorization: Bearer <DIAG_TOKEN>"
+```
+
+`ok: true` means all checks passed. If false, inspect each check's `error` field.

@@ -112,6 +112,17 @@ interface PlannerAuditResult {
   disposition: "retry" | "escalate" | "defer";
 }
 
+interface ExecutionStep {
+  command: string;
+  cwd: string | null;
+}
+
+interface RepoContext {
+  owner: string;
+  repo: string;
+  defaultBranch?: string;
+}
+
 const DEFAULT_DEPS: AgentDeps = {
   llmCall: callLLM,
   postSlackMessage: postMessage,
@@ -412,6 +423,7 @@ export class AgentDO {
   private readonly deps: AgentDeps;
   private pendingApprovals = new Map<string, PendingApproval>();
   private userConfig: UserConfiguration | null = null;
+  private readonly repoContextByCwd = new Map<string, RepoContext>();
 
   constructor(private readonly ctx: DurableObjectStateLike, private readonly env: Env, deps: Partial<AgentDeps> = {}) {
     this.db = ctx.storage.sql;
@@ -988,6 +1000,158 @@ export class AgentDO {
     return m ? m[1] : null;
   }
 
+  private inferRepoContextFromRemoteUrl(url: string): RepoContext | null {
+    const ssh = url.match(/^[^@]+@[^:]+:([^/]+)\/([^/.]+)(?:\.git)?$/);
+    if (ssh) {
+      return { owner: ssh[1], repo: ssh[2] };
+    }
+    const https = url.match(/^https?:\/\/[^/]+\/([^/]+)\/([^/.]+)(?:\.git)?$/);
+    if (https) {
+      return { owner: https[1], repo: https[2] };
+    }
+    return null;
+  }
+
+  private getRepoContextForCwd(cwd: string | null): RepoContext | null {
+    if (!cwd) return null;
+    return this.repoContextByCwd.get(cwd) ?? null;
+  }
+
+  private async maybeCaptureRepoContext(cwd: string | null): Promise<RepoContext | null> {
+    const key = cwd ?? ".";
+    if (this.repoContextByCwd.has(key)) {
+      return this.repoContextByCwd.get(key) ?? null;
+    }
+
+    const remoteCmd = cwd ? `cd ${cwd} && git remote get-url origin` : "git remote get-url origin";
+    const remoteResult = await this.executeWithRetry(remoteCmd);
+    if (remoteResult.exitCode !== 0) {
+      return null;
+    }
+
+    const context = this.inferRepoContextFromRemoteUrl(remoteResult.stdout.trim());
+    if (!context) {
+      return null;
+    }
+    this.repoContextByCwd.set(key, context);
+    return context;
+  }
+
+  private async resolveDefaultBranch(context: RepoContext): Promise<string> {
+    const token = this.env.GITHUB_TOKEN ?? this.env.GH_TOKEN;
+    if (!token) {
+      return "main";
+    }
+    try {
+      const response = await fetch(`https://api.github.com/repos/${context.owner}/${context.repo}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json"
+        }
+      });
+      if (!response.ok) {
+        return "main";
+      }
+      const payload = await response.json() as { default_branch?: string };
+      return payload.default_branch || "main";
+    } catch {
+      return "main";
+    }
+  }
+
+  private async createPullRequestWithWorkerApi(input: {
+    context: RepoContext;
+    head: string;
+    base: string;
+    title: string;
+    body: string;
+  }): Promise<{ url: string; number: number }> {
+    const token = this.env.GITHUB_TOKEN ?? this.env.GH_TOKEN;
+    if (!token) {
+      throw new Error("GITHUB_TOKEN is not configured for PR creation fallback.");
+    }
+
+    const response = await fetch(`https://api.github.com/repos/${input.context.owner}/${input.context.repo}/pulls`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        title: input.title,
+        body: input.body,
+        head: input.head,
+        base: input.base
+      })
+    });
+
+    if (!response.ok) {
+      const raw = await response.text();
+      const sanitized = this.sanitizeSecrets(raw).slice(0, 300);
+      throw new Error(`GitHub PR creation failed (${response.status}): ${sanitized}`);
+    }
+
+    const payload = await response.json() as { html_url: string; number: number };
+    return { url: payload.html_url, number: payload.number };
+  }
+
+  private async runDefaultBranchPushPrWorkflow(
+    sessionId: string,
+    channel: string,
+    command: string
+  ): Promise<string> {
+    const match = command.match(/git\s+push\s+origin\s+([\w./-]+)/i);
+    const requestedBase = match?.[1] ?? "main";
+    const cwd: string | null = null;
+    const context = await this.maybeCaptureRepoContext(cwd);
+    const defaultBranch = context ? await this.resolveDefaultBranch(context) : "main";
+    const baseBranch = ["main", "master"].includes(requestedBase) ? defaultBranch : requestedBase;
+    const branch = `blob-auto-${Date.now()}`;
+
+    await this.executeStepsSequentially(sessionId, channel, `git checkout ${baseBranch} && git checkout -B ${branch}`, {
+      applySelfModificationRateLimit: false
+    });
+
+    const helperProbe = await this.executeWithRetry("test -f github_tools.py && python github_tools.py whoami");
+    const helperAvailable = helperProbe.exitCode === 0 && Boolean(context);
+    const prTitle = `Blob automated changes (${branch})`;
+    const prBody = "Automated PR created from a blocked default-branch push command.";
+
+    if (helperAvailable && context) {
+      const pushCmd = `python github_tools.py push --owner ${context.owner} --repo ${context.repo} --branch ${branch}`;
+      const pushResult = await this.executeWithRetry(pushCmd);
+      if (pushResult.exitCode !== 0) {
+        throw new Error(`Push via github_tools.py failed: ${this.sanitizeSecrets(pushResult.stderr)}`);
+      }
+      const prCmd = `python github_tools.py create-pr --owner ${context.owner} --repo ${context.repo} --title ${shellEscape(prTitle)} --body ${shellEscape(prBody)} --head ${branch} --base ${baseBranch}`;
+      const prResult = await this.executeWithRetry(prCmd);
+      if (prResult.exitCode !== 0) {
+        throw new Error(`PR creation via github_tools.py failed: ${this.sanitizeSecrets(prResult.stderr)}`);
+      }
+      return this.sanitizeSecrets(prResult.stdout || prResult.stderr || "PR created via github_tools.py.");
+    }
+
+    const pushResult = await this.executeWithRetry(`git push origin ${branch}`);
+    if (pushResult.exitCode !== 0) {
+      throw new Error(`git push origin ${branch} failed: ${this.sanitizeSecrets(pushResult.stderr)}`);
+    }
+
+    if (!context) {
+      throw new Error("Unable to infer {owner, repo} from git remote; cannot create PR automatically.");
+    }
+
+    const pr = await this.createPullRequestWithWorkerApi({
+      context,
+      head: branch,
+      base: baseBranch,
+      title: prTitle,
+      body: prBody
+    });
+
+    return `PR created: #${pr.number} ${pr.url}`;
+  }
+
   private normalizeGitClone(command: string): string {
     const buildEnsureCloneBlock = (url: string, dest: string): string => [
       `if [ -d ${dest}/.git ]; then`,
@@ -1046,7 +1210,104 @@ export class AgentDO {
     let out = command;
     out = this.normalizeGitClone(out);
     out = this.normalizePythonInstall(out);
+    out = out.replace(/\bgit\s+checkout\s+-b\s+/g, "git checkout -B ");
     return out;
+  }
+
+  private splitCompositeCommand(command: string): string[] {
+    const steps: string[] = [];
+    let current = "";
+    let quote: "'" | '"' | null = null;
+
+    for (let i = 0; i < command.length; i += 1) {
+      const ch = command[i];
+      const next = command[i + 1];
+
+      if ((ch === "'" || ch === '"') && (i === 0 || command[i - 1] !== "\\")) {
+        if (quote === ch) {
+          quote = null;
+        } else if (quote === null) {
+          quote = ch;
+        }
+      }
+
+      if (!quote && ch === "&" && next === "&") {
+        const trimmed = current.trim();
+        if (!trimmed) {
+          return [command];
+        }
+        steps.push(trimmed);
+        current = "";
+        i += 1;
+        continue;
+      }
+
+      current += ch;
+    }
+
+    if (quote) {
+      return [command];
+    }
+
+    const tail = current.trim();
+    if (tail) {
+      steps.push(tail);
+    }
+    return steps.length > 0 ? steps : [command];
+  }
+
+  private parseCdStep(step: string): string | null {
+    const match = step.trim().match(/^cd\s+(.+)$/);
+    if (!match) {
+      return null;
+    }
+    return match[1].trim();
+  }
+
+  private async executeStepsSequentially(
+    sessionId: string,
+    channel: string,
+    command: string,
+    options: { applySelfModificationRateLimit: boolean }
+  ): Promise<{ output: string; exitCode: number }> {
+    const steps = this.splitCompositeCommand(command);
+    let cwd: string | null = null;
+    const outputParts: string[] = [];
+
+    for (let index = 0; index < steps.length; index += 1) {
+      const step = steps[index];
+      const cdTarget = this.parseCdStep(step);
+      if (cdTarget) {
+        cwd = cdTarget;
+        logAgentEvent(this.db, sessionId, "command_executed", `step ${index + 1}/${steps.length}: ${step}`);
+        this.forwardToGlobalLogs("command_executed", `[#${channel}] step ${index + 1}/${steps.length}: ${step}`);
+        continue;
+      }
+
+      const commandWithCwd = cwd ? `cd ${cwd} && ${step}` : step;
+      logAgentEvent(this.db, sessionId, "command_executed", this.sanitizeSecrets(commandWithCwd));
+      this.forwardToGlobalLogs("command_executed", `[#${channel}] ${this.sanitizeSecrets(commandWithCwd)}`);
+
+      if (options.applySelfModificationRateLimit && isSelfModificationCommand(step)) {
+        incrementRateLimit(this.db, "session", sessionId);
+        const todayKey = new Date().toISOString().slice(0, 10);
+        incrementRateLimit(this.db, "day", todayKey);
+      }
+
+      const result = await this.traceOperation(sessionId, "command_exec", () => this.executeWithGitSafety(commandWithCwd), channel);
+      const stepOutput = this.sanitizeSecrets([result.stdout, result.stderr].filter(Boolean).join("\n"));
+      if (stepOutput) {
+        outputParts.push(`$ ${step}\n${stepOutput}`);
+      }
+      if (result.exitCode !== 0) {
+        const summary = `Failed at step ${index + 1}/${steps.length}: ${step}`;
+        logAgentEvent(this.db, sessionId, "command_failure", summary);
+        this.forwardToGlobalLogs("command_failure", `[#${channel}] ${summary}`);
+        return { output: `${outputParts.join("\n\n")}\n${summary}`.trim(), exitCode: result.exitCode };
+      }
+    }
+
+    return { output: outputParts.join("\n\n"), exitCode: 0 };
   }
 
   private async processLlmResponse(
@@ -1123,10 +1384,29 @@ export class AgentDO {
       // Normalize first (prevents clone conflicts + avoids rm -rf approvals)
       const command = this.normalizeCommand(rawCommand);
       const sanitizedCommand = this.sanitizeSecrets(command);
+      if (command !== rawCommand) {
+        logAgentEvent(this.db, sessionId, "command_rewritten", `${this.sanitizeSecrets(rawCommand)} => ${sanitizedCommand}`);
+        this.forwardToGlobalLogs("command_rewritten", `[#${channel}] ${this.sanitizeSecrets(rawCommand)} => ${sanitizedCommand}`);
+      }
 
       // Log as proposed (captures intent before policy gate)
       logAgentEvent(this.db, sessionId, "command_proposed", sanitizedCommand);
       this.forwardToGlobalLogs("command_proposed", `[#${channel}] ${sanitizedCommand}`);
+
+      if (/git\s+push\s+origin\s+(?:main|master)\b/i.test(command)) {
+        logAgentEvent(this.db, sessionId, "command_rewritten", `${sanitizedCommand} => [pr_workflow_enforced]`);
+        this.forwardToGlobalLogs("command_rewritten", `[#${channel}] ${sanitizedCommand} => [pr_workflow_enforced]`);
+        try {
+          const summary = await this.runDefaultBranchPushPrWorkflow(sessionId, channel, command);
+          observations.push(formatToolResult(toolBlock.id, summary));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "PR workflow rewrite failed.";
+          observations.push(formatToolResult(toolBlock.id, this.sanitizeSecrets(message)));
+          done = true;
+          doneText = this.sanitizeSecrets(message);
+        }
+        continue;
+      }
 
       const safety = enforceSafety(command, this.db, sessionId, [], {
         applySelfModificationRateLimit: options.applySelfModificationRateLimit
@@ -1154,34 +1434,22 @@ export class AgentDO {
 
       if (!safety.allowed) {
         const blockedReason = safety.reason ?? "Blocked by safety policy.";
+        logAgentEvent(this.db, sessionId, "command_blocked", `${sanitizedCommand} :: ${blockedReason}`);
+        this.forwardToGlobalLogs("command_blocked", `[#${channel}] ${sanitizedCommand} :: ${blockedReason}`);
         observations.push(formatToolResult(toolBlock.id, blockedReason));
         done = true;
         doneText = blockedReason;
         continue;
       }
 
-      // Only log as command once it's actually executing.
-      logAgentEvent(this.db, sessionId, "command", sanitizedCommand);
-      this.forwardToGlobalLogs("command", `[#${channel}] ${sanitizedCommand}`);
-
-      if (options.applySelfModificationRateLimit && isSelfModificationCommand(command)) {
-        incrementRateLimit(this.db, "session", sessionId);
-        const todayKey = new Date().toISOString().slice(0, 10);
-        incrementRateLimit(this.db, "day", todayKey);
-      }
-      const result = await this.traceOperation(sessionId, "command_exec", () => this.executeWithGitSafety(command), channel);
-      if (result.stdout.trim()) {
-        const rawStdout = result.stdout.length > 4000 ? `${result.stdout.slice(0, 4000)}\n...[truncated]` : result.stdout;
+      const result = await this.executeStepsSequentially(sessionId, channel, command, {
+        applySelfModificationRateLimit: options.applySelfModificationRateLimit
+      });
+      if (result.output.trim()) {
+        const rawStdout = result.output.length > 4000 ? `${result.output.slice(0, 4000)}\n...[truncated]` : result.output;
         const stdoutMessage = this.sanitizeSecrets(rawStdout);
         logAgentEvent(this.db, sessionId, "command_output", stdoutMessage);
         this.forwardToGlobalLogs("command_output", `[#${channel}] ${stdoutMessage}`);
-      }
-
-      if (result.stderr.trim()) {
-        const rawStderr = result.stderr.length > 4000 ? `${result.stderr.slice(0, 4000)}\n...[truncated]` : result.stderr;
-        const stderrMessage = this.sanitizeSecrets(rawStderr);
-        logAgentEvent(this.db, sessionId, "command_error", stderrMessage);
-        this.forwardToGlobalLogs("command_error", `[#${channel}] ${stderrMessage}`);
       }
 
       const exitSummary = `Command finished with exit code ${result.exitCode}.`;
@@ -1197,12 +1465,12 @@ export class AgentDO {
         );
       }
 
-      const milestone = detectMilestone(command, result.exitCode, result.stdout);
+      const milestone = detectMilestone(command, result.exitCode, result.output);
       if (milestone) {
         await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, milestone.message);
       }
 
-      const toolOutput = this.sanitizeSecrets([result.stdout, result.stderr].filter(Boolean).join("\n"));
+      const toolOutput = this.sanitizeSecrets(result.output);
       observations.push(formatToolResult(toolBlock.id, toolOutput));
     }
 

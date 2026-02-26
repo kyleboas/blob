@@ -172,4 +172,82 @@ describe("integration flow", () => {
     expect(response.status).toBe(200);
     expect(doStub.fetch).toHaveBeenCalled();
   });
+
+  it("rejects /diag/run without auth", async () => {
+    const env = {
+      AGENT_DO: { idFromName: vi.fn(), get: vi.fn() },
+      SLACK_BOT_TOKEN: "token",
+      SLACK_SIGNING_SECRET: "secret"
+    } as unknown as Env;
+
+    const response = await worker.fetch(new Request("https://example.com/diag/run", { method: "POST" }), env, {} as ExecutionContext);
+    expect(response.status).toBe(401);
+  });
+
+  it("returns ok:false with check errors when a diag check fails", async () => {
+    const sandbox = { exec: vi.fn().mockResolvedValue({ stdout: "", stderr: "boom", exitCode: 1 }) };
+    const doStub = { fetch: vi.fn().mockResolvedValue(new Response("{}", { status: 500 })) };
+    const env = {
+      AGENT_DO: {
+        idFromName: vi.fn(() => "id:hb"),
+        get: vi.fn(() => doStub)
+      },
+      SANDBOX: sandbox,
+      SLACK_BOT_TOKEN: "token",
+      SLACK_SIGNING_SECRET: "secret",
+      DIAG_TOKEN: "diag-secret",
+      OPENAI_API_KEY: "key",
+      GITHUB_TOKEN: "token"
+    } as unknown as Env;
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 401 }));
+    const response = await worker.fetch(
+      new Request("https://example.com/diag/run", {
+        method: "POST",
+        headers: { authorization: "Bearer diag-secret" }
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(500);
+    const payload = await response.json() as { ok: boolean; checks: Array<{ ok: boolean; error?: string }> };
+    expect(payload.ok).toBe(false);
+    expect(payload.checks.some((c) => !c.ok && Boolean(c.error))).toBe(true);
+    fetchMock.mockRestore();
+  });
+
+  it("returns diag payload when authorized", async () => {
+    const sandbox = { exec: vi.fn().mockResolvedValue({ stdout: "ok", stderr: "", exitCode: 0 }) };
+    const doStub = { fetch: vi.fn().mockResolvedValue(new Response("{}", { status: 200 })) };
+    const env = {
+      AGENT_DO: {
+        idFromName: vi.fn(() => "id:hb"),
+        get: vi.fn(() => doStub)
+      },
+      SANDBOX: sandbox,
+      SLACK_BOT_TOKEN: "token",
+      SLACK_SIGNING_SECRET: "secret",
+      DIAG_TOKEN: "diag-secret",
+      OPENAI_API_KEY: "key",
+      GITHUB_TOKEN: "token"
+    } as unknown as Env;
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+    const response = await worker.fetch(
+      new Request("https://example.com/diag/run", {
+        method: "POST",
+        headers: { authorization: "Bearer diag-secret" }
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { ok: boolean; checks: Array<{ name: string }> };
+    expect(payload.ok).toBe(true);
+    expect(payload.checks.map((c) => c.name)).toEqual(expect.arrayContaining(["sandbox_exec", "github_auth", "do_round_trip"]));
+    fetchMock.mockRestore();
+  });
+
 });

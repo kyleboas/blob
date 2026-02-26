@@ -142,6 +142,25 @@ describe("enforceSafety", () => {
     expect(decision.reason).toContain("Session");
   });
 
+
+  it("blocks .netrc writes", () => {
+    const sql = new FakeSql();
+    const decision = enforceSafety("echo token > ~/.netrc", sql, "session-netrc");
+    expect(decision).toEqual(expect.objectContaining({ allowed: false, requiresApproval: false }));
+  });
+
+  it("blocks gh usage", () => {
+    const sql = new FakeSql();
+    const decision = enforceSafety("gh pr create --title x", sql, "session-gh");
+    expect(decision).toEqual(expect.objectContaining({ allowed: false, requiresApproval: false }));
+  });
+
+  it("blocks direct pushes to main", () => {
+    const sql = new FakeSql();
+    const decision = enforceSafety("git push origin main", sql, "session-main");
+    expect(decision).toEqual(expect.objectContaining({ allowed: false, requiresApproval: false }));
+  });
+
   it("blocks protected file modifications", () => {
     const sql = new FakeSql();
     const decision = enforceSafety("sed -i 's/x/y/' safety.py", sql, "session-3", ["safety.py"]);
