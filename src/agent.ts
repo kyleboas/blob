@@ -1361,9 +1361,13 @@ ${auditContext}` }
 
     if (messageType === "chat") {
       // Respond conversationally without spinning up a sub-agent or using tools.
+      // Use a minimal system prompt so the chat model doesn't inherit agent
+      // directives from AGENT.md (e.g. "take initiative", workspace instructions)
+      // and respond as if it were a task-execution agent.
+      const chatSystemPrompt = "You are Blob, a helpful assistant. Respond conversationally and concisely.";
       const conversation = [...priorMessages, { role: "user" as const, content: task }];
       const chatResponse = await this.deps.llmCall(this.buildLlmInput({
-        systemPrompt,
+        systemPrompt: chatSystemPrompt,
         messages: conversation
         // Omitting tools routes callLLM to the chat model automatically.
       }));
