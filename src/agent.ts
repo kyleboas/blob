@@ -979,6 +979,87 @@ export class AgentDO {
     });
   }
 
+  // --- command normalization helpers (repo-agnostic) ---
+  private inferRepoDirFromUrl(url: string): string | null {
+    // handles .../owner/repo(.git)? and also git@...:owner/repo(.git)?
+    const m =
+      url.match(/\/([^/?#]+?)(?:\.git)?(?:[?#].*)?$/) ??
+      url.match(/:([^/?#]+?)(?:\.git)?$/);
+    return m ? m[1] : null;
+  }
+
+  private normalizeGitClone(command: string): string {
+    // Case 1: rm -rf DEST && git clone URL DEST -> ensure block (no rm)
+    command = command.replace(
+      /\brm\s+-rf\s+([^\s&;]+)\s*&&\s*git\s+clone\s+([^\s&;]+)\s+([^\s&;]+)/g,
+      (_m, dest1, url, dest2) => {
+        const dest = dest2 || dest1;
+        return [
+          `if [ -d ${dest}/.git ]; then`,
+          `  git -C ${dest} fetch --all --prune || true;`,
+          `  git -C ${dest} pull --ff-only || true;`,
+          "else",
+          `  git clone ${url} ${dest};`,
+          "fi"
+        ].join(" ");
+      }
+    );
+
+    // Case 2: git clone URL DEST -> ensure block
+    command = command.replace(
+      /\bgit\s+clone\s+([^\s&;]+)\s+([^\s&;]+)/g,
+      (_m, url, dest) => {
+        return [
+          `if [ -d ${dest}/.git ]; then`,
+          `  git -C ${dest} fetch --all --prune || true;`,
+          `  git -C ${dest} pull --ff-only || true;`,
+          "else",
+          `  git clone ${url} ${dest};`,
+          "fi"
+        ].join(" ");
+      }
+    );
+
+    // Case 3: git clone URL (no dest) -> infer dir, ensure
+    command = command.replace(
+      /\bgit\s+clone\s+([^\s&;]+)(?=\s*(?:&&|;|\|\||$))/g,
+      (_m, url) => {
+        const dir = this.inferRepoDirFromUrl(url);
+        if (!dir) {
+          return `git clone ${url}`;
+        }
+        return [
+          `if [ -d ${dir}/.git ]; then`,
+          `  git -C ${dir} fetch --all --prune || true;`,
+          `  git -C ${dir} pull --ff-only || true;`,
+          "else",
+          `  git clone ${url} ${dir};`,
+          "fi"
+        ].join(" ");
+      }
+    );
+
+    return command;
+  }
+
+  private normalizePythonInstall(command: string): string {
+    // Replace "pip install -r requirements.txt" with a conditional that works for any repo
+    // (requirements.txt OR pyproject.toml). Keeps behavior repo-agnostic.
+    return command.replace(
+      /\bpip\s+install\s+-r\s+requirements\.txt\b/g,
+      "if [ -f requirements.txt ]; then pip install -r requirements.txt; " +
+        'elif [ -f pyproject.toml ]; then pip install -e .; ' +
+        'else echo "No requirements.txt or pyproject.toml found"; fi'
+    );
+  }
+
+  private normalizeCommand(command: string): string {
+    let out = command;
+    out = this.normalizeGitClone(out);
+    out = this.normalizePythonInstall(out);
+    return out;
+  }
+
   private async processLlmResponse(
     llmResponse: LLMResponse,
     channel: string,
@@ -1041,8 +1122,8 @@ export class AgentDO {
         continue;
       }
 
-      const command = commandResult.command.trim();
-      if (!command) {
+      const rawCommand = commandResult.command.trim();
+      if (!rawCommand) {
         const warning = "Tool execution failed: empty command generated. Please provide a non-empty command.";
         logAgentEvent(this.db, sessionId, "trace_warning", warning);
         this.forwardToGlobalLogs("trace_warning", `[#${channel}] ${warning}`);
@@ -1050,14 +1131,21 @@ export class AgentDO {
         continue;
       }
 
+      // Normalize first (prevents clone conflicts + avoids rm -rf approvals)
+      const command = this.normalizeCommand(rawCommand);
       const sanitizedCommand = this.sanitizeSecrets(command);
-      logAgentEvent(this.db, sessionId, "command", sanitizedCommand);
-      this.forwardToGlobalLogs("command", `[#${channel}] ${sanitizedCommand}`);
+
+      // Log as proposed (captures intent before policy gate)
+      logAgentEvent(this.db, sessionId, "command_proposed", sanitizedCommand);
+      this.forwardToGlobalLogs("command_proposed", `[#${channel}] ${sanitizedCommand}`);
+
       const safety = enforceSafety(command, this.db, sessionId, [], {
         applySelfModificationRateLimit: options.applySelfModificationRateLimit
       });
 
       if (!safety.allowed && safety.requiresApproval) {
+        logAgentEvent(this.db, sessionId, "command_needs_approval", sanitizedCommand);
+        this.forwardToGlobalLogs("command_needs_approval", `[#${channel}] ${sanitizedCommand}`);
         await createApprovalRequest(
           this.pendingApprovals,
           {
@@ -1082,6 +1170,10 @@ export class AgentDO {
         doneText = blockedReason;
         continue;
       }
+
+      // Only log as command once it's actually executing.
+      logAgentEvent(this.db, sessionId, "command", sanitizedCommand);
+      this.forwardToGlobalLogs("command", `[#${channel}] ${sanitizedCommand}`);
 
       if (options.applySelfModificationRateLimit && isSelfModificationCommand(command)) {
         incrementRateLimit(this.db, "session", sessionId);
