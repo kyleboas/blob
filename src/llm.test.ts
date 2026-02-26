@@ -387,6 +387,80 @@ describe("callLLM", () => {
     expect(generationBody.model).toBe("anthropic/claude-sonnet-4-6");
   });
 
+  it("retries Cloudflare Workers AI tool-calling bug (finish_reason=stop, content=null, no tool_calls)", async () => {
+    const buggyResponse = {
+      ok: true,
+      json: async () => ({
+        id: "cf_bug_1",
+        model: "@cf/qwen/qwen2.5-coder-32b-instruct",
+        choices: [{ finish_reason: "stop", message: { content: null } }],
+        usage: { prompt_tokens: 10, completion_tokens: 0 }
+      })
+    };
+    const goodResponse = {
+      ok: true,
+      json: async () => ({
+        id: "cf_good_1",
+        model: "@cf/qwen/qwen2.5-coder-32b-instruct",
+        choices: [
+          {
+            finish_reason: "tool_calls",
+            message: {
+              content: null,
+              tool_calls: [
+                { id: "call_1", type: "function", function: { name: "bash", arguments: '{"command":"ls"}' } }
+              ]
+            }
+          }
+        ],
+        usage: { prompt_tokens: 10, completion_tokens: 4 }
+      })
+    };
+    const mockFetch = vi.fn().mockResolvedValueOnce(buggyResponse).mockResolvedValueOnce(goodResponse);
+    const mockSleep = vi.fn().mockResolvedValue(undefined);
+
+    const response = await callLLM({
+      aiGatewayBaseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway",
+      aiGatewayToken: "gateway-token",
+      model: "@cf/qwen/qwen2.5-coder-32b-instruct",
+      systemPrompt: "be helpful",
+      messages: [{ role: "user", content: "run ls" }],
+      tools: [{ name: "bash", description: "run commands", input_schema: { type: "object", properties: {} } }],
+      fetchImpl: mockFetch,
+      sleepImpl: mockSleep
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockSleep).toHaveBeenCalledTimes(1);
+    expect(response.content).toEqual([
+      { type: "tool_use", id: "call_1", name: "bash", input: { command: "ls" } }
+    ]);
+  });
+
+  it("does not retry Cloudflare finish_reason=stop with null content when no tools were sent", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: "cf_chat_1",
+        model: "@cf/qwen/qwen2.5-coder-32b-instruct",
+        choices: [{ finish_reason: "stop", message: { content: null } }],
+        usage: { prompt_tokens: 5, completion_tokens: 0 }
+      })
+    });
+
+    const response = await callLLM({
+      aiGatewayBaseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway",
+      aiGatewayToken: "gateway-token",
+      model: "@cf/qwen/qwen2.5-coder-32b-instruct",
+      systemPrompt: "be helpful",
+      messages: [{ role: "user", content: "hi" }],
+      fetchImpl: mockFetch
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(response.content).toEqual([{ type: "text", text: "" }]);
+  });
+
   it("skips routing call when simple and complex models are the same", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,

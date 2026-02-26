@@ -606,7 +606,26 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
 
     if (response.ok) {
       const payload = (await response.json()) as Record<string, any>;
-      return useOpenAICompat ? toAnthropicLikeResponse(payload, resolvedModel) : (payload as LLMResponse);
+      if (useOpenAICompat) {
+        // Cloudflare Workers AI tool-calling bug: the gateway occasionally returns
+        // finish_reason="stop" with content=null and no tool_calls when the model
+        // intended to call a tool. Retry these as transient failures when tools
+        // were included in the request.
+        const choice = (payload.choices as Array<Record<string, any>> | undefined)?.[0] ?? {};
+        const message = (choice.message ?? {}) as Record<string, any>;
+        const isNullContentStop =
+          choice.finish_reason === "stop" &&
+          message.content === null &&
+          (!message.tool_calls || (message.tool_calls as unknown[]).length === 0) &&
+          (input.tools?.length ?? 0) > 0;
+        if (isNullContentStop && attempt < LLM_OVERLOAD_RETRY_MAX) {
+          const waitMs = LLM_OVERLOAD_RETRY_BASE_MS * Math.pow(2, attempt);
+          await sleepImpl(waitMs);
+          continue;
+        }
+        return toAnthropicLikeResponse(payload, resolvedModel);
+      }
+      return payload as LLMResponse;
     }
 
     if (isRetryableLlmStatus(response.status) && attempt < LLM_OVERLOAD_RETRY_MAX) {
