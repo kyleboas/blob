@@ -443,16 +443,16 @@ export class AgentDO {
     }
   }
 
-  private runInBackground(work: Promise<void>): void {
+  private runInBackground(work: Promise<void>): Promise<void> {
     if (this.ctx.waitUntil) {
       this.ctx.waitUntil(work);
-      return;
+      return Promise.resolve();
     }
 
     // Durable Object runtimes should expose waitUntil. If it is unavailable
     // (for example in local tests), do not block the request lifecycle.
     // Capture failures to avoid unhandled promise rejections in fire-and-forget mode.
-    void work.catch((error) => {
+    return work.catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       logAgentEvent(this.db, "global", "background_error", message);
       this.forwardToGlobalLogs("background_error", message);
@@ -523,7 +523,7 @@ export class AgentDO {
 
     if (body.action === "message" && body.event) {
       const event = body.event;
-      this.runInBackground((async () => {
+      await this.runInBackground((async () => {
         try {
           const handled = await this.handleSettingsCommand(event);
           if (handled) {
@@ -553,7 +553,7 @@ export class AgentDO {
         ? String(body.orchestratorSessionId)
         : undefined;
       const taskComplexityHint = body.taskComplexityHint;
-      this.runInBackground((async () => {
+      await this.runInBackground((async () => {
         let completionStatus: "completed" | "failed" = "completed";
         let finalText = "";
         try {
@@ -641,7 +641,7 @@ export class AgentDO {
     }
 
     if (body.task && body.event?.channel) {
-      this.runInBackground((async () => {
+      await this.runInBackground((async () => {
         const { sessionId, previousSessionId } = resolveOrCreateSession(this.db, this.deps.now());
         if (previousSessionId) {
           await this.summarizePreviousSession(previousSessionId);
@@ -820,7 +820,9 @@ export class AgentDO {
     // The system prompt uses the knowledge already cached in the DB from the
     // previous sync; any external edits to AGENT.md will be picked up on the
     // next user message.
-    void syncKnowledgeFromSandbox(this.db, this.sandbox);
+    void syncKnowledgeFromSandbox(this.db, this.sandbox).catch((error: unknown) => {
+      this.logDiagnostic(sessionId, "knowledge_sync", `Background knowledge sync failed: ${error instanceof Error ? error.message : String(error)}`, channel);
+    });
     // Use the orchestrator-supplied system prompt when available (the sub-agent's
     // own DB is empty so its summaries/knowledge would be missing).
     const systemPromptBase =
@@ -839,7 +841,8 @@ export class AgentDO {
     let thinkingTimer: ReturnType<typeof setTimeout> | undefined;
     let thinkingMessagePromise: Promise<void> | null = null;
     thinkingTimer = setTimeout(() => {
-      thinkingMessagePromise = this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, "Thinking...").then(() => {
+      const maybePromise = this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, "Thinking...");
+      thinkingMessagePromise = Promise.resolve(maybePromise).then(() => {
         this.logDiagnostic(sessionId, "thinking", "Posted delayed thinking status.", channel);
       });
     }, THINKING_MESSAGE_DELAY_MS);
@@ -1111,13 +1114,13 @@ export class AgentDO {
 
   private async executeWithRetry(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     let lastResult: { stdout: string; stderr: string; exitCode: number } | undefined;
-    for (let attempt = 0; attempt <= TOOL_RETRY_MAX; attempt++) {
+    for (let attempt = 0; attempt < TOOL_RETRY_MAX; attempt++) {
       const result = await this.sandbox.exec(command);
       if (result.exitCode === 0) {
         return result;
       }
       lastResult = result;
-      if (attempt < TOOL_RETRY_MAX) {
+      if (attempt < TOOL_RETRY_MAX - 1) {
         const waitMs = TOOL_RETRY_BACKOFF_BASE_MS * Math.pow(1.5, attempt);
         await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
       }

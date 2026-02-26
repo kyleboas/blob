@@ -97,7 +97,7 @@ describe("posting helpers", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
     expect(url).toContain("chat.postMessage");
-    expect(String(init.headers)).toContain("Bearer xoxb-token");
+    expect((init.headers as Record<string, string>).authorization).toBe("Bearer xoxb-token");
   });
 
   it("posts approval request text", async () => {

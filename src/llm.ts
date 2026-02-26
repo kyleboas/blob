@@ -50,7 +50,7 @@ export interface LLMResponse {
 }
 
 function isOpenAIModel(model: string): boolean {
-  return /^gpt-|^o[1-9]|^o\d/.test(model);
+  return /^gpt-|^o[1-9]|^o\d|^openai\//.test(model);
 }
 
 function normalizeBaseUrl(url: string): string {

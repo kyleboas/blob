@@ -132,7 +132,7 @@ describe("SandboxClient", () => {
       readFile: vi.fn()
     };
 
-    const client = new SandboxClient(sandbox, 10_000, 0);
+    const client = new SandboxClient(sandbox, 10_000, 0, 0);
     await client.warmUp();
 
     expect(sandbox.writeFile).toHaveBeenCalledTimes(2);
@@ -148,7 +148,7 @@ describe("SandboxClient", () => {
       readFile: vi.fn()
     };
 
-    const client = new SandboxClient(sandbox, 10_000, 0);
+    const client = new SandboxClient(sandbox, 10_000, 0, 0);
     await client.warmUp();
 
     expect(sandbox.writeFile).toHaveBeenCalledTimes(2);
