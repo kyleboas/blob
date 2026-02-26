@@ -19,8 +19,8 @@ export const MODEL_SIMPLE = "@cf/qwen/qwen3-30b-a3b-fp8";
 export const MODEL_COMPLEX = "claude-sonnet-4-6";
 export const MODEL_PLANNER_SIMPLE = MODEL_SIMPLE;
 export const MODEL_PLANNER_COMPLEX = MODEL_COMPLEX;
-export const MODEL_EXECUTION_SIMPLE = "@cf/qwen/qwen2.5-coder-7b-instruct";
-export const MODEL_EXECUTION_COMPLEX = "@cf/qwen/qwen2.5-coder-14b-instruct";
+export const MODEL_EXECUTION_SIMPLE = "@cf/qwen/qwen3-30b-a3b-fp8";
+export const MODEL_EXECUTION_COMPLEX = "@cf/qwen/qwen3-30b-a3b-fp8";
 
 // Backwards-compatible aliases for older two-tier references.
 export const MODEL_ROUTINE = MODEL_SIMPLE;
