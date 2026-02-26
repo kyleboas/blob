@@ -238,6 +238,18 @@ const EXECUTION_SYSTEM_GUARDRAILS = [
   "If blocked, report the blocker clearly and stop instead of guessing."
 ].join(" ");
 
+const MODEL_TARGET_KEYWORDS = "router|chat|simple|routine|complex|planner-simple|planner-complex|execution-simple|execution-complex|executor-simple|executor-complex";
+
+function friendlyModelTargetName(target: string): string {
+  switch (target) {
+    case "planner-simple": return "simple model";
+    case "planner-complex": return "complex model";
+    case "execution-simple": return "execution simple model";
+    case "execution-complex": return "execution complex model";
+    default: return `${target} model`;
+  }
+}
+
 function parseSettingsCommand(rawText: string): SettingsCommand | null {
   const text = rawText.trim();
   if (!text) return null;
@@ -247,9 +259,10 @@ function parseSettingsCommand(rawText: string): SettingsCommand | null {
     return { type: "show" };
   }
 
-  const setMatch = text.match(/^set\s+(router|chat|simple|routine|complex|planner-simple|planner-complex|execution-simple|execution-complex|executor-simple|executor-complex)\s+model\s+(?:to\s+)?(.+)$/i)
-    ?? text.match(/^set\s+model\s+(router|chat|simple|routine|complex|planner-simple|planner-complex|execution-simple|execution-complex|executor-simple|executor-complex)\s+(?:to\s+)?(.+)$/i)
-    ?? text.match(/^use\s+(.+)\s+for\s+(router|chat|simple|routine|complex|planner-simple|planner-complex|execution-simple|execution-complex|executor-simple|executor-complex)(?:\s+tasks?)?$/i);
+  const setMatch = text.match(new RegExp(`^set\\s+(${MODEL_TARGET_KEYWORDS})\\s+model\\s+(?:to\\s+)?(.+)$`, "i"))
+    ?? text.match(new RegExp(`^set\\s+(?:the\\s+)?(${MODEL_TARGET_KEYWORDS})\\s+model\\s+(?:to\\s+)?(.+)$`, "i"))
+    ?? text.match(new RegExp(`^set\\s+model\\s+(${MODEL_TARGET_KEYWORDS})\\s+(?:to\\s+)?(.+)$`, "i"))
+    ?? text.match(new RegExp(`^use\\s+(.+?)\\s+(?:for|as)\\s+(?:the\\s+)?(${MODEL_TARGET_KEYWORDS})(?:\\s+(?:model|tasks?))?$`, "i"));
 
   if (!setMatch) return null;
 
@@ -721,20 +734,11 @@ export class AgentDO {
       setExecutionComplexModel(this.db, parsed.model);
     }
 
-    const settings = this.getRuntimeModelSettings();
+    const friendlyName = friendlyModelTargetName(parsed.target);
     await this.deps.postSlackMessage(
       this.env.SLACK_BOT_TOKEN,
       channel,
-      [
-        `Saved ${parsed.target} model: ${parsed.model}`,
-        "Updated model settings:",
-        `• router: ${settings.routerModel}`,
-        `• chat: ${settings.chatModel}`,
-        `• planner-simple: ${settings.plannerSimpleModel}`,
-        `• planner-complex: ${settings.plannerComplexModel}`,
-        `• execution-simple: ${settings.executionSimpleModel}`,
-        `• execution-complex: ${settings.executionComplexModel}`
-      ].join("\n")
+      `The ${friendlyName} has been set to ${parsed.model}`
     );
     return true;
   }
