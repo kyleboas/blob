@@ -12,4 +12,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   build-essential \
   && rm -rf /var/lib/apt/lists/*
 
+RUN cat >/usr/local/bin/blob-git-askpass <<'EOF' \
+ && chmod 755 /usr/local/bin/blob-git-askpass
+#!/bin/sh
+case "$1" in
+  *Username*) echo "x-access-token" ;;
+  *Password*) echo "${GITHUB_TOKEN:-${GH_TOKEN:-}}" ;;
+  *) echo "" ;;
+esac
+EOF
+
 RUN mkdir -p /workspace
