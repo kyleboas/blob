@@ -158,8 +158,19 @@ function toOpenAIMessages(systemPrompt: string, messages: AnthropicMessage[]): A
 }
 
 function toAnthropicLikeResponse(payload: Record<string, any>, fallbackModel: string): LLMResponse {
+  if (payload.error) {
+    const code = payload.error.code ?? payload.error.status ?? "unknown";
+    const msg = payload.error.message ?? JSON.stringify(payload.error);
+    throw new Error(`LLM gateway error (${code}): ${msg}`);
+  }
+
   const choice = payload.choices?.[0] ?? {};
   const message = choice.message ?? {};
+
+  if (choice.finish_reason === "length") {
+    throw new Error("LLM response truncated: model hit max_tokens limit before producing output");
+  }
+
   const content: unknown[] = [];
 
   if (typeof message.content === "string" && message.content.trim()) {
@@ -542,11 +553,11 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
         model: resolvedModel,
         messages: toOpenAIMessages(input.systemPrompt, input.messages),
         tools: toOpenAITools(input.tools),
-        max_tokens: 1024
+        max_tokens: 4096
       })
     : JSON.stringify({
         model: resolvedModel,
-        max_tokens: 1024,
+        max_tokens: 4096,
         system: [
           {
             type: "text",
