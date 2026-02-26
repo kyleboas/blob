@@ -137,7 +137,7 @@ function toOpenAIMessages(systemPrompt: string, messages: AnthropicMessage[]): A
         });
 
       if (toolCalls.length > 0) {
-        openAiMessages.push({ role: "assistant", content: textContent || null, tool_calls: toolCalls });
+        openAiMessages.push({ role: "assistant", content: textContent, tool_calls: toolCalls });
       } else {
         openAiMessages.push({ role: "assistant", content: textContent });
       }
@@ -635,6 +635,41 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
     }
 
     const errorText = await response.text();
+
+    // If an OpenAI-compat provider returns a completion-shaped payload with a non-2xx
+    // status (seen with Workers AI), try to recover instead of hard-failing.
+    if (useOpenAICompat) {
+      try {
+        const payload = JSON.parse(errorText) as Record<string, any>;
+        if (!payload?.error && Array.isArray(payload.choices)) {
+          const choice = payload.choices?.[0] ?? {};
+          const message = choice.message ?? {};
+
+          const hasToolCalls = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+          const hasText = typeof message.content === "string" && message.content.trim().length > 0;
+
+          const isNullContentStop =
+            choice.finish_reason === "stop" &&
+            message.content === null &&
+            !hasToolCalls;
+
+          // Retry the known "null content stop" glitch even if it came back as HTTP 400.
+          if (isNullContentStop && attempt < LLM_OVERLOAD_RETRY_MAX) {
+            const waitMs = LLM_OVERLOAD_RETRY_BASE_MS * Math.pow(2, attempt);
+            await sleepImpl(waitMs);
+            continue;
+          }
+
+          // If it looks like a real completion (text or tool calls), accept it despite the status.
+          if (hasText || hasToolCalls || isNullContentStop) {
+            return toAnthropicLikeResponse(payload, resolvedModel);
+          }
+        }
+      } catch {
+        // fall through to normal error handling
+      }
+    }
+
     const attempts = attempt + 1;
     const attemptText = `attempt ${attempts}/${LLM_OVERLOAD_RETRY_MAX + 1}`;
     const responseHeaders = summarizeResponseHeaders(response);

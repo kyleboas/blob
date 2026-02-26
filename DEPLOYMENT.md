@@ -224,3 +224,107 @@ The code now loads from KV first, so your code-based configuration will be compl
 - Read `src/kv-schema.ts` for the full configuration schema
 - See `config-template.json` for a complete example
 - Check `AGENT.md` for agent behavior and capabilities
+
+## Non-interactive git push in sandbox containers (Option A)
+
+Use this setup when `git push` fails in production with:
+- `fatal: cannot run /usr/local/bin/blob-git-askpass: No such file or directory`
+- `fatal: could not read Username ... terminal prompts disabled`
+
+### Goal
+
+Ensure the sandbox image provides `/usr/local/bin/blob-git-askpass`, and ensure the agent exports these values into `/workspace/.blob-env`:
+- `GIT_ASKPASS=/usr/local/bin/blob-git-askpass`
+- `GIT_ASKPASS_REQUIRE=force`
+- `GITHUB_TOKEN` and `GH_TOKEN`
+
+### 1) Add ASKPASS helper to the sandbox image
+
+`sandbox/Dockerfile` should include:
+
+```dockerfile
+# Install a non-interactive git credential helper used by Blob.
+# Git calls this script for Username/Password prompts and it provides:
+# - username: x-access-token
+# - password: $GITHUB_TOKEN (or $GH_TOKEN)
+RUN cat >/usr/local/bin/blob-git-askpass <<'EOF' \
+ && chmod 755 /usr/local/bin/blob-git-askpass
+#!/bin/sh
+case "$1" in
+  *Username*) echo "x-access-token" ;;
+  *Password*) echo "${GITHUB_TOKEN:-${GH_TOKEN:-}}" ;;
+  *) echo "" ;;
+esac
+EOF
+```
+
+### 2) Export git auth + identity to `/workspace/.blob-env`
+
+The Durable Object writes sandbox env vars to `/workspace/.blob-env`, which sandbox commands source automatically.
+
+Include at least:
+
+```bash
+export GIT_TERMINAL_PROMPT=0
+export GIT_ASKPASS=/usr/local/bin/blob-git-askpass
+export GIT_ASKPASS_REQUIRE=force
+export GITHUB_TOKEN='...'
+export GH_TOKEN='...'
+export GITHUB_USERNAME='...'
+export GIT_AUTHOR_NAME='...'
+export GIT_AUTHOR_EMAIL='...@users.noreply.github.com'
+export GIT_COMMITTER_NAME='...'
+export GIT_COMMITTER_EMAIL='...@users.noreply.github.com'
+```
+
+Do not rely on `.netrc` or interactive prompts.
+
+### 3) Deploy the sandbox worker
+
+```bash
+npm ci
+npx wrangler deploy --config sandbox/wrangler.toml
+```
+
+### 4) Deploy the main worker
+
+```bash
+npx wrangler deploy
+```
+
+### 5) Set required secrets on the main worker
+
+Required for GitHub push/PR:
+
+```bash
+npx wrangler secret put GITHUB_TOKEN
+npx wrangler secret put GITHUB_USERNAME
+```
+
+Optional/related:
+
+```bash
+npx wrangler secret put SLACK_BOT_TOKEN
+npx wrangler secret put SLACK_SIGNING_SECRET
+npx wrangler secret put AI_GATEWAY_TOKEN
+```
+
+### 6) Fork-friendly service naming
+
+If a fork uses a different sandbox worker name, update both files so the names match:
+- `sandbox/wrangler.toml` (`name = "..."`)
+- root `wrangler.toml` in `[[services]]` (`service = "..."`)
+
+### 7) Smoke test
+
+Quick check:
+
+```bash
+ls -l /usr/local/bin/blob-git-askpass
+```
+
+End-to-end check:
+1. Create a unique branch
+2. Commit a tiny file
+3. Run `git push` (no prompt)
+4. Create PR through GitHub API (not `gh`)

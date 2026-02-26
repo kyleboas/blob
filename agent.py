@@ -111,6 +111,11 @@ class Agent:
                 "You are Blob, a self-modifying coding agent.",
                 "Operate on your repository and use git history to answer questions about recent changes.",
                 "Use bash tools to inspect files and run tests before finishing code changes.",
+                "For PR workflows, never use gh; it is not installed.",
+                "Never use fixed branch names like test-pr; use canary-pr-$RANDOM (or another unique canary-pr-* name).",
+                "Never rely on git push origin ... for PR workflows.",
+                "For branch pushes, always run python github_tools.py push --owner <owner> --repo <repo> --branch <branch>.",
+                "Always create PRs via python github_tools.py create-pr ... instead of raw GitHub API curl.",
                 "When asked to remember long-term preferences, save them to AGENT.md.",
             ]
         )
@@ -172,6 +177,18 @@ class Agent:
             return None
         return f"https://{token}@github.com/{repo}.git"
 
+    def _resolve_repo_from_remote(self, remote: str = "origin") -> str | None:
+        remote_result = subprocess.run(
+            ["git", "remote", "get-url", remote],
+            cwd=config.WORKSPACE_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if remote_result.returncode != 0:
+            return None
+        return _parse_github_repo(remote_result.stdout)
+
     def _push_branch_to_remote(self, tool_input: dict[str, object]) -> str:
         remote = str(tool_input.get("remote", "origin")).strip() or "origin"
 
@@ -191,12 +208,22 @@ class Agent:
         if branch == "HEAD":
             return "error: detached HEAD is not supported; checkout a branch first"
 
-        push_target = self._get_authenticated_push_url(remote) or remote
-        set_upstream = bool(tool_input.get("set_upstream", True))
-        push_command = ["git", "push"]
-        if set_upstream:
-            push_command.append("-u")
-        push_command.extend([push_target, branch])
+        repo = self._resolve_repo_from_remote(remote)
+        if not repo:
+            return f"error: {remote} remote is not a GitHub repository"
+        owner, repo_name = repo.split("/", 1)
+
+        push_command = [
+            "python",
+            "github_tools.py",
+            "push",
+            "--owner",
+            owner,
+            "--repo",
+            repo_name,
+            "--branch",
+            branch,
+        ]
 
         push = subprocess.run(
             push_command,
@@ -208,16 +235,10 @@ class Agent:
         if push.returncode != 0:
             return f"error: failed to push branch\n{push.stderr.strip()}"
 
-        return f"ok: pushed {branch} to {remote}"
+        return f"ok: pushed {branch} to {owner}/{repo_name}"
 
     def _create_github_pr(self, tool_input: dict[str, object]) -> str:
-        token = subprocess.run(
-            ["bash", "-lc", "printf %s \"${GITHUB_TOKEN:-${GH_TOKEN:-}}\""],
-            cwd=config.WORKSPACE_ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
+        token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
         if not token:
             return "error: missing GITHUB_TOKEN (or GH_TOKEN) in environment"
 
@@ -226,21 +247,10 @@ class Agent:
         if not title:
             return "error: pull request title is required"
 
-        repo = str(tool_input.get("repo", "")).strip()
+        repo = str(tool_input.get("repo", "")).strip() or (self._resolve_repo_from_remote("origin") or "")
         if not repo:
-            remote = subprocess.run(
-                ["git", "remote", "get-url", "origin"],
-                cwd=config.WORKSPACE_ROOT,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            if remote.returncode != 0:
-                return "error: unable to resolve origin remote"
-            parsed_repo = _parse_github_repo(remote.stdout)
-            if not parsed_repo:
-                return "error: origin remote is not a GitHub repository; provide repo as owner/name"
-            repo = parsed_repo
+            return "error: origin remote is not a GitHub repository; provide repo as owner/name"
+        owner, repo_name = repo.split("/", 1)
 
         head = str(tool_input.get("head", "")).strip()
         if not head:
@@ -271,54 +281,63 @@ class Agent:
             else:
                 base = "main"
 
-        push_target = self._get_authenticated_push_url("origin") or "origin"
         push = subprocess.run(
-            ["git", "push", "-u", push_target, head],
-            cwd=config.WORKSPACE_ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if push.returncode != 0:
-            return f"error: failed to push branch\n{push.stderr.strip()}"
-
-        payload = {
-            "title": title,
-            "body": body,
-            "head": head,
-            "base": base,
-            "draft": bool(tool_input.get("draft", False)),
-        }
-
-        create_pr = subprocess.run(
             [
-                "curl",
-                "-fsSL",
-                "-X",
-                "POST",
-                "https://api.github.com/repos/{}/pulls".format(repo),
-                "-H",
-                "Accept: application/vnd.github+json",
-                "-H",
-                f"Authorization: Bearer {token}",
-                "-H",
-                "X-GitHub-Api-Version: 2022-11-28",
-                "-d",
-                json.dumps(payload),
+                "python",
+                "github_tools.py",
+                "push",
+                "--owner",
+                owner,
+                "--repo",
+                repo_name,
+                "--branch",
+                head,
             ],
             cwd=config.WORKSPACE_ROOT,
             check=False,
             capture_output=True,
             text=True,
         )
+        if push.returncode != 0:
+            return f"error: failed to push branch\n{push.stderr.strip() or push.stdout.strip()}"
+
+        head_ref = head if ":" in head else f"{owner}:{head}"
+
+        create_pr_command = [
+            "python",
+            "github_tools.py",
+            "create-pr",
+            "--owner",
+            owner,
+            "--repo",
+            repo_name,
+            "--title",
+            title,
+            "--body",
+            body,
+            "--head",
+            head_ref,
+            "--base",
+            base,
+        ]
+        if bool(tool_input.get("draft", False)):
+            create_pr_command.append("--draft")
+
+        create_pr = subprocess.run(
+            create_pr_command,
+            cwd=config.WORKSPACE_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
         if create_pr.returncode != 0:
-            return f"error: failed to create pull request\n{create_pr.stderr.strip()}"
+            return f"error: failed to create pull request\n{create_pr.stderr.strip() or create_pr.stdout.strip()}"
 
         try:
             response = json.loads(create_pr.stdout)
         except json.JSONDecodeError:
             return f"error: unexpected GitHub response\n{create_pr.stdout.strip()}"
-        pr_url = response.get("html_url", "")
+        pr_url = response.get("html_url", "") or response.get("url", "")
         pr_number = response.get("number", "")
         if not pr_url:
             return f"error: GitHub response missing html_url\n{create_pr.stdout.strip()}"

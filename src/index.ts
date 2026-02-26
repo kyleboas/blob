@@ -310,28 +310,54 @@ function renderLiveLogPage(): string {
       renderEvents(events);
     }
 
-    refreshLogs();
-    const source = new EventSource('/logs/stream');
-    source.addEventListener('snapshot', (event) => {
-      try {
-        const payload = JSON.parse(event.data || '{}');
-        const events = payload.events || [];
-        statusNode.textContent = 'Live across all channels • ' + events.length + ' event' + (events.length === 1 ? '' : 's') + ' • updated ' + new Date().toLocaleTimeString();
-        statusNode.className = '';
-        dotNode.className = '';
-        lastSnapshotSig = JSON.stringify(events.map((item) => [item.createdAt, item.eventType, item.message]));
-        renderEvents(events);
-      } catch {
-        statusNode.textContent = 'Error: failed to parse live stream event';
-        statusNode.className = 'error';
-        dotNode.className = 'error';
-      }
-    });
-    source.onerror = () => {
-      statusNode.textContent = 'Live stream interrupted; retrying...';
+    let source;
+    let reconnectTimer;
+    let lastLiveEventAt = Date.now();
+
+    function scheduleReconnect(reason) {
+      if (reconnectTimer) return;
+      statusNode.textContent = 'Live stream disconnected (' + reason + ') • reconnecting...';
       statusNode.className = 'error';
       dotNode.className = 'error';
-    };
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = undefined;
+        connectLiveStream();
+      }, 1000);
+    }
+
+    function connectLiveStream() {
+      if (source) source.close();
+      source = new EventSource('/logs/stream');
+      source.addEventListener('snapshot', (event) => {
+        lastLiveEventAt = Date.now();
+        try {
+          const payload = JSON.parse(event.data || '{}');
+          const events = payload.events || [];
+          statusNode.textContent = 'Live across all channels • ' + events.length + ' event' + (events.length === 1 ? '' : 's') + ' • updated ' + new Date().toLocaleTimeString();
+          statusNode.className = '';
+          dotNode.className = '';
+          lastSnapshotSig = JSON.stringify(events.map((item) => [item.createdAt, item.eventType, item.message]));
+          renderEvents(events);
+        } catch {
+          statusNode.textContent = 'Error: failed to parse live stream event';
+          statusNode.className = 'error';
+          dotNode.className = 'error';
+        }
+      });
+      source.onerror = () => {
+        scheduleReconnect('network issue');
+      };
+    }
+
+    refreshLogs();
+    connectLiveStream();
+
+    setInterval(() => {
+      const staleMs = Date.now() - lastLiveEventAt;
+      if (staleMs > 10000) {
+        scheduleReconnect('stale stream');
+      }
+    }, 5000);
 
     setInterval(refreshLogs, 10000);
   </script>

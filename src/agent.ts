@@ -238,6 +238,25 @@ const EXECUTION_SYSTEM_GUARDRAILS = [
   "If blocked, report the blocker clearly and stop instead of guessing."
 ].join(" ");
 
+const DANGEROUS_TOOL_TEMPLATE_RULES: Array<{ pattern: RegExp; reason: string }> = [
+  {
+    pattern: /\bgit\s+push(?:\s+[^\n;]+)*\s+main\b/i,
+    reason: "Tool templates must never push directly to main. Push a feature branch and open a PR instead."
+  },
+  {
+    pattern: /\bgit\s+reset\s+--hard\b/i,
+    reason: "Tool templates cannot include destructive git reset --hard commands."
+  },
+  {
+    pattern: /\brm\s+-rf\b/i,
+    reason: "Tool templates cannot include rm -rf."
+  },
+  {
+    pattern: /\bwrangler\s+(?:deploy|publish)\b/i,
+    reason: "Tool templates cannot deploy directly. Use a reviewed PR-based workflow."
+  }
+];
+
 function parseSettingsCommand(rawText: string): SettingsCommand | null {
   const text = rawText.trim();
   if (!text) return null;
@@ -940,7 +959,7 @@ export class AgentDO {
       await thinkingMessagePromise;
     }
 
-    await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, finalText);
+    await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, this.stripToolMarkupForSlack(finalText));
     logAgentEvent(this.db, sessionId, "completed", finalText);
     this.forwardToGlobalLogs("completed", `[#${channel}] ${finalText.slice(0, 300)}`);
 
@@ -958,6 +977,76 @@ export class AgentDO {
     }).catch(() => {
       // Non-critical logging; silently discard errors
     });
+  }
+
+  // --- command normalization helpers (repo-agnostic) ---
+  private inferRepoDirFromUrl(url: string): string | null {
+    // handles .../owner/repo(.git)? and also git@...:owner/repo(.git)?
+    const m =
+      url.match(/\/([^/?#]+?)(?:\.git)?(?:[?#].*)?$/) ??
+      url.match(/:([^/?#]+?)(?:\.git)?$/);
+    return m ? m[1] : null;
+  }
+
+  private normalizeGitClone(command: string): string {
+    const buildEnsureCloneBlock = (url: string, dest: string): string => [
+      `if [ -d ${dest}/.git ]; then`,
+      `  git -C ${dest} fetch --prune origin;`,
+      `  git -C ${dest} remote set-head origin -a >/dev/null 2>&1 || true;`,
+      `  git -C ${dest} rev-parse --abbrev-ref origin/HEAD | sed 's|^origin/||' | xargs -I{} git -C ${dest} checkout -B {} origin/{} || git -C ${dest} checkout -B main origin/main;`,
+      "else",
+      `  git clone ${url} ${dest};`,
+      "fi"
+    ].join(" ");
+
+    // Case 1: rm -rf DEST && git clone URL DEST -> ensure block (no rm)
+    command = command.replace(
+      /\brm\s+-rf\s+([^\s&;]+)\s*&&\s*git\s+clone\s+([^\s&;]+)\s+([^\s&;]+)/g,
+      (_m, dest1, url, dest2) => {
+        const dest = dest2 || dest1;
+        return buildEnsureCloneBlock(url, dest);
+      }
+    );
+
+    // Case 2: git clone URL DEST -> ensure block
+    command = command.replace(
+      /\bgit\s+clone\s+([^\s&;]+)\s+([^\s&;]+)/g,
+      (_m, url, dest) => {
+        return buildEnsureCloneBlock(url, dest);
+      }
+    );
+
+    // Case 3: git clone URL (no dest) -> infer dir, ensure
+    command = command.replace(
+      /\bgit\s+clone\s+([^\s&;]+)(?=\s*(?:&&|;|\|\||$))/g,
+      (_m, url) => {
+        const dir = this.inferRepoDirFromUrl(url);
+        if (!dir) {
+          return `git clone ${url}`;
+        }
+        return buildEnsureCloneBlock(url, dir);
+      }
+    );
+
+    return command;
+  }
+
+  private normalizePythonInstall(command: string): string {
+    // Replace "pip install -r requirements.txt" with a conditional that works for any repo
+    // (requirements.txt OR pyproject.toml). Keeps behavior repo-agnostic.
+    return command.replace(
+      /\bpip\s+install\s+-r\s+requirements\.txt\b/g,
+      "if [ -f requirements.txt ]; then pip install -r requirements.txt; " +
+        'elif [ -f pyproject.toml ]; then pip install -e .; ' +
+        'else echo "No requirements.txt or pyproject.toml found"; fi'
+    );
+  }
+
+  private normalizeCommand(command: string): string {
+    let out = command;
+    out = this.normalizeGitClone(out);
+    out = this.normalizePythonInstall(out);
+    return out;
   }
 
   private async processLlmResponse(
@@ -996,8 +1085,13 @@ export class AgentDO {
 
       if (toolBlock.name === CREATE_TOOL_TOOL.name) {
         const validation = validateDynamicToolDefinition(toolBlock.input);
+        const dangerousTemplateReason = validation.ok
+          ? this.getDangerousTemplateReason(validation.definition.commandTemplate)
+          : null;
         const toolResult = validation.ok
-          ? (() => {
+          ? dangerousTemplateReason
+            ? `Tool creation rejected: ${dangerousTemplateReason}`
+            : (() => {
               options.dynamicTools.set(validation.definition.name, validation.definition);
               return `Created tool \"${validation.definition.name}\" with args: ${validation.definition.args.join(", ") || "(none)"}.`;
             })()
@@ -1017,8 +1111,8 @@ export class AgentDO {
         continue;
       }
 
-      const command = commandResult.command.trim();
-      if (!command) {
+      const rawCommand = commandResult.command.trim();
+      if (!rawCommand) {
         const warning = "Tool execution failed: empty command generated. Please provide a non-empty command.";
         logAgentEvent(this.db, sessionId, "trace_warning", warning);
         this.forwardToGlobalLogs("trace_warning", `[#${channel}] ${warning}`);
@@ -1026,14 +1120,21 @@ export class AgentDO {
         continue;
       }
 
+      // Normalize first (prevents clone conflicts + avoids rm -rf approvals)
+      const command = this.normalizeCommand(rawCommand);
       const sanitizedCommand = this.sanitizeSecrets(command);
-      logAgentEvent(this.db, sessionId, "command", sanitizedCommand);
-      this.forwardToGlobalLogs("command", `[#${channel}] ${sanitizedCommand}`);
+
+      // Log as proposed (captures intent before policy gate)
+      logAgentEvent(this.db, sessionId, "command_proposed", sanitizedCommand);
+      this.forwardToGlobalLogs("command_proposed", `[#${channel}] ${sanitizedCommand}`);
+
       const safety = enforceSafety(command, this.db, sessionId, [], {
         applySelfModificationRateLimit: options.applySelfModificationRateLimit
       });
 
       if (!safety.allowed && safety.requiresApproval) {
+        logAgentEvent(this.db, sessionId, "command_needs_approval", sanitizedCommand);
+        this.forwardToGlobalLogs("command_needs_approval", `[#${channel}] ${sanitizedCommand}`);
         await createApprovalRequest(
           this.pendingApprovals,
           {
@@ -1058,6 +1159,10 @@ export class AgentDO {
         doneText = blockedReason;
         continue;
       }
+
+      // Only log as command once it's actually executing.
+      logAgentEvent(this.db, sessionId, "command", sanitizedCommand);
+      this.forwardToGlobalLogs("command", `[#${channel}] ${sanitizedCommand}`);
 
       if (options.applySelfModificationRateLimit && isSelfModificationCommand(command)) {
         incrementRateLimit(this.db, "session", sessionId);
@@ -1141,6 +1246,15 @@ export class AgentDO {
     }
 
     return result;
+  }
+
+  private getDangerousTemplateReason(commandTemplate: string): string | null {
+    for (const rule of DANGEROUS_TOOL_TEMPLATE_RULES) {
+      if (rule.pattern.test(commandTemplate)) {
+        return rule.reason;
+      }
+    }
+    return null;
   }
 
   private async handleTaskEvent(
@@ -1408,6 +1522,7 @@ ${auditContext}` }
       const responseText = extractTextContent(chatResponse) || "Done.";
       saveMessage(this.db, sessionId, { role: "assistant", content: responseText });
       await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, responseText);
+      this.forwardToGlobalLogs("chat_reply", `[#${channel}] ${responseText.slice(0, 500)}`);
       return;
     }
 
@@ -1453,15 +1568,24 @@ ${auditContext}` }
   // sandbox without being embedded in individual command strings.
   private async injectSecretsIntoSandbox(): Promise<void> {
     const lines: string[] = [];
-    // Prevent git from trying to open /dev/tty for interactive credential prompts,
-    // which causes "No such device or address" errors in non-TTY sandbox environments.
     lines.push("export GIT_TERMINAL_PROMPT=0");
-    if (this.env.GITHUB_TOKEN) {
-      lines.push(`export GITHUB_TOKEN=${shellEscape(this.env.GITHUB_TOKEN)}`);
+    lines.push("export GIT_ASKPASS=/usr/local/bin/blob-git-askpass");
+    lines.push("export GIT_ASKPASS_REQUIRE=force");
+
+    const githubToken = this.env.GITHUB_TOKEN || this.env.GH_TOKEN;
+    if (githubToken) {
+      lines.push(`export GITHUB_TOKEN=${shellEscape(githubToken)}`);
+      lines.push(`export GH_TOKEN=${shellEscape(githubToken)}`);
     }
-    if (this.env.GITHUB_USERNAME) {
-      lines.push(`export GITHUB_USERNAME=${shellEscape(this.env.GITHUB_USERNAME)}`);
-    }
+
+    const username = this.env.GITHUB_USERNAME || "blob-agent";
+    const email = `${username}@users.noreply.github.com`;
+    lines.push(`export GITHUB_USERNAME=${shellEscape(username)}`);
+    lines.push(`export GIT_AUTHOR_NAME=${shellEscape(username)}`);
+    lines.push(`export GIT_AUTHOR_EMAIL=${shellEscape(email)}`);
+    lines.push(`export GIT_COMMITTER_NAME=${shellEscape(username)}`);
+    lines.push(`export GIT_COMMITTER_EMAIL=${shellEscape(email)}`);
+
     await this.sandbox.writeFile(SANDBOX_ENV_FILE, lines.join("\n") + "\n");
   }
 
@@ -1474,6 +1598,15 @@ ${auditContext}` }
       result = result.split(token).join("[GITHUB_TOKEN]");
     }
     return result;
+  }
+
+  // Remove raw tool markup from plain-text Slack responses so users do not see
+  // XML-like tool protocol blocks in channels.
+  private stripToolMarkupForSlack(text: string): string {
+    return text
+      .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "")
+      .replace(/<tool_result>[\s\S]*?<\/tool_result>/gi, "")
+      .trim();
   }
 
   private async endSandboxSession(sessionId: string): Promise<void> {
