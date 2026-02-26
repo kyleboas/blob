@@ -1441,6 +1441,7 @@ ${auditContext}` }
       const responseText = extractTextContent(chatResponse) || "Done.";
       saveMessage(this.db, sessionId, { role: "assistant", content: responseText });
       await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, responseText);
+      this.forwardToGlobalLogs("chat_reply", `[#${channel}] ${responseText.slice(0, 500)}`);
       return;
     }
 

@@ -1590,6 +1590,18 @@ describe("AgentDO heartbeat actions", () => {
 
     expect(spawnCalls).toHaveLength(0);
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C-chat", "Hi there!");
+
+    const logCalls = agentDOFetch.mock.calls.filter((args: unknown[]) => {
+      const init = args[1] as RequestInit | undefined;
+      return String(init?.body ?? "").includes('"action":"log_event"');
+    });
+    expect(logCalls.length).toBeGreaterThan(0);
+    const chatLogPayload = logCalls
+      .map((args: unknown[]) => JSON.parse(String((args[1] as RequestInit | undefined)?.body ?? "")))
+      .find((payload: { eventType?: string }) => payload.eventType === "chat_reply");
+    expect(chatLogPayload).toBeDefined();
+    expect(chatLogPayload.message).toContain("[#C-chat] Hi there!");
+
     vi.unstubAllGlobals();
   });
 
