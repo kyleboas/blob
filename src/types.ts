@@ -1,6 +1,7 @@
 export interface Env {
   AGENT_DO: DurableObjectNamespace;
   REPO_STORE: R2Bucket;
+  USER_CONFIG_KV?: KVNamespace;
   SANDBOX?: Fetcher;
   ANTHROPIC_API_KEY?: string;
   OPENAI_API_KEY?: string;

@@ -1,0 +1,58 @@
+{
+  "version": "1.0",
+  "createdAt": "2026-02-26T00:00:00Z",
+  "updatedAt": "2026-02-26T00:00:00Z",
+  "userId": "your-github-username",
+  "user": {
+    "name": "Your Name",
+    "githubUsername": "your-github-username",
+    "primaryRepository": "your-username/your-repo",
+    "description": "Description of your project"
+  },
+  "project": {
+    "name": "Your Project Name",
+    "goal": "What this agent should accomplish",
+    "status": "In development",
+    "defaultBehavior": "Work autonomously and identify what needs doing without prompting"
+  },
+  "messageFormatting": {
+    "maxCharacters": 255,
+    "includeEmojis": false,
+    "markdownStyle": "code-blocks-only"
+  },
+  "toolConfig": {
+    "timeoutMs": 30000,
+    "retryAttempts": 3,
+    "gitHubApiTimeoutStrategy": "flag-quickly"
+  },
+  "guardrails": {
+    "executionMode": "follow the approved plan and complete the requested task only",
+    "preferDeterministic": true,
+    "onBlockedBehavior": "report-and-stop",
+    "allowSpeculativeChanges": false,
+    "rules": [
+      "Prefer deterministic tool use with minimal steps",
+      "You must output the correct JSON syntax to trigger a tool call when taking action",
+      "Use only provided tools and avoid speculative or unrelated changes",
+      "If blocked, report the blocker clearly and stop instead of guessing"
+    ]
+  },
+  "systemPrompt": {
+    "greetingBehavior": "auto-start",
+    "autonomousStartupChecks": true,
+    "checkTasksJsonFirst": true,
+    "checkGitHistoryFirst": true,
+    "checkAuditLogsFirst": true
+  },
+  "rateLimits": {
+    "selfModifyPerSession": 3,
+    "selfModifyPerDay": 10,
+    "approvalTimeoutMinutes": 30,
+    "commandTimeoutMs": 30000
+  },
+  "modelRouting": {
+    "defaultModel": "claude-haiku-4-5",
+    "complexTaskModel": "claude-sonnet-4-6",
+    "complexTaskKeywords": ["refactor", "architecture", "security", "self-modify"]
+  }
+}
