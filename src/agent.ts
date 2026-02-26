@@ -238,6 +238,25 @@ const EXECUTION_SYSTEM_GUARDRAILS = [
   "If blocked, report the blocker clearly and stop instead of guessing."
 ].join(" ");
 
+const DANGEROUS_TOOL_TEMPLATE_RULES: Array<{ pattern: RegExp; reason: string }> = [
+  {
+    pattern: /\bgit\s+push(?:\s+[^\n;]+)*\s+main\b/i,
+    reason: "Tool templates must never push directly to main. Push a feature branch and open a PR instead."
+  },
+  {
+    pattern: /\bgit\s+reset\s+--hard\b/i,
+    reason: "Tool templates cannot include destructive git reset --hard commands."
+  },
+  {
+    pattern: /\brm\s+-rf\b/i,
+    reason: "Tool templates cannot include rm -rf."
+  },
+  {
+    pattern: /\bwrangler\s+(?:deploy|publish)\b/i,
+    reason: "Tool templates cannot deploy directly. Use a reviewed PR-based workflow."
+  }
+];
+
 function parseSettingsCommand(rawText: string): SettingsCommand | null {
   const text = rawText.trim();
   if (!text) return null;
@@ -996,8 +1015,26 @@ export class AgentDO {
 
       if (toolBlock.name === CREATE_TOOL_TOOL.name) {
         const validation = validateDynamicToolDefinition(toolBlock.input);
+        const preflightMessage = validation.ok
+          ? [
+              "🔎 TOOL PREVIEW (create_tool)",
+              `name: ${validation.definition.name}`,
+              `description: ${validation.definition.description}`,
+              `command_template: ${this.sanitizeSecrets(validation.definition.commandTemplate)}`
+            ].join("\n")
+          : [
+              "🔎 TOOL PREVIEW (create_tool)",
+              `invalid definition payload: ${this.sanitizeSecrets(JSON.stringify(toolBlock.input))}`
+            ].join("\n");
+        await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, preflightMessage);
+
+        const dangerousTemplateReason = validation.ok
+          ? this.getDangerousTemplateReason(validation.definition.commandTemplate)
+          : null;
         const toolResult = validation.ok
-          ? (() => {
+          ? dangerousTemplateReason
+            ? `Tool creation rejected: ${dangerousTemplateReason}`
+            : (() => {
               options.dynamicTools.set(validation.definition.name, validation.definition);
               return `Created tool \"${validation.definition.name}\" with args: ${validation.definition.args.join(", ") || "(none)"}.`;
             })()
@@ -1027,6 +1064,16 @@ export class AgentDO {
       }
 
       const sanitizedCommand = this.sanitizeSecrets(command);
+      await this.deps.postSlackMessage(
+        this.env.SLACK_BOT_TOKEN,
+        channel,
+        [
+          `🔎 TOOL PREVIEW (${toolBlock.name})`,
+          "```bash",
+          sanitizedCommand,
+          "```"
+        ].join("\n")
+      );
       logAgentEvent(this.db, sessionId, "command", sanitizedCommand);
       this.forwardToGlobalLogs("command", `[#${channel}] ${sanitizedCommand}`);
       const safety = enforceSafety(command, this.db, sessionId, [], {
@@ -1141,6 +1188,15 @@ export class AgentDO {
     }
 
     return result;
+  }
+
+  private getDangerousTemplateReason(commandTemplate: string): string | null {
+    for (const rule of DANGEROUS_TOOL_TEMPLATE_RULES) {
+      if (rule.pattern.test(commandTemplate)) {
+        return rule.reason;
+      }
+    }
+    return null;
   }
 
   private async handleTaskEvent(
