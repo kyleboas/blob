@@ -331,6 +331,36 @@ describe("AgentDO runAgentLoop", () => {
       })
     );
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "All done");
+    expect(postSlackMessage).not.toHaveBeenCalledWith(
+      "token",
+      "C1",
+      expect.stringContaining("🔎 TOOL PREVIEW")
+    );
+  });
+
+  it("strips raw tool_call and tool_result markup before posting final text to Slack", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const llmCall = vi.fn().mockResolvedValue({
+      content: [
+        {
+          type: "text",
+          text: "Done\n<tool_call>{\"name\":\"bash\"}</tool_call>\n<tool_result>ok</tool_result>"
+        }
+      ]
+    });
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runAgentLoop("say done", "C1", "thread-strip-tool-markup");
+
+    expect(result.finalText).toContain("<tool_call>");
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Done");
   });
 
   it("does not inject session summaries into the system prompt", async () => {
@@ -995,7 +1025,7 @@ describe("AgentDO runAgentLoop", () => {
     );
   });
 
-  it("posts tool previews to Slack before create_tool and command execution", async () => {
+  it("does not post tool preview messages to Slack for create_tool or command execution", async () => {
     const sql = new FakeSql();
     const { env, sandbox } = makeTestEnv();
     const llmCall = vi
@@ -1032,16 +1062,12 @@ describe("AgentDO runAgentLoop", () => {
 
     await agent.runAgentLoop("inspect files", "C1", "thread-tool-preview");
 
-    expect(postSlackMessage).toHaveBeenCalledWith(
+    expect(postSlackMessage).not.toHaveBeenCalledWith(
       "token",
       "C1",
-      expect.stringContaining("TOOL PREVIEW (create_tool)")
+      expect.stringContaining("TOOL PREVIEW")
     );
-    expect(postSlackMessage).toHaveBeenCalledWith(
-      "token",
-      "C1",
-      expect.stringContaining("TOOL PREVIEW (list_top_files)")
-    );
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Done");
     expect(sandbox.exec).toHaveBeenCalledWith(expect.stringContaining("find /workspace/blob -maxdepth 1 -type f"));
   });
 
