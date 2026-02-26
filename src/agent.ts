@@ -959,7 +959,7 @@ export class AgentDO {
       await thinkingMessagePromise;
     }
 
-    await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, finalText);
+    await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, this.stripToolMarkupForSlack(finalText));
     logAgentEvent(this.db, sessionId, "completed", finalText);
     this.forwardToGlobalLogs("completed", `[#${channel}] ${finalText.slice(0, 300)}`);
 
@@ -1530,6 +1530,15 @@ ${auditContext}` }
       result = result.split(token).join("[GITHUB_TOKEN]");
     }
     return result;
+  }
+
+  // Remove raw tool markup from plain-text Slack responses so users do not see
+  // XML-like tool protocol blocks in channels.
+  private stripToolMarkupForSlack(text: string): string {
+    return text
+      .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "")
+      .replace(/<tool_result>[\s\S]*?<\/tool_result>/gi, "")
+      .trim();
   }
 
   private async endSandboxSession(sessionId: string): Promise<void> {
