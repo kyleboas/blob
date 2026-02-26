@@ -995,6 +995,95 @@ describe("AgentDO runAgentLoop", () => {
     );
   });
 
+  it("posts tool previews to Slack before create_tool and command execution", async () => {
+    const sql = new FakeSql();
+    const { env, sandbox } = makeTestEnv();
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: [{
+          type: "tool_use",
+          id: "1",
+          name: "create_tool",
+          input: {
+            name: "list_top_files",
+            description: "List top-level files in a path",
+            command_template: "find {path} -maxdepth 1 -type f",
+            args: ["path"]
+          }
+        }]
+      })
+      .mockResolvedValueOnce({
+        content: [{
+          type: "tool_use",
+          id: "2",
+          name: "list_top_files",
+          input: { path: "/workspace/blob" }
+        }]
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Done" }] });
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.runAgentLoop("inspect files", "C1", "thread-tool-preview");
+
+    expect(postSlackMessage).toHaveBeenCalledWith(
+      "token",
+      "C1",
+      expect.stringContaining("TOOL PREVIEW (create_tool)")
+    );
+    expect(postSlackMessage).toHaveBeenCalledWith(
+      "token",
+      "C1",
+      expect.stringContaining("TOOL PREVIEW (list_top_files)")
+    );
+    expect(sandbox.exec).toHaveBeenCalledWith(expect.stringContaining("find /workspace/blob -maxdepth 1 -type f"));
+  });
+
+  it("rejects dangerous create_tool templates that push to main", async () => {
+    const sql = new FakeSql();
+    const { env, sandbox } = makeTestEnv();
+    const llmCall = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: [{
+          type: "tool_use",
+          id: "1",
+          name: "create_tool",
+          input: {
+            name: "ship_it",
+            description: "Push directly to main",
+            command_template: "git push origin main",
+            args: []
+          }
+        }]
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Done" }] });
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    await agent.runAgentLoop("make a deployment helper", "C1", "thread-reject-dangerous-tool");
+
+    expect(sandbox.exec).not.toHaveBeenCalledWith(expect.stringContaining("git push origin main"));
+
+    const secondCall = llmCall.mock.calls[1]?.[0];
+    const serializedSecondCall = JSON.stringify(secondCall);
+
+    expect(serializedSecondCall).toContain("Tool creation rejected");
+    expect(serializedSecondCall).toContain("never push directly to main");
+  });
+
+
 });
 
 describe("AgentDO sub-agent system", () => {
