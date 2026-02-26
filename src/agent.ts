@@ -1582,13 +1582,34 @@ ${auditContext}` }
     // Prevent git from trying to open /dev/tty for interactive credential prompts,
     // which causes "No such device or address" errors in non-TTY sandbox environments.
     lines.push("export GIT_TERMINAL_PROMPT=0");
+    // Force git to use a non-interactive askpass helper for HTTPS auth flows.
+    lines.push("export GIT_ASKPASS=/workspace/.blob-git-askpass");
+    lines.push("export GIT_ASKPASS_REQUIRE=force");
     if (this.env.GITHUB_TOKEN) {
       lines.push(`export GITHUB_TOKEN=${shellEscape(this.env.GITHUB_TOKEN)}`);
+      // Some tooling checks GH_TOKEN instead of GITHUB_TOKEN.
+      lines.push(`export GH_TOKEN=${shellEscape(this.env.GITHUB_TOKEN)}`);
     }
-    if (this.env.GITHUB_USERNAME) {
-      lines.push(`export GITHUB_USERNAME=${shellEscape(this.env.GITHUB_USERNAME)}`);
-    }
+
+    const username = this.env.GITHUB_USERNAME ? this.env.GITHUB_USERNAME : "blob-agent";
+    const email = `${username}@users.noreply.github.com`;
+
+    lines.push(`export GITHUB_USERNAME=${shellEscape(username)}`);
+    lines.push(`export GIT_AUTHOR_NAME=${shellEscape(username)}`);
+    lines.push(`export GIT_AUTHOR_EMAIL=${shellEscape(email)}`);
+    lines.push(`export GIT_COMMITTER_NAME=${shellEscape(username)}`);
+    lines.push(`export GIT_COMMITTER_EMAIL=${shellEscape(email)}`);
     await this.sandbox.writeFile(SANDBOX_ENV_FILE, lines.join("\n") + "\n");
+
+    const askpass = `#!/bin/sh
+case "$1" in
+  *Username*) echo "x-access-token" ;;
+  *Password*) echo "\${GITHUB_TOKEN:-\${GH_TOKEN:-}}" ;;
+  *) echo "" ;;
+esac
+`;
+    await this.sandbox.writeFile("/workspace/.blob-git-askpass", askpass);
+    await this.sandbox.exec("chmod 700 /workspace/.blob-git-askpass");
   }
 
   // Replace any known secret values with a placeholder so they are never written
