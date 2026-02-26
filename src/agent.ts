@@ -1572,9 +1572,10 @@ ${auditContext}` }
     lines.push("export GIT_ASKPASS=/usr/local/bin/blob-git-askpass");
     lines.push("export GIT_ASKPASS_REQUIRE=force");
 
-    if (this.env.GITHUB_TOKEN) {
-      lines.push(`export GITHUB_TOKEN=${shellEscape(this.env.GITHUB_TOKEN)}`);
-      lines.push(`export GH_TOKEN=${shellEscape(this.env.GITHUB_TOKEN)}`);
+    const githubToken = this.env.GITHUB_TOKEN || this.env.GH_TOKEN;
+    if (githubToken) {
+      lines.push(`export GITHUB_TOKEN=${shellEscape(githubToken)}`);
+      lines.push(`export GH_TOKEN=${shellEscape(githubToken)}`);
     }
 
     const username = this.env.GITHUB_USERNAME || "blob-agent";

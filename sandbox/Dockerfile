@@ -12,6 +12,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   build-essential \
   && rm -rf /var/lib/apt/lists/*
 
+# Install a non-interactive git credential helper used by Blob.
+# Git calls this script for Username/Password prompts and it provides:
+# - username: x-access-token
+# - password: $GITHUB_TOKEN (or $GH_TOKEN)
 RUN cat >/usr/local/bin/blob-git-askpass <<'EOF' \
  && chmod 755 /usr/local/bin/blob-git-askpass
 #!/bin/sh
