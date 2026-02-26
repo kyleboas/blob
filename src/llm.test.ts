@@ -313,8 +313,9 @@ describe("callLLM", () => {
       model: "claude-sonnet-4-6",
       systemPrompt: "be helpful",
       messages: [{ role: "user", content: "hello" }],
-      fetchImpl: mockFetch
-    })).rejects.toThrow("LLM API error (500, attempt 2/2) [request-id=req-abc cf-ray=trace-123]: {\"error\":\"internal server error\"}");
+      fetchImpl: mockFetch,
+      sleepImpl: vi.fn().mockResolvedValue(undefined)
+    })).rejects.toThrow("LLM API error (500, attempt 5/5) [request-id=req-abc cf-ray=trace-123]: {\"error\":\"internal server error\"}");
   });
 
 
@@ -474,6 +475,7 @@ describe("callLLM", () => {
 
     await callLLM({
       openAiApiKey: "openai-key",
+      model: "openai/gpt-4.1-mini",
       simpleModel: "openai/gpt-4.1-mini",
       complexModel: "openai/gpt-4.1-mini",
       tools: [{ name: "bash", description: "run", input_schema: { type: "object", properties: {} } }],
