@@ -250,6 +250,8 @@ describe("worker entry point", () => {
     expect(response.status).toBe(200);
     expect(html).toContain("/logs/stream");
     expect(html).toContain("line-command_error");
+    expect(html).toContain("Live stream disconnected");
+    expect(html).toContain("stale stream");
   });
 
 
