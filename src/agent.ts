@@ -989,19 +989,22 @@ export class AgentDO {
   }
 
   private normalizeGitClone(command: string): string {
+    const buildEnsureCloneBlock = (url: string, dest: string): string => [
+      `if [ -d ${dest}/.git ]; then`,
+      `  git -C ${dest} fetch --prune origin;`,
+      `  git -C ${dest} remote set-head origin -a >/dev/null 2>&1 || true;`,
+      `  git -C ${dest} rev-parse --abbrev-ref origin/HEAD | sed 's|^origin/||' | xargs -I{} git -C ${dest} checkout -B {} origin/{} || git -C ${dest} checkout -B main origin/main;`,
+      "else",
+      `  git clone ${url} ${dest};`,
+      "fi"
+    ].join(" ");
+
     // Case 1: rm -rf DEST && git clone URL DEST -> ensure block (no rm)
     command = command.replace(
       /\brm\s+-rf\s+([^\s&;]+)\s*&&\s*git\s+clone\s+([^\s&;]+)\s+([^\s&;]+)/g,
       (_m, dest1, url, dest2) => {
         const dest = dest2 || dest1;
-        return [
-          `if [ -d ${dest}/.git ]; then`,
-          `  git -C ${dest} fetch --all --prune || true;`,
-          `  git -C ${dest} pull --ff-only || true;`,
-          "else",
-          `  git clone ${url} ${dest};`,
-          "fi"
-        ].join(" ");
+        return buildEnsureCloneBlock(url, dest);
       }
     );
 
@@ -1009,14 +1012,7 @@ export class AgentDO {
     command = command.replace(
       /\bgit\s+clone\s+([^\s&;]+)\s+([^\s&;]+)/g,
       (_m, url, dest) => {
-        return [
-          `if [ -d ${dest}/.git ]; then`,
-          `  git -C ${dest} fetch --all --prune || true;`,
-          `  git -C ${dest} pull --ff-only || true;`,
-          "else",
-          `  git clone ${url} ${dest};`,
-          "fi"
-        ].join(" ");
+        return buildEnsureCloneBlock(url, dest);
       }
     );
 
@@ -1028,14 +1024,7 @@ export class AgentDO {
         if (!dir) {
           return `git clone ${url}`;
         }
-        return [
-          `if [ -d ${dir}/.git ]; then`,
-          `  git -C ${dir} fetch --all --prune || true;`,
-          `  git -C ${dir} pull --ff-only || true;`,
-          "else",
-          `  git clone ${url} ${dir};`,
-          "fi"
-        ].join(" ");
+        return buildEnsureCloneBlock(url, dir);
       }
     );
 
