@@ -13,6 +13,7 @@ export interface Env {
   GITHUB_TOKEN?: string;
   GH_TOKEN?: string;
   GITHUB_USERNAME?: string;
+  DIAG_TOKEN?: string;
 }
 
 export type ConversationRole = "user" | "assistant";

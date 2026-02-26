@@ -40,6 +40,21 @@ const REQUIRES_APPROVAL_PATTERNS = [
   /git\s+push\s+--force/
 ];
 
+const BLOCKED_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
+  {
+    pattern: /(^|\s)(?:gh)(\s|$)/i,
+    reason: "GitHub CLI (gh) is blocked. Use git + github_tools.py or Worker GitHub API PR flow instead."
+  },
+  {
+    pattern: /(?:^|\s)(?:cat|echo|tee|printf|cp|mv|sed)[^\n]*\.?netrc\b/i,
+    reason: "Writing credential files such as .netrc is blocked. Use GITHUB_TOKEN-based auth instead."
+  },
+  {
+    pattern: /git\s+push\s+origin\s+(?:main|master)\b/i,
+    reason: "Direct pushes to default branches are blocked. Use feature branch + PR workflow."
+  }
+];
+
 const CONDITIONAL_PATTERNS = [
   /^git\s+add\b/,
   /^git\s+commit\b/,
@@ -121,6 +136,13 @@ export function enforceSafety(
     const rateLimit = checkRateLimit(sql, sessionId);
     if (!rateLimit.allowed) {
       return { allowed: false, reason: rateLimit.reason };
+    }
+  }
+
+
+  for (const blocked of BLOCKED_PATTERNS) {
+    if (blocked.pattern.test(command)) {
+      return { allowed: false, reason: blocked.reason, requiresApproval: false };
     }
   }
 

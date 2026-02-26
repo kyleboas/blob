@@ -88,3 +88,31 @@ Operators can steer autonomous planning at any time by posting feedback to the a
 ```
 
 Feedback is persisted with timestamp/channel metadata and is injected into the next autonomous planning cycle.
+
+## PR workflow safety + diagnostics
+
+Blob now enforces a PR-first workflow for risky git operations:
+- blocks `git push origin main/master`
+- blocks `gh ...` commands
+- blocks `.netrc` credential-file writes
+- rewrites `git checkout -b <name>` into idempotent `git checkout -B <name>`
+
+### Required secrets
+
+- `GITHUB_TOKEN` (or `GH_TOKEN`) for GitHub API auth
+- `GITHUB_USERNAME` (recommended)
+- `DIAG_TOKEN` for `/diag/run` authorization
+- `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`
+
+### Run diagnostics
+
+```bash
+curl -X POST https://<your-worker-domain>/diag/run \
+  -H "Authorization: Bearer ${DIAG_TOKEN}" \
+  -H "Content-Type: application/json"
+```
+
+Response format:
+- `trace_id`
+- `ok`
+- `checks[]` (`name`, `ok`, `ms`, optional `error`)

@@ -1,10 +1,86 @@
 import { mapChannelToDO, parseSlackEvent, verifySlackSignature } from "./slack";
+import { classifyMessage } from "./llm";
 import type { Env, SlackEvent } from "./types";
 
 export { AgentDO } from "./agent";
 
 const GLOBAL_LOGS_CHANNEL = "__global__";
 const HEARTBEAT_DO_NAME = "blob:heartbeats";
+
+interface DiagCheckResult {
+  name: string;
+  ok: boolean;
+  ms: number;
+  error?: string;
+}
+
+async function runDiagCheck(name: string, fn: () => Promise<void>): Promise<DiagCheckResult> {
+  const start = Date.now();
+  try {
+    await fn();
+    return { name, ok: true, ms: Date.now() - start };
+  } catch (error) {
+    return {
+      name,
+      ok: false,
+      ms: Date.now() - start,
+      error: error instanceof Error ? error.message : "unknown error"
+    };
+  }
+}
+
+async function runDiagnostics(env: Env, traceId: string): Promise<{ trace_id: string; ok: boolean; checks: DiagCheckResult[] }> {
+  const checks: DiagCheckResult[] = [];
+
+  checks.push(await runDiagCheck("worker_health", async () => {
+    if (!env.SLACK_BOT_TOKEN) throw new Error("SLACK_BOT_TOKEN missing");
+  }));
+
+  checks.push(await runDiagCheck("do_round_trip", async () => {
+    const response = await forwardToHeartbeatDO(env, { action: "logs_snapshot", trace_id: traceId });
+    if (!response.ok) throw new Error(`DO returned ${response.status}`);
+  }));
+
+  checks.push(await runDiagCheck("sandbox_exec", async () => {
+    if (!env.SANDBOX) throw new Error("SANDBOX binding missing");
+    const sandbox = env.SANDBOX as unknown as { exec: (command: string) => Promise<{ stdout?: string; stderr?: string; exitCode?: number }> };
+    const result = await sandbox.exec("echo ok");
+    if ((result.exitCode ?? 1) !== 0) throw new Error(result.stderr ?? "sandbox command failed");
+  }));
+
+  checks.push(await runDiagCheck("llm_config", async () => {
+    const classification = await classifyMessage({
+      systemPrompt: "diag",
+      messages: [{ role: "user", content: "ping" }],
+      routerModel: "openai/gpt-4.1-mini",
+      apiKey: env.ANTHROPIC_API_KEY,
+      openAiApiKey: env.OPENAI_API_KEY,
+      aiGatewayBaseUrl: env.AI_GATEWAY_BASE_URL,
+      aiGatewayToken: env.AI_GATEWAY_TOKEN
+    });
+    if (!["chat", "routine", "complex"].includes(classification)) {
+      throw new Error("Unexpected LLM classification result");
+    }
+  }));
+
+  checks.push(await runDiagCheck("github_auth", async () => {
+    const token = env.GITHUB_TOKEN ?? env.GH_TOKEN;
+    if (!token) throw new Error("GITHUB_TOKEN missing");
+    const response = await fetch("https://api.github.com/user", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json"
+      }
+    });
+    if (!response.ok) throw new Error(`GitHub API returned ${response.status}`);
+  }));
+
+  return {
+    trace_id: traceId,
+    ok: checks.every((check) => check.ok),
+    checks
+  };
+}
 
 async function forwardToHeartbeatDO(
   env: Env,
@@ -387,6 +463,18 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/health") {
       return new Response("ok", { status: 200 });
+    }
+
+    if (request.method === "POST" && url.pathname === "/diag/run") {
+      const authHeader = request.headers.get("authorization") ?? "";
+      const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+      if (!env.DIAG_TOKEN || !token || token !== env.DIAG_TOKEN) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+
+      const traceId = crypto.randomUUID();
+      const payload = await runDiagnostics(env, traceId);
+      return Response.json(payload, { status: payload.ok ? 200 : 500 });
     }
 
     if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/logs" || url.pathname === "/live-logs")) {
