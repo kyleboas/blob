@@ -45,6 +45,17 @@ def test_loop_terminates_on_end_turn() -> None:
     assert agent.run_task("say hi") == "done"
 
 
+def test_system_prompt_enforces_pr_guardrails() -> None:
+    agent = Agent(llm_client=MockLLM([]), sandbox=DummySandbox(), approval_gate=DummyApproval())
+
+    prompt = agent._system_prompt
+    assert "never use gh; it is not installed" in prompt
+    assert "Never use fixed branch names like test-pr" in prompt
+    assert "canary-pr-$RANDOM" in prompt
+    assert "Never rely on git push origin" in prompt
+    assert "Always create PRs via python github_tools.py create-pr" in prompt
+
+
 def test_tool_dispatch_and_on_status_callback() -> None:
     statuses: list[str] = []
     llm = MockLLM([
