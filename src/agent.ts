@@ -1361,10 +1361,20 @@ ${auditContext}` }
 
     if (messageType === "chat") {
       // Respond conversationally without spinning up a sub-agent or using tools.
-      // Use a minimal system prompt so the chat model doesn't inherit agent
-      // directives from AGENT.md (e.g. "take initiative", workspace instructions)
-      // and respond as if it were a task-execution agent.
-      const chatSystemPrompt = "You are Blob, a helpful assistant. Respond conversationally and concisely.";
+      // Use a focused system prompt that describes actual capabilities without
+      // inheriting proactive agent directives from AGENT.md (e.g. "take initiative",
+      // "check tasks.json on startup") that would cause the chat model to behave
+      // like a task-execution agent.
+      const chatSystemPrompt = [
+        "You are Blob, a helpful assistant. Respond conversationally and concisely.",
+        "You are a coding agent with real capabilities: a bash sandbox lets you run shell commands,",
+        "clone and search git repositories, read and write files on the filesystem,",
+        "and interact with the GitHub API (create PRs, fork repos, push branches).",
+        "Your files persist between sessions via git history and AGENT.md.",
+        "When asked about your capabilities, describe what you can actually do.",
+        "Do not claim generic LLM limitations like 'I cannot access files',",
+        "'I have no memory between conversations', or 'I cannot browse repositories'."
+      ].join(" ");
       const conversation = [...priorMessages, { role: "user" as const, content: task }];
       const chatResponse = await this.deps.llmCall(this.buildLlmInput({
         systemPrompt: chatSystemPrompt,
