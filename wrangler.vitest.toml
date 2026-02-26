@@ -1,0 +1,19 @@
+name = "blob-agent"
+main = "src/index.ts"
+compatibility_date = "2025-09-06"
+compatibility_flags = ["nodejs_compat"]
+
+[[durable_objects.bindings]]
+name = "AGENT_DO"
+class_name = "AgentDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["AgentDO"]
+
+[[r2_buckets]]
+binding = "REPO_STORE"
+bucket_name = "blob-repo-store"
+
+[observability.logs]
+enabled = true
