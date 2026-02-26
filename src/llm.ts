@@ -1,6 +1,7 @@
 import {
   LLM_OVERLOAD_RETRY_BASE_MS,
   LLM_OVERLOAD_RETRY_MAX,
+  LLM_MAX_TOKENS,
   LLM_REQUEST_TIMEOUT_MS,
   MODEL_ROUTER,
   MODEL_CHAT,
@@ -29,6 +30,7 @@ export interface CallLLMInput {
   // Backwards-compatible aliases
   routineModel?: string;
   model?: string;
+  maxTokens?: number;
   fetchImpl?: typeof fetch;
   sleepImpl?: (ms: number) => Promise<void>;
   requestTimeoutMs?: number;
@@ -477,6 +479,7 @@ export async function classifyMessage(input: {
 export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
   const fetchImpl = input.fetchImpl ?? fetch;
   const sleepImpl = input.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const maxTokens = input.maxTokens ?? LLM_MAX_TOKENS;
   const routerModel = input.routerModel ?? input.routineModel ?? MODEL_ROUTER;
   const chatModel = input.chatModel ?? MODEL_CHAT;
   const simpleModel = input.simpleModel ?? input.routineModel ?? MODEL_SIMPLE;
@@ -553,11 +556,11 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
         model: resolvedModel,
         messages: toOpenAIMessages(input.systemPrompt, input.messages),
         tools: toOpenAITools(input.tools),
-        max_tokens: 4096
+        max_tokens: maxTokens
       })
     : JSON.stringify({
         model: resolvedModel,
-        max_tokens: 4096,
+        max_tokens: maxTokens,
         system: [
           {
             type: "text",

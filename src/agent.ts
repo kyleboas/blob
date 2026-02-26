@@ -730,6 +730,7 @@ export class AgentDO {
     taskComplexityHint?: "routine" | "complex";
     model?: string;
     modelRole?: "planner" | "execution";
+    maxTokens?: number;
   }): {
     aiGatewayToken?: string;
     aiGatewayBaseUrl?: string;
@@ -742,6 +743,7 @@ export class AgentDO {
     tools?: unknown[];
     taskComplexityHint?: "routine" | "complex";
     model?: string;
+    maxTokens?: number;
   } {
     const settings = this.getRuntimeModelSettings();
     const role = overrides.modelRole ?? "planner";
