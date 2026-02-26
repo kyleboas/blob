@@ -1,0 +1,32 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      # Your repo's default "test" script is typecheck (tsc --noEmit)
+      - name: Typecheck
+        run: npm test
+
+      # Actually run the Vitest suite (src/**/*.test.ts per vitest.config.ts)
+      - name: Run unit/integration tests (Vitest)
+        run: npx vitest run
