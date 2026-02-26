@@ -230,6 +230,7 @@ type SettingsCommand =
 const EXECUTION_SYSTEM_GUARDRAILS = [
   "Execution mode: follow the approved plan and complete the requested task only.",
   "Prefer deterministic tool use with minimal steps.",
+  "You must output the correct JSON syntax to trigger a tool call when taking action.",
   "Use only provided tools and avoid speculative or unrelated changes.",
   "If blocked, report the blocker clearly and stop instead of guessing."
 ].join(" ");
