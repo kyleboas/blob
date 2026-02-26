@@ -159,6 +159,72 @@ def test_push_branch_tool_path() -> None:
     mock_push.assert_called_once()
 
 
+
+def test_push_branch_uses_github_tools() -> None:
+    agent = Agent(llm_client=MockLLM([]), sandbox=DummySandbox(), approval_gate=DummyApproval())
+
+    def fake_run(cmd: list[str], **kwargs):
+        if cmd[:4] == ["git", "remote", "get-url", "origin"]:
+            return MagicMock(returncode=0, stdout="https://github.com/octo/example.git\n", stderr="")
+        if cmd[:3] == ["python", "github_tools.py", "push"]:
+            return MagicMock(returncode=0, stdout="ok", stderr="")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    with patch("agent.subprocess.run", side_effect=fake_run) as mock_run:
+        result = agent._push_branch_to_remote({"remote": "origin", "branch": "feature-1"})
+
+    assert result == "ok: pushed feature-1 to octo/example"
+    push_call = mock_run.call_args_list[1][0][0]
+    assert push_call == [
+        "python",
+        "github_tools.py",
+        "push",
+        "--owner",
+        "octo",
+        "--repo",
+        "example",
+        "--branch",
+        "feature-1",
+    ]
+
+
+def test_create_pr_uses_github_tools_push_and_create_pr() -> None:
+    agent = Agent(llm_client=MockLLM([]), sandbox=DummySandbox(), approval_gate=DummyApproval())
+
+    def fake_run(cmd: list[str], **kwargs):
+        if cmd[:4] == ["git", "remote", "get-url", "origin"]:
+            return MagicMock(returncode=0, stdout="https://github.com/octo/example.git\n", stderr="")
+        if cmd[:4] == ["git", "symbolic-ref", "refs/remotes/origin/HEAD"]:
+            return MagicMock(returncode=0, stdout="refs/remotes/origin/main\n", stderr="")
+        if cmd[:3] == ["python", "github_tools.py", "push"]:
+            return MagicMock(returncode=0, stdout="pushed", stderr="")
+        if cmd[:3] == ["python", "github_tools.py", "create-pr"]:
+            return MagicMock(returncode=0, stdout='{"url": "https://example/pr/1", "number": 1}', stderr="")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    with patch("agent.subprocess.run", side_effect=fake_run) as mock_run, patch.dict("os.environ", {"GITHUB_TOKEN": "t"}):
+        result = agent._create_github_pr({"title": "T", "body": "B", "head": "feature-1"})
+
+    assert result == "ok: opened PR #1 https://example/pr/1"
+    create_pr_call = mock_run.call_args_list[3][0][0]
+    assert create_pr_call == [
+        "python",
+        "github_tools.py",
+        "create-pr",
+        "--owner",
+        "octo",
+        "--repo",
+        "example",
+        "--title",
+        "T",
+        "--body",
+        "B",
+        "--head",
+        "octo:feature-1",
+        "--base",
+        "main",
+    ]
+
 def test_step_limit_enforcement() -> None:
     llm = MockLLM([
         LLMResponse(content=[{"type": "text", "text": "..."}], stop_reason="max_tokens", usage=LLMUsage(1, 1))
