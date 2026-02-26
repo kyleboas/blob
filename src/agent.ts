@@ -11,8 +11,11 @@ import {
   MODEL_PLANNER_SIMPLE,
   MODEL_PLANNER_COMPLEX,
   MODEL_EXECUTION_SIMPLE,
-  MODEL_EXECUTION_COMPLEX
+  MODEL_EXECUTION_COMPLEX,
+  buildExecutionGuardrails
 } from "./config";
+import { loadUserConfiguration } from "./kv-loader";
+import type { UserConfiguration } from "./kv-schema";
 import { callLLM, classifyMessage, type LLMResponse } from "./llm";
 import { enforceSafety, isSelfModificationCommand } from "./safety";
 import { SandboxClient, SANDBOX_ENV_FILE, type SandboxBinding } from "./sandbox-client";
@@ -389,12 +392,25 @@ export class AgentDO {
   private readonly sandbox: SandboxClient;
   private readonly deps: AgentDeps;
   private pendingApprovals = new Map<string, PendingApproval>();
+  private userConfig: UserConfiguration | null = null;
 
   constructor(private readonly ctx: DurableObjectStateLike, private readonly env: Env, deps: Partial<AgentDeps> = {}) {
     this.db = ctx.storage.sql;
     this.sandbox = new SandboxClient((env.SANDBOX as unknown as SandboxBinding | undefined) ?? UNCONFIGURED_SANDBOX);
     this.deps = { ...DEFAULT_DEPS, ...deps };
     initSchema(this.db);
+  }
+
+  /**
+   * Lazily load user configuration from KV on first access.
+   * Caches the result for the lifetime of this DO instance.
+   */
+  private async getUserConfiguration(): Promise<UserConfiguration> {
+    if (this.userConfig) {
+      return this.userConfig;
+    }
+    this.userConfig = await loadUserConfiguration({ USER_CONFIG_KV: this.env.USER_CONFIG_KV });
+    return this.userConfig;
   }
 
   private logDiagnostic(sessionId: string, eventType: string, message: string, channel?: string): void {
@@ -813,7 +829,11 @@ export class AgentDO {
         getKnowledge(this.db),
         this.getPromptPolicies()
       );
-    const systemPrompt = `${systemPromptBase}\n\n${EXECUTION_SYSTEM_GUARDRAILS}`;
+
+    // Load user configuration and build guardrails from it
+    const userConfig = await this.getUserConfiguration();
+    const executionGuardrails = buildExecutionGuardrails(userConfig);
+    const systemPrompt = `${systemPromptBase}\n\n${executionGuardrails}`;
     const dynamicTools = new Map<string, DynamicToolDefinition>();
 
     let thinkingTimer: ReturnType<typeof setTimeout> | undefined;
