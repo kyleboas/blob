@@ -341,7 +341,7 @@ describe("callLLM", () => {
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
     const body = JSON.parse(String(mockFetch.mock.calls[0][1]?.body));
-    expect(body.model).toBe(`workers-ai/${MODEL_CHAT}`);
+    expect(body.model).toBe(`anthropic/${MODEL_CHAT}`);
   });
 
   it("asks the router model to choose complexity when tools are present and model is not provided", async () => {
