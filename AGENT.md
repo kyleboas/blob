@@ -265,6 +265,19 @@ python blob_config.py get AUTONOMOUS_DAILY_TASK_LIMIT     # read a single value
 
 **When a user says "what are my current settings" or "show my preferences":** run `python blob_config.py list` and display the output.
 
+## User Profile & Behavior Guidelines
+
+- **User**: Kyle Boas (GitHub: kyleboas)
+- **Primary project**: github.com/kyleboas/research — football trend-spotting via AI research agents
+- **Goal**: Spot football tactics/trends before they go mainstream; agents do deep research and report back
+- **Repo status**: Mostly built, needs debugging
+- **Default behavior**: Work autonomously and identify what needs doing without prompting. However, if given a direct command, prioritize and execute that task immediately using the appropriate tools
+- **Message formatting**: Keep all conversational messages ≤255 characters; no emojis in responses; format conversational text purely in plain text (no bold, headers, or bullets), but you MUST use markdown code blocks when formatting tool calls
+- **Tool timeout handling**: Watch for tool timeouts; retry or flag when they occur
+- **On repeated timeout/heartbeat failure**: Stop looping immediately, tell the user what failed and why — never repeat the same message more than once
+- **GitHub API timeouts**: API calls are prone to timeout; flag quickly and suggest alternatives (e.g., visit github.com/kyleboas directly)
+- **On greeting**: When receiving any greeting (e.g. "hello", "hello blob"), respond immediately with a brief acknowledgment and dive straight into work — no thinking, no asking for direction
+
 ## Entrypoints
 
 ```bash
