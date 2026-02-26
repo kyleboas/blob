@@ -1056,7 +1056,7 @@ describe("AgentDO sub-agent system", () => {
     expect(postSlackMessage).toHaveBeenCalledWith(
       "token",
       "C1",
-      expect.stringContaining("Saved simple model: @cf/qwen/qwen2.5-coder-32b-instruct")
+      expect.stringContaining("Saved planner-simple model: @cf/qwen/qwen2.5-coder-32b-instruct")
     );
 
     const spawnCalls = agentDOFetch.mock.calls.filter((args: unknown[]) => {
@@ -1164,7 +1164,10 @@ describe("AgentDO sub-agent system", () => {
       })
     }));
 
-    expect(llmCall.mock.calls[2]?.[0]?.messages?.[0]?.content).toContain("Add regression tests for alarm behavior");
+    const followUpPromptCall = llmCall.mock.calls.find((call: unknown[]) =>
+      JSON.stringify(call[0]).includes("Add regression tests for alarm behavior")
+    );
+    expect(followUpPromptCall).toBeTruthy();
     const completionBody = String((agentDOFetch.mock.calls.at(-1)?.[1] as RequestInit)?.body ?? "");
     expect(completionBody).toContain('"status":"completed"');
   });
@@ -1590,24 +1593,26 @@ describe("AgentDO heartbeat actions", () => {
     const setAlarm = vi.fn().mockResolvedValue(undefined);
 
     sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "autonomous_channel", "C-auto");
+    const responses: Array<{ content: Array<{ type: string; text: string }> }> = [
+      { content: [{ type: "text", text: "Refactor approval flow tests" }] },
+      { content: [{ type: "text", text: "DECISION: accept\nTASK:" }] },
+      { content: [{ type: "text", text: "Completed heartbeat task" }] },
+      { content: [{ type: "text", text: "Refactor approval flow tests" }] },
+      { content: [{ type: "text", text: "DECISION: reject\nTASK:" }] },
+      { content: [{ type: "text", text: "Harden heartbeat resume logic" }] },
+      { content: [{ type: "text", text: "DECISION: rewrite\nTASK: Validate heartbeat resume under alarm drift" }] }
+    ];
 
-    const makeAgent = (responses: Array<{ content: Array<{ type: string; text: string }> }>) => new AgentDO({ storage: { sql, setAlarm } }, env, {
+    const agent = new AgentDO({ storage: { sql, setAlarm } }, env, {
       llmCall: vi.fn().mockImplementation(async () => responses.shift() ?? { content: [{ type: "text", text: "skip" }] }) as never,
       postSlackMessage: vi.fn() as never,
       postSlackApproval: vi.fn() as never
     });
 
-    await (makeAgent([
-      { content: [{ type: "text", text: "Refactor approval flow tests" }] },
-      { content: [{ type: "text", text: "DECISION: accept\nTASK:" }] },
-      { content: [{ type: "text", text: "Refactor approval flow tests" }] },
-      { content: [{ type: "text", text: "DECISION: reject\nTASK:" }] },
-      { content: [{ type: "text", text: "Harden heartbeat resume logic" }] },
-      { content: [{ type: "text", text: "DECISION: rewrite\nTASK: Validate heartbeat resume under alarm drift" }] }
-    ]) as unknown as AgentDO).alarm();
-
-    await (makeAgent([]) as unknown as AgentDO).alarm();
-    await (makeAgent([]) as unknown as AgentDO).alarm();
+    await agent.alarm();
+    await agent.alarm();
+    await agent.alarm();
+    await agent.alarm();
 
     const listAgent = new AgentDO({ storage: { sql } }, env, {
       llmCall: vi.fn() as never,
