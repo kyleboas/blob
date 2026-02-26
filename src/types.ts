@@ -11,6 +11,7 @@ export interface Env {
   SLACK_SIGNING_SECRET: string;
   LOGS_CHANNEL?: string;
   GITHUB_TOKEN?: string;
+  GH_TOKEN?: string;
   GITHUB_USERNAME?: string;
 }
 
