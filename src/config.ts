@@ -39,3 +39,4 @@ export const PLANNER_AUDIT_MAX_ATTEMPTS = 3;
 export const LLM_OVERLOAD_RETRY_MAX = 4;
 export const LLM_OVERLOAD_RETRY_BASE_MS = 5_000;
 export const LLM_REQUEST_TIMEOUT_MS = 120_000;
+export const LLM_MAX_TOKENS = 4096;

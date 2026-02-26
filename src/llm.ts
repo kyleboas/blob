@@ -1,6 +1,7 @@
 import {
   LLM_OVERLOAD_RETRY_BASE_MS,
   LLM_OVERLOAD_RETRY_MAX,
+  LLM_MAX_TOKENS,
   LLM_REQUEST_TIMEOUT_MS,
   MODEL_ROUTER,
   MODEL_CHAT,
@@ -29,6 +30,7 @@ export interface CallLLMInput {
   // Backwards-compatible aliases
   routineModel?: string;
   model?: string;
+  maxTokens?: number;
   fetchImpl?: typeof fetch;
   sleepImpl?: (ms: number) => Promise<void>;
   requestTimeoutMs?: number;
@@ -158,8 +160,19 @@ function toOpenAIMessages(systemPrompt: string, messages: AnthropicMessage[]): A
 }
 
 function toAnthropicLikeResponse(payload: Record<string, any>, fallbackModel: string): LLMResponse {
+  if (payload.error) {
+    const code = payload.error.code ?? payload.error.status ?? "unknown";
+    const msg = payload.error.message ?? JSON.stringify(payload.error);
+    throw new Error(`LLM gateway error (${code}): ${msg}`);
+  }
+
   const choice = payload.choices?.[0] ?? {};
   const message = choice.message ?? {};
+
+  if (choice.finish_reason === "length") {
+    throw new Error("LLM response truncated: model hit max_tokens limit before producing output");
+  }
+
   const content: unknown[] = [];
 
   if (typeof message.content === "string" && message.content.trim()) {
@@ -466,6 +479,7 @@ export async function classifyMessage(input: {
 export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
   const fetchImpl = input.fetchImpl ?? fetch;
   const sleepImpl = input.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const maxTokens = input.maxTokens ?? LLM_MAX_TOKENS;
   const routerModel = input.routerModel ?? input.routineModel ?? MODEL_ROUTER;
   const chatModel = input.chatModel ?? MODEL_CHAT;
   const simpleModel = input.simpleModel ?? input.routineModel ?? MODEL_SIMPLE;
@@ -542,11 +556,11 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
         model: resolvedModel,
         messages: toOpenAIMessages(input.systemPrompt, input.messages),
         tools: toOpenAITools(input.tools),
-        max_tokens: 1024
+        max_tokens: maxTokens
       })
     : JSON.stringify({
         model: resolvedModel,
-        max_tokens: 1024,
+        max_tokens: maxTokens,
         system: [
           {
             type: "text",
