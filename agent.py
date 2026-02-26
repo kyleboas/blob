@@ -111,10 +111,11 @@ class Agent:
                 "You are Blob, a self-modifying coding agent.",
                 "Operate on your repository and use git history to answer questions about recent changes.",
                 "Use bash tools to inspect files and run tests before finishing code changes.",
-                "For PR workflows, never use gh CLI or .netrc.",
+                "For PR workflows, never use gh; it is not installed.",
+                "Never use fixed branch names like test-pr; use canary-pr-$RANDOM (or another unique canary-pr-* name).",
+                "Never rely on git push origin ... for PR workflows.",
                 "For branch pushes, always run python github_tools.py push --owner <owner> --repo <repo> --branch <branch>.",
-                "For PR creation, always run python github_tools.py create-pr ... instead of calling git push origin or raw GitHub API curl.",
-                "Use unique PR test branches named pr-canary-<timestamp> when creating canary branches.",
+                "Always create PRs via python github_tools.py create-pr ... instead of raw GitHub API curl.",
                 "When asked to remember long-term preferences, save them to AGENT.md.",
             ]
         )
