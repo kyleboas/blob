@@ -29,4 +29,29 @@ export function registerBuiltinExtensions(sql: SqlStorage): void {
     // Extension might already exist
     console.log("[EXTENSIONS] Memory extension already registered");
   }
+
+  // Model picker extension - agent selects LLM model
+  try {
+    registerExtension(
+      sql,
+      "model",
+      "Select LLM model for task. Auto-picks based on task complexity or manual override",
+      ".blob/extensions/model/model.sh",
+      {
+        type: "object",
+        properties: {
+          command: {
+            type: "string",
+            enum: ["list", "pick", "switch", "auto", "info"]
+          },
+          task: { type: "string" },
+          model: { type: "string", enum: ["chat", "routine", "complex"] }
+        },
+        required: ["command"]
+      }
+    );
+    console.log("[EXTENSIONS] Registered model picker extension");
+  } catch (error) {
+    console.log("[EXTENSIONS] Model picker extension already registered");
+  }
 }
