@@ -31,6 +31,7 @@ import {
   getLastHeartbeatChannel,
   getRecentAgentEvents,
   getSetting,
+  setSetting,
   getCurrentSession,
   listRecentOperatorFeedback,
   getModelSettings,
