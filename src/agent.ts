@@ -78,6 +78,7 @@ import { mapChannelToDO, postApprovalRequest, postMessage } from "./slack";
 import { createApprovalRequest, expireTimedOutApprovals, resolveApprovalReaction, type PendingApproval } from "./approval";
 import { classifyIntentWithEntities, extractTextContent, getCacheStats } from "./llm";
 import { findSimilarSolutions, storeSolution, getMemoryStats } from "./memory";
+import { generateWithPython, isPythonGenerationEnabled } from "./python-bridge";
 import type { ConversationMessage, Env, SlackEvent } from "./types";
 import type { ToolResult } from "./types";
 
@@ -1014,6 +1015,22 @@ export class AgentDO {
         .join("\n\n");
       this.forwardToGlobalLogs("memory_recall", `[#${channel}] Found ${similarSolutions.length} similar solutions in memory`);
       console.log(`[MEMORY] Found ${similarSolutions.length} similar solutions for task`);
+    }
+
+    // Try Python-based code generation for self-modification tasks
+    let pythonGeneratedCode: string | undefined;
+    if (isPythonGenerationEnabled(this.db) && this.sandbox && isSelfModificationCommand(task)) {
+      try {
+        const pythonResult = await generateWithPython(this.sandbox, task);
+        if (pythonResult.success && pythonResult.code) {
+          pythonGeneratedCode = pythonResult.code;
+          this.forwardToGlobalLogs("python_generation", `[#${channel}] ✓ Python generated ${pythonResult.action} code`);
+          console.log(`[PYTHON] Generated ${pythonResult.action} code for self-modification`);
+        }
+      } catch (error) {
+        console.error("[PYTHON] Generation failed:", error);
+        this.forwardToGlobalLogs("python_generation", `[#${channel}] ✗ Python generation failed, falling back to LLM`);
+      }
     }
 
     // If the orchestrator supplied prior conversation messages use them directly;
