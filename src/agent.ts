@@ -928,7 +928,10 @@ export class AgentDO {
 
         const decision = await this.processLlmResponse(llmResponse, channel, sessionId, {
           applySelfModificationRateLimit,
-          dynamicTools
+          dynamicTools,
+          conversationContext: typeof conversation[conversation.length - 1]?.content === 'string' 
+            ? conversation[conversation.length - 1]?.content as string 
+            : undefined
         });
         if (decision.observations.length > 0) {
           // Tool results are user-role messages in the Anthropic API, not assistant
@@ -1045,18 +1048,50 @@ export class AgentDO {
   }
 
   private async ensureRepoCloned(sessionId: string, channel: string, owner: string, repo: string): Promise<void> {
-    // Check if repo is already cloned
-    const checkResult = await this.executeWithRetry("test -d /workspace/repo/.git && echo 'exists'");
+    // Check if repo is already cloned at the expected path
+    const repoPath = `/workspace/${repo}`;
+    const checkResult = await this.executeWithRetry(`test -d ${repoPath}/.git && echo 'exists'`);
     if (checkResult.stdout.trim() === "exists") {
       return;
     }
     
     // Clone the repo
-    const cloneCmd = `git clone https://github.com/${owner}/${repo}.git /workspace/${repo}`;
+    const cloneCmd = `git clone https://github.com/${owner}/${repo}.git ${repoPath}`;
     const cloneResult = await this.executeWithRetry(cloneCmd);
     if (cloneResult.exitCode !== 0) {
       throw new Error(`Failed to clone ${owner}/${repo}: ${cloneResult.stderr}`);
     }
+  }
+
+  private async getDefaultRepoFromConfig(): Promise<{ owner: string; repo: string } | null> {
+    try {
+      const config = await loadUserConfiguration(this.env);
+      if (config.user?.githubUsername && config.project?.name) {
+        return { owner: config.user.githubUsername, repo: config.project.name };
+      }
+      if (config.user?.githubUsername && config.user?.primaryRepository) {
+        return { owner: config.user.githubUsername, repo: config.user.primaryRepository };
+      }
+    } catch {
+      // Fall through to null
+    }
+    return null;
+  }
+
+  private inferRepoFromConversation(conversation: string): { owner: string; repo: string } | null {
+    // Check if user mentioned a specific repo
+    const repoMatch = conversation.match(/(?:kyleboas|blob)[\/\s]+(blob)/i);
+    if (repoMatch) {
+      return { owner: "kyleboas", repo: "blob" };
+    }
+    
+    // Check for owner/repo pattern
+    const genericMatch = conversation.match(/(\w+)[\/:](\w+)/);
+    if (genericMatch && !["http", "https"].includes(genericMatch[1])) {
+      return { owner: genericMatch[1], repo: genericMatch[2] };
+    }
+    
+    return null;
   }
 
   private async resolveDefaultBranch(context: RepoContext): Promise<string> {
@@ -1121,22 +1156,35 @@ export class AgentDO {
   private async runDefaultBranchPushPrWorkflow(
     sessionId: string,
     channel: string,
-    command: string
+    command: string,
+    conversationContext?: string
   ): Promise<string> {
     const match = command.match(/git\s+push\s+origin\s+([\w./-]+)/i);
     const requestedBase = match?.[1] ?? "main";
     const cwd: string | null = null;
     let context = await this.maybeCaptureRepoContext(cwd);
     
-    // If no repo context, try to use kyleboas/blob as default or extract from conversation
+    // If no repo context, try to determine which repo to use
     if (!context) {
-      // Default to kyleboas/blob if no repo is found
-      // In the future, this could be extracted from the conversation context
-      const defaultOwner = "kyleboas";
-      const defaultRepo = "blob";
+      let repoToUse: { owner: string; repo: string } | null = null;
       
-      await this.ensureRepoCloned(sessionId, channel, defaultOwner, defaultRepo);
-      context = { owner: defaultOwner, repo: defaultRepo };
+      // 1. Try to extract from conversation context
+      if (conversationContext) {
+        repoToUse = this.inferRepoFromConversation(conversationContext);
+      }
+      
+      // 2. Try to get from user configuration (Cloudflare KV)
+      if (!repoToUse) {
+        repoToUse = await this.getDefaultRepoFromConfig();
+      }
+      
+      // 3. Default to kyleboas/blob for Blob's own functionality
+      if (!repoToUse) {
+        repoToUse = { owner: "kyleboas", repo: "blob" };
+      }
+      
+      await this.ensureRepoCloned(sessionId, channel, repoToUse.owner, repoToUse.repo);
+      context = repoToUse;
     }
     
     // Validate that the remote URL matches expected GitHub repos
@@ -1355,6 +1403,7 @@ export class AgentDO {
     options: {
       applySelfModificationRateLimit: boolean;
       dynamicTools: Map<string, DynamicToolDefinition>;
+      conversationContext?: string;
     }
   ): Promise<{ done: boolean; text: string; observations: ToolResult[] }> {
     const blocks = llmResponse.content as Array<ToolUseBlock | TextBlock>;
@@ -1435,7 +1484,7 @@ export class AgentDO {
         logAgentEvent(this.db, sessionId, "command_rewritten", `${sanitizedCommand} => [pr_workflow_enforced]`);
         this.forwardToGlobalLogs("command_rewritten", `[#${channel}] ${sanitizedCommand} => [pr_workflow_enforced]`);
         try {
-          const summary = await this.runDefaultBranchPushPrWorkflow(sessionId, channel, command);
+          const summary = await this.runDefaultBranchPushPrWorkflow(sessionId, channel, command, options.conversationContext);
           observations.push(formatToolResult(toolBlock.id, summary));
         } catch (error) {
           const message = error instanceof Error ? error.message : "PR workflow rewrite failed.";
