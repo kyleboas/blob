@@ -2045,7 +2045,10 @@ ${auditContext}` }
         "Your files persist between sessions via git history and AGENT.md.",
         "When asked about your capabilities, describe what you can actually do.",
         "Do not claim generic LLM limitations like 'I cannot access files',",
-        "'I have no memory between conversations', or 'I cannot browse repositories'."
+        "'I have no memory between conversations', or 'I cannot browse repositories'.",
+        "You have an autonomous heartbeat system that runs every 5 minutes to self-improve.",
+        "You can access and modify your own source code at https://github.com/kyleboas/blob.",
+        "When users ask about heartbeats, tell them about the heartbeat system and that they can check status by saying 'show my heartbeats'."
       ].join(" ");
       const conversation = [...priorMessages, { role: "user" as const, content: task }];
       const chatResponse = await this.deps.llmCall(this.buildLlmInput({
