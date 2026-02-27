@@ -1044,6 +1044,21 @@ export class AgentDO {
     return context;
   }
 
+  private async ensureRepoCloned(sessionId: string, channel: string, owner: string, repo: string): Promise<void> {
+    // Check if repo is already cloned
+    const checkResult = await this.executeWithRetry("test -d /workspace/repo/.git && echo 'exists'");
+    if (checkResult.stdout.trim() === "exists") {
+      return;
+    }
+    
+    // Clone the repo
+    const cloneCmd = `git clone https://github.com/${owner}/${repo}.git /workspace/${repo}`;
+    const cloneResult = await this.executeWithRetry(cloneCmd);
+    if (cloneResult.exitCode !== 0) {
+      throw new Error(`Failed to clone ${owner}/${repo}: ${cloneResult.stderr}`);
+    }
+  }
+
   private async resolveDefaultBranch(context: RepoContext): Promise<string> {
     const token = this.env.GITHUB_TOKEN ?? this.env.GH_TOKEN;
     if (!token) {
@@ -1111,11 +1126,17 @@ export class AgentDO {
     const match = command.match(/git\s+push\s+origin\s+([\w./-]+)/i);
     const requestedBase = match?.[1] ?? "main";
     const cwd: string | null = null;
-    const context = await this.maybeCaptureRepoContext(cwd);
+    let context = await this.maybeCaptureRepoContext(cwd);
     
-    // Validate that we have a valid repo context
+    // If no repo context, try to use kyleboas/blob as default or extract from conversation
     if (!context) {
-      throw new Error("No git remote configured. Please clone a repository first before attempting to create a pull request.");
+      // Default to kyleboas/blob if no repo is found
+      // In the future, this could be extracted from the conversation context
+      const defaultOwner = "kyleboas";
+      const defaultRepo = "blob";
+      
+      await this.ensureRepoCloned(sessionId, channel, defaultOwner, defaultRepo);
+      context = { owner: defaultOwner, repo: defaultRepo };
     }
     
     // Validate that the remote URL matches expected GitHub repos
