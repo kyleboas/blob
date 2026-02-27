@@ -59,23 +59,23 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 3.4 Enforce hard stop when required checks fail so PR creation is blocked.
   - [x] 3.5 Add tests for full-suite success paths and required-check failure blocking.
 
-- [ ] 4.0 Implement branch creation and pull request automation for successful remediations
-  - [ ] 4.1 Implement deterministic branch naming convention using error fingerprint + timestamp.
-  - [ ] 4.2 Implement commit creation with descriptive message linking to remediation attempt metadata.
-  - [ ] 4.3 Implement push and PR creation workflow for validated remediation branches.
-  - [ ] 4.4 Generate structured PR body including error summary, files changed, commands run, and outcomes.
-  - [ ] 4.5 Add tests for branch naming, commit/PR payload generation, and PR creation sequencing.
+- [x] 4.0 Implement branch creation and pull request automation for successful remediations
+  - [x] 4.1 Implement deterministic branch naming convention using error fingerprint + timestamp.
+  - [x] 4.2 Implement commit creation with descriptive message linking to remediation attempt metadata.
+  - [x] 4.3 Implement push and PR creation workflow for validated remediation branches.
+  - [x] 4.4 Generate structured PR body including error summary, files changed, commands run, and outcomes.
+  - [x] 4.5 Add tests for branch naming, commit/PR payload generation, and PR creation sequencing.
 
-- [ ] 5.0 Add observability, safeguards, and duplicate-prevention controls
-  - [ ] 5.1 Implement lifecycle event emission for detected, remediating, validating, opened, and failed statuses.
-  - [ ] 5.2 Implement duplicate-prevention checks to avoid multiple open PRs for unresolved identical fingerprints.
-  - [ ] 5.3 Add configurable guardrails for remediation scope, execution timeouts, and retry limits.
-  - [ ] 5.4 Add structured logs/metrics for success rate, time-to-PR, and validation pass rate.
-  - [ ] 5.5 Add tests for duplicate-prevention behavior and observability event coverage.
+- [x] 5.0 Add observability, safeguards, and duplicate-prevention controls
+  - [x] 5.1 Implement lifecycle event emission for detected, remediating, validating, opened, and failed statuses.
+  - [x] 5.2 Implement duplicate-prevention checks to avoid multiple open PRs for unresolved identical fingerprints.
+  - [x] 5.3 Add configurable guardrails for remediation scope, execution timeouts, and retry limits.
+  - [x] 5.4 Add structured logs/metrics for success rate, time-to-PR, and validation pass rate.
+  - [x] 5.5 Add tests for duplicate-prevention behavior and observability event coverage.
 
-- [ ] 6.0 Add automated tests and rollout documentation for the autonomous remediation flow
-  - [ ] 6.1 Implement end-to-end tests for the full self-healing workflow from error detection to PR creation.
-  - [ ] 6.2 Add negative e2e scenarios where validation fails and PR creation is correctly skipped.
-  - [ ] 6.3 Document operator configuration for error sources, validation policy, and remediation boundaries.
-  - [ ] 6.4 Document runbook guidance for monitoring, triaging failures, and safe rollback/disable procedures.
-  - [ ] 6.5 Define launch checklist and success-metric review plan for post-release evaluation.
+- [x] 6.0 Add automated tests and rollout documentation for the autonomous remediation flow
+  - [x] 6.1 Implement end-to-end tests for the full self-healing workflow from error detection to PR creation.
+  - [x] 6.2 Add negative e2e scenarios where validation fails and PR creation is correctly skipped.
+  - [x] 6.3 Document operator configuration for error sources, validation policy, and remediation boundaries.
+  - [x] 6.4 Document runbook guidance for monitoring, triaging failures, and safe rollback/disable procedures.
+  - [x] 6.5 Define launch checklist and success-metric review plan for post-release evaluation.

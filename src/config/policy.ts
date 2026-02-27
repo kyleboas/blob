@@ -24,11 +24,18 @@ export interface RetryPolicy {
   backoffMs: number;
 }
 
+export interface RuntimeGuardrailsPolicy {
+  maxRemediationDurationMs: number;
+  validationTimeoutMs: number;
+  maxConcurrentAttempts: number;
+}
+
 export interface SelfHealingPolicy {
   inScopeErrorSources: ErrorSource[];
   validation: ValidationPolicy;
   remediationScope: RemediationScopePolicy;
   retry: RetryPolicy;
+  guardrails: RuntimeGuardrailsPolicy;
 }
 
 export const DEFAULT_SELF_HEALING_POLICY: SelfHealingPolicy = {
@@ -51,6 +58,11 @@ export const DEFAULT_SELF_HEALING_POLICY: SelfHealingPolicy = {
   retry: {
     maxAttempts: 2,
     backoffMs: 250
+  },
+  guardrails: {
+    maxRemediationDurationMs: 10 * 60 * 1000,
+    validationTimeoutMs: 5 * 60 * 1000,
+    maxConcurrentAttempts: 2
   }
 };
 
