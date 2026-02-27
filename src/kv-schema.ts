@@ -18,6 +18,18 @@ export interface ProjectConfig {
   defaultBehavior?: string;
 }
 
+export interface RepositoryGoals {
+  owner: string;
+  repo: string;
+  goals: string[];
+  constraints?: string[];
+  priority?: "low" | "medium" | "high";
+}
+
+export interface RepositoryConfig {
+  repositories: Record<string, RepositoryGoals>;
+}
+
 export interface MessageFormatting {
   maxCharacters: number;
   includeEmojis: boolean;
@@ -66,6 +78,7 @@ export interface UserConfiguration {
   userId?: string;
   user: UserProfile;
   project?: ProjectConfig;
+  repositories?: RepositoryConfig;
   messageFormatting: MessageFormatting;
   toolConfig: ToolConfig;
   guardrails: GuardrailConfig;

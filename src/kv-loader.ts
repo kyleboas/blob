@@ -139,3 +139,47 @@ export async function saveUserConfiguration(
     return false;
   }
 }
+
+/**
+ * Get goals for a specific repository from the configuration.
+ * Returns null if no goals are configured for the repository.
+ */
+export function getRepositoryGoals(
+  config: UserConfiguration,
+  owner: string,
+  repo: string
+): { goals: string[]; constraints?: string[]; priority?: string } | null {
+  const repoKey = `${owner}/${repo}`;
+  const repoConfig = config.repositories?.repositories[repoKey];
+
+  if (!repoConfig) {
+    return null;
+  }
+
+  return {
+    goals: repoConfig.goals,
+    constraints: repoConfig.constraints,
+    priority: repoConfig.priority,
+  };
+}
+
+/**
+ * Get all configured repositories with their goals.
+ */
+export function getAllRepositoryGoals(
+  config: UserConfiguration
+): Array<{ owner: string; repo: string; goals: string[] }> {
+  const repos = config.repositories?.repositories;
+  if (!repos) {
+    return [];
+  }
+
+  return Object.entries(repos).map(([key, config]) => {
+    const [owner, ...repoParts] = key.split("/");
+    return {
+      owner,
+      repo: repoParts.join("/"),
+      goals: config.goals,
+    };
+  });
+}

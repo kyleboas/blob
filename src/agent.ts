@@ -14,7 +14,7 @@ import {
   MODEL_EXECUTION_COMPLEX,
   buildExecutionGuardrails
 } from "./config";
-import { loadUserConfiguration } from "./kv-loader";
+import { loadUserConfiguration, getRepositoryGoals } from "./kv-loader";
 import type { UserConfiguration } from "./kv-schema";
 import { callLLM, classifyMessage, type LLMResponse } from "./llm";
 import { enforceSafety, isSelfModificationCommand } from "./safety";
@@ -1836,7 +1836,46 @@ export class AgentDO {
       }
     }
 
+    // Show repository goals
+    // Matches: "show goals for owner/repo", "what are the goals for blob", etc.
+    const goalsPatterns = [
+      /(?:show|what\s+are|list)\s+(?:the\s+)?goals\s+(?:for\s+)?([\w-]+)\/([\w-]+)/i,
+      /(?:show|what\s+are|list)\s+(?:the\s+)?goals/i,
+    ];
+
+    for (const pattern of goalsPatterns) {
+      const match = task.match(pattern);
+      if (match) {
+        const owner = match[1] || "kyleboas";
+        const repo = match[2] || "blob";
+        return await this.showRepositoryGoals(channel, owner, repo);
+      }
+    }
+
     return null;
+  }
+
+  private async showRepositoryGoals(channel: string, owner: string, repo: string): Promise<string> {
+    try {
+      const userConfig = await this.getUserConfiguration();
+      const goals = getRepositoryGoals(userConfig, owner, repo);
+
+      if (!goals) {
+        return `📭 No goals configured for ${owner}/${repo}.\n\n` +
+          `To set goals, update your Cloudflare KV configuration with:\n` +
+          `{"repositories": {"${owner}/${repo}": {"goals": ["goal1", "goal2"]}}}`;
+      }
+
+      const goalsList = goals.goals.map(g => `• ${g}`).join('\n');
+      const constraintsList = goals.constraints?.length
+        ? '\nConstraints:\n' + goals.constraints.map(c => `• ${c}`).join('\n')
+        : '';
+
+      return `🎯 Goals for ${owner}/${repo}:\n\n${goalsList}${constraintsList}`;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return `❌ Failed to load repository goals: ${msg}`;
+    }
   }
 
   private async pauseHeartbeats(channel: string): Promise<string> {
@@ -2556,6 +2595,13 @@ ${history}` }]
       .map((h) => `- [${h.status}] ${h.task}`)
       .join("\n");
 
+    // Load repository goals from KV config
+    const userConfig = await this.getUserConfiguration();
+    const repoGoals = getRepositoryGoals(userConfig, "kyleboas", "blob");
+    const goalsContext = repoGoals
+      ? `Repository goals for kyleboas/blob:\n${repoGoals.goals.map(g => `- ${g}`).join("\n")}`
+      : "No specific repository goals configured.";
+
     const generationResponse = await this.deps.llmCall(this.buildLlmInput({
       model: this.getRuntimeModelSettings().chatModel,
       modelRole: "planner",
@@ -2565,6 +2611,7 @@ ${history}` }]
         "Cross-reference recent and completed heartbeat history before proposing work.",
         "Avoid duplicate or near-duplicate tasks by semantic intent and scope.",
         "Keep it small, concrete, and actionable.",
+        "Align proposed tasks with the repository's configured goals.",
         "If no meaningful task is available, respond with skip."
       ].join("\n"),
       messages: [{
@@ -2575,7 +2622,8 @@ ${history}` }]
           "Latest operator steering feedback:",
           feedbackContext || "- (none)",
           "Recent heartbeat history:",
-          completedOrPending || "- (none)"
+          completedOrPending || "- (none)",
+          goalsContext
         ].join("\n")
       }]
     }));
