@@ -955,28 +955,29 @@ export class AgentDO {
       });
     }, THINKING_MESSAGE_DELAY_MS);
 
-    const firstResponse = await this.traceOperation(
-      sessionId,
-      "llm_call_initial",
-      () => this.deps.llmCall(this.buildLlmInput({
-        systemPrompt,
-        messages: conversation,
-        tools: this.buildToolList(dynamicTools),
-        taskComplexityHint: options.taskComplexityHint,
-        modelRole: "execution"
-      })),
-      channel
-    );
-
-    logAgentEvent(this.db, sessionId, "model_used", firstResponse.model);
-    this.forwardToGlobalLogs("model_used", `[#${channel}] ${firstResponse.model}`);
-
     let finalText = "";
     let steps = 0;
     let sandboxStarted = false;
-    let llmResponse = firstResponse;
 
     try {
+      const firstResponse = await this.traceOperation(
+        sessionId,
+        "llm_call_initial",
+        () => this.deps.llmCall(this.buildLlmInput({
+          systemPrompt,
+          messages: conversation,
+          tools: this.buildToolList(dynamicTools),
+          taskComplexityHint: options.taskComplexityHint,
+          modelRole: "execution"
+        })),
+        channel
+      );
+
+      logAgentEvent(this.db, sessionId, "model_used", firstResponse.model);
+      this.forwardToGlobalLogs("model_used", `[#${channel}] ${firstResponse.model}`);
+
+      let llmResponse = firstResponse;
+
       while (steps < MAX_STEPS) {
         steps += 1;
 
@@ -1033,6 +1034,11 @@ export class AgentDO {
           channel
         );
       }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      finalText = `❌ Error: ${errorMessage}`;
+      logAgentEvent(this.db, sessionId, "error", finalText);
+      this.forwardToGlobalLogs("error", `[#${channel}] ${finalText}`);
     } finally {
       if (sandboxStarted) {
         await this.traceOperation(sessionId, "sandbox_end", () => this.endSandboxSession(sessionId), channel);

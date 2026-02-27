@@ -700,7 +700,8 @@ describe("AgentDO runAgentLoop", () => {
       postSlackApproval: vi.fn() as never
     });
 
-    await expect(agent.runAgentLoop("list files", "C1", "thread-persist-on-error")).rejects.toThrow("LLM follow-up failed");
+    const result = await agent.runAgentLoop("list files", "C1", "thread-persist-on-error");
+    expect(result.finalText).toContain("❌ Error: LLM follow-up failed");
 
     const putMock = env.REPO_STORE.put as unknown as ReturnType<typeof vi.fn>;
     expect(putMock).toHaveBeenCalledWith(
