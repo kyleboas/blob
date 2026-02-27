@@ -2208,11 +2208,16 @@ ${history}` }]
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         failHeartbeat(this.db, heartbeat.id, errorMessage);
+        
+        // Notify about the failure
         await this.deps.postSlackMessage(
           this.env.SLACK_BOT_TOKEN,
           heartbeat.channel,
           `Heartbeat failed: ${errorMessage}`
         );
+        
+        // Attempt to create a self-healing PR if the error is recoverable
+        await this.attemptSelfHeal(heartbeat.task, errorMessage, heartbeat.channel);
       }
     } finally {
       await this.ctx.storage.setAlarm?.(this.deps.now() + BACKGROUND_TASK_INTERVAL_MS);
@@ -2331,5 +2336,49 @@ ${history}` }]
     }
 
     return null;
+  }
+
+  private async attemptSelfHeal(task: string, errorMessage: string, channel: string): Promise<void> {
+    // Only attempt self-heal for certain types of errors
+    const recoverableErrors = [
+      /syntax error/i,
+      /type error/i,
+      /cannot find module/i,
+      /test failed/i,
+      /undefined/i,
+      /null pointer/i
+    ];
+
+    const isRecoverable = recoverableErrors.some(pattern => pattern.test(errorMessage));
+    if (!isRecoverable) {
+      await this.deps.postSlackMessage(
+        this.env.SLACK_BOT_TOKEN,
+        channel,
+        `Error is not auto-recoverable. Manual intervention required.`
+      );
+      return;
+    }
+
+    try {
+      // Create a fix branch
+      const branchName = `self-heal/fix-${Date.now()}`;
+      const fixTask = `Fix the error: ${errorMessage}\n\nOriginal task: ${task}`;
+
+      // Queue a new heartbeat to create the fix
+      const fixHeartbeatId = enqueueHeartbeat(this.db, fixTask, channel);
+
+      await this.deps.postSlackMessage(
+        this.env.SLACK_BOT_TOKEN,
+        channel,
+        `🔧 Attempting self-heal. Created fix task #${fixHeartbeatId}. Will create PR for human review.`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await this.deps.postSlackMessage(
+        this.env.SLACK_BOT_TOKEN,
+        channel,
+        `Self-heal attempt failed: ${msg}`
+      );
+    }
   }
 }
