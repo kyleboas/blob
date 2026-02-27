@@ -2208,7 +2208,7 @@ export class AgentDO {
     if (isPaused || !hasAlarm) {
       // Auto-start heartbeats
       await this.startHeartbeats(channel);
-      return "🔄 Heartbeats were stopped. I've started them for you.";
+      return "Heartbeats were stopped. I've started them for you.";
     }
     
     const heartbeats = listHeartbeats(this.db, 10);
