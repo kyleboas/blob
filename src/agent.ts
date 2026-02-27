@@ -614,6 +614,35 @@ export class AgentDO {
           if (handled) {
             return;
           }
+          
+          // FAST PATH: Check for simple memory-based queries that can be answered instantly
+          const text = event.text?.toLowerCase().trim() ?? "";
+          const channel = event.channel;
+          
+          if (channel) {
+            // Time queries - instant response
+            if (/^(?:what\s+)?time\s+(?:is\s+it|now)/i.test(text) || /current\s+time/i.test(text)) {
+              const now = new Date();
+              const timeString = now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+              const dateString = now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+              await this.sendResponse(channel, `🕐 It's ${timeString} on ${dateString}.`);
+              return;
+            }
+            
+            // Memory queries - instant from settings
+            if (/^(?:what's|what is)\s+my\s+name/i.test(text)) {
+              const name = getSetting(this.db, "user_name");
+              await this.sendResponse(channel, name ? `Your name is ${name}.` : "I don't know your name yet. You can tell me by saying 'my name is ...'");
+              return;
+            }
+            
+            if (/^(?:where\s+)?do\s+i\s+live/i.test(text) || /^(?:what's|what is)\s+my\s+location/i.test(text)) {
+              const location = getSetting(this.db, "user_location");
+              await this.sendResponse(channel, location ? `Your location is ${location}.` : "I don't know your location yet. You can tell me by saying 'my location is ...'");
+              return;
+            }
+          }
+          
           await this.spawnSubAgent(event);
         } catch (error) {
           const channel = event.channel;
