@@ -2372,6 +2372,9 @@ ${history}` }]
         channel,
         `🔧 Attempting self-heal. Created fix task #${fixHeartbeatId}. Will create PR for human review.`
       );
+
+      // Auto-merge to staging branch for live testing
+      await this.mergeToStaging(branchName, channel);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       await this.deps.postSlackMessage(
@@ -2380,5 +2383,66 @@ ${history}` }]
         `Self-heal attempt failed: ${msg}`
       );
     }
+  }
+
+  private async mergeToStaging(branchName: string, channel: string): Promise<void> {
+    try {
+      // Merge the fix branch to the staging branch
+      const mergeCmd = `git checkout staging && git merge ${branchName} --no-edit`;
+      const mergeResult = await this.executeWithRetry(mergeCmd);
+      if (mergeResult.exitCode !== 0) {
+        throw new Error(`Merge to staging failed: ${mergeResult.stderr}`);
+      }
+
+      // Push the staging branch
+      const pushResult = await this.executeWithRetry(`git push origin staging`);
+      if (pushResult.exitCode !== 0) {
+        throw new Error(`Push to staging failed: ${pushResult.stderr}`);
+      }
+
+      await this.deps.postSlackMessage(
+        this.env.SLACK_BOT_TOKEN,
+        channel,
+        `✅ Merged to staging branch. Live testing in progress...`
+      );
+
+      // Monitor the staging environment for errors
+      await this.monitorStaging(channel);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await this.deps.postSlackMessage(
+        this.env.SLACK_BOT_TOKEN,
+        channel,
+        `⚠️ Staging merge failed: ${msg}`
+      );
+    }
+  }
+
+  private async monitorStaging(channel: string): Promise<void> {
+    // Monitor the staging environment for a short period
+    const monitorDuration = 5 * 60 * 1000; // 5 minutes
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < monitorDuration) {
+      // Check for errors in the staging environment
+      const errorCheck = await this.executeWithRetry("curl -s https://staging.blob-agent.heyboas.workers.dev/health");
+      if (errorCheck.exitCode !== 0) {
+        await this.deps.postSlackMessage(
+          this.env.SLACK_BOT_TOKEN,
+          channel,
+          `❌ Error detected in staging. Reverting...`
+        );
+        // Revert the staging branch
+        await this.executeWithRetry("git checkout staging && git revert HEAD --no-edit && git push origin staging");
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 30000)); // Check every 30 seconds
+    }
+
+    await this.deps.postSlackMessage(
+      this.env.SLACK_BOT_TOKEN,
+      channel,
+      `✅ Staging looks stable. Ready for production merge.`
+    );
   }
 }
