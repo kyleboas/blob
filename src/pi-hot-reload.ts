@@ -6,7 +6,7 @@ import { registerExtension, loadExtensions } from "./pi-tools";
 
 // Track last reload time per extension
 const lastReloadTimes = new Map<string, number>();
-const RELOAD_DEBOUNCE_MS = 1000; // Don't reload same extension more than once per second
+const RELOAD_DEBOUNCE_MS = 1000;
 
 // Global flag to disable hot reload (for tests)
 let globalHotReloadEnabled = true;
@@ -24,13 +24,24 @@ export interface FileWatcher {
   unwatch: (path: string) => void;
 }
 
-// Simple polling-based file watcher (works in sandboxed environments)
-export class PollingFileWatcher implements FileWatcher {
+// Polling-based file watcher using sandbox for file stats
+export class SandboxFileWatcher implements FileWatcher {
   private intervals = new Map<string, number>();
   private lastModified = new Map<string, number>();
   
+  constructor(
+    private sandbox: { exec: (cmd: string) => Promise<{ stdout?: string; exitCode?: number }> }
+  ) {}
+  
   watch(path: string, callback: () => void): void {
-    // Poll every 2 seconds for file changes
+    // Initial stat
+    this.getFileStats(path).then(stats => {
+      this.lastModified.set(path, stats.mtime);
+    }).catch(() => {
+      this.lastModified.set(path, 0);
+    });
+    
+    // Poll every 2 seconds
     const interval = setInterval(async () => {
       try {
         const stats = await this.getFileStats(path);
@@ -58,32 +69,33 @@ export class PollingFileWatcher implements FileWatcher {
   }
   
   private async getFileStats(path: string): Promise<{ mtime: number }> {
-    // This would need to be passed in or use a different approach
-    // For now, return current time to trigger reload
-    return { mtime: Date.now() };
+    // Use stat command to get actual file modification time
+    const result = await this.sandbox.exec(`stat -c %Y "${path}" 2>/dev/null || echo 0`);
+    const mtime = parseInt(result.stdout?.trim() || "0", 10);
+    return { mtime };
   }
 }
 
 // Extension reloader
 export class ExtensionReloader {
-  private watcher: PollingFileWatcher;
+  private watcher: SandboxFileWatcher;
   private watchedPaths = new Set<string>();
   
   constructor(
     private db: SqlStorage,
     private sandbox: { exec: (cmd: string) => Promise<{ stdout?: string; exitCode?: number }> }
   ) {
-    this.watcher = new PollingFileWatcher();
+    this.watcher = new SandboxFileWatcher(sandbox);
   }
   
   // Start watching an extension directory
   watchExtension(extensionPath: string): void {
     if (!globalHotReloadEnabled) {
-      return; // Hot reload disabled
+      return;
     }
     
     if (this.watchedPaths.has(extensionPath)) {
-      return; // Already watching
+      return;
     }
     
     const toolJsonPath = `${extensionPath}/tool.json`;
@@ -93,7 +105,7 @@ export class ExtensionReloader {
       const lastReload = lastReloadTimes.get(extensionPath) || 0;
       
       if (now - lastReload < RELOAD_DEBOUNCE_MS) {
-        return; // Debounce
+        return;
       }
       
       lastReloadTimes.set(extensionPath, now);
@@ -119,7 +131,7 @@ export class ExtensionReloader {
     
     const toolDef = JSON.parse(toolJsonResult.stdout || "{}");
     
-    // Find the script file (tool.sh, tool.ts, etc.)
+    // Find the script file
     const scriptResult = await this.sandbox.exec(`ls "${extensionPath}"/tool.* 2>/dev/null | head -1`);
     const scriptPath = scriptResult.stdout?.trim();
     
@@ -128,25 +140,19 @@ export class ExtensionReloader {
     }
     
     // Re-register the extension
-    registerExtension(
-      this.db,
-      toolDef.name,
-      toolDef.description,
-      scriptPath,
-      toolDef.input_schema
-    );
+    registerExtension(this.db, toolDef.name, toolDef, scriptPath);
   }
   
-  // Watch all extensions in .blob/extensions/
+  // Watch all extensions
   async watchAllExtensions(): Promise<void> {
     if (!globalHotReloadEnabled) {
-      return; // Hot reload disabled globally
+      return;
     }
     
     const result = await this.sandbox.exec("ls -d .blob/extensions/*/ 2>/dev/null");
     
     if (result.exitCode !== 0) {
-      return; // No extensions directory
+      return;
     }
     
     const extensionDirs = (result.stdout || "").trim().split("\n").filter(Boolean);
@@ -156,13 +162,11 @@ export class ExtensionReloader {
     }
   }
   
-  // Stop watching
   stopWatching(extensionPath: string): void {
     this.watcher.unwatch(`${extensionPath}/tool.json`);
     this.watchedPaths.delete(extensionPath);
   }
   
-  // Stop all watchers
   stopAll(): void {
     for (const path of this.watchedPaths) {
       this.watcher.unwatch(`${path}/tool.json`);
@@ -171,8 +175,7 @@ export class ExtensionReloader {
   }
 }
 
-// Quick reload check - call this before using an extension
-// Set to false to disable (useful for tests)
+// Quick reload check for before tool execution
 let hotReloadEnabled = true;
 
 export function setHotReloadEnabled(enabled: boolean): void {
@@ -188,40 +191,30 @@ export async function checkExtensionReload(
     return false;
   }
   
-  const extensions = loadExtensions(db);
-  const extension = extensions.find(e => e.name === extensionName);
+  const extensionPath = `.blob/extensions/${extensionName}`;
   
-  if (!extension) {
+  // Check if tool.json exists
+  const result = await sandbox.exec(`test -f "${extensionPath}/tool.json" && echo exists`);
+  if (result.stdout?.trim() !== "exists") {
     return false;
   }
   
-  // Check if tool.json has been modified since last reload
-  const toolJsonPath = extension.scriptPath.replace(/\/tool\.[^/]+$/, "/tool.json");
+  // Get current hash from DB
+  const dbResult = db.exec(
+    "SELECT hash FROM extensions WHERE name = ?",
+    extensionName
+  );
+  const currentHash = (dbResult.toArray()[0] as { hash?: string })?.hash;
   
-  try {
-    const result = await sandbox.exec(`stat -c %Y "${toolJsonPath}" 2>/dev/null || echo "0"`);
-    const mtime = parseInt(result.stdout || "0", 10) * 1000;
-    
-    const lastReload = lastReloadTimes.get(extensionName) || 0;
-    
-    if (mtime > lastReload) {
-      // Extension has changed, reload it
-      const toolJsonResult = await sandbox.exec(`cat "${toolJsonPath}"`);
-      const toolDef = JSON.parse(toolJsonResult.stdout || "{}");
-      
-      registerExtension(
-        db,
-        toolDef.name,
-        toolDef.description,
-        extension.scriptPath,
-        toolDef.input_schema
-      );
-      
-      lastReloadTimes.set(extensionName, Date.now());
-      return true;
-    }
-  } catch {
-    // Ignore errors
+  // Calculate new hash
+  const contentResult = await sandbox.exec(`cat "${extensionPath}/tool.json" "${extensionPath}"/tool.* 2>/dev/null | sha256sum`);
+  const newHash = contentResult.stdout?.trim();
+  
+  if (newHash && newHash !== currentHash) {
+    // Reload needed
+    const reloader = new ExtensionReloader(db, sandbox);
+    await reloader.reloadExtension(extensionPath);
+    return true;
   }
   
   return false;

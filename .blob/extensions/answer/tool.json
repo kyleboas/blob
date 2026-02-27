@@ -1,0 +1,14 @@
+{
+  "name": "answer",
+  "description": "Extracts questions from agent responses and formats them into a nice input box. Use when the agent asks multiple questions.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "description": "The agent's response text to extract questions from"
+      }
+    },
+    "required": ["text"]
+  }
+}
