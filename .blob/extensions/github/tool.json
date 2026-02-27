@@ -1,0 +1,27 @@
+{
+  "name": "github",
+  "description": "GitHub CLI operations. Usage: github --command pr_create --title 'Title' --branch feature",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string",
+        "enum": ["pr_create", "pr_list", "pr_merge", "repo_clone"],
+        "description": "GitHub command to execute"
+      },
+      "repo": {
+        "type": "string",
+        "description": "Repository (owner/repo)"
+      },
+      "title": {
+        "type": "string", 
+        "description": "PR title"
+      },
+      "branch": {
+        "type": "string",
+        "description": "Branch name"
+      }
+    },
+    "required": ["command"]
+  }
+}
