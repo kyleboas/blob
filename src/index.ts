@@ -8,6 +8,9 @@ const GLOBAL_LOGS_CHANNEL = "__global__";
 const HEARTBEAT_DO_NAME = "blob:heartbeats";
 const LOG_FETCH_TIMEOUT_MS = 8000;
 
+// Global WebSocket connections storage (persists across requests in the same isolate)
+const globalWsConnections = new Map<string, WebSocket>();
+
 interface DiagCheckResult {
   name: string;
   ok: boolean;
@@ -604,14 +607,8 @@ async function handleBlobWebSocket(request: Request, env: Env): Promise<Response
   // Generate a unique channel for this WebSocket connection
   const channel = `ws-${crypto.randomUUID()}`;
   
-  // Store WebSocket connection in a global map (using env for simplicity)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  if (!(env as any).wsConnections) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (env as any).wsConnections = new Map();
-  }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (env as any).wsConnections.set(channel, server);
+  // Store WebSocket connection in global map
+  globalWsConnections.set(channel, server as unknown as WebSocket);
 
   // Send welcome message
   server.send(JSON.stringify({
@@ -715,14 +712,12 @@ async function handleBlobWebSocket(request: Request, env: Env): Promise<Response
 
   // Handle close
   server.addEventListener("close", () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (env as any).wsConnections?.delete(channel);
+    globalWsConnections.delete(channel);
   });
 
   server.addEventListener("error", (err: unknown) => {
     console.error("WebSocket error:", err);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (env as any).wsConnections?.delete(channel);
+    globalWsConnections.delete(channel);
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -789,8 +784,7 @@ export default {
         return Response.json({ error: "channel and text required" }, { status: 400 });
       }
       
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const ws = (env as any).wsConnections?.get(channel);
+      const ws = globalWsConnections.get(channel);
       if (ws && ws.readyState === 1) { // WebSocket.OPEN
         ws.send(JSON.stringify({ type: body.type || "message", text }));
         return new Response("ok");
