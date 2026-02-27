@@ -1,9 +1,15 @@
 {
   "name": "model",
-  "description": "Show free tier info. Cloudflare Workers AI is FREE - just use Llama 70B for everything!",
+  "description": "Budget-aware model picker. Goal: under $20/month. Default: Cloudflare (cheap). Escalate: Anthropic (expensive, use sparingly).",
   "input_schema": {
     "type": "object",
-    "properties": {},
-    "required": []
+    "properties": {
+      "command": {
+        "type": "string",
+        "enum": ["budget", "pick", "escalate", "status"]
+      },
+      "task": { "type": "string" }
+    },
+    "required": ["command"]
   }
 }
