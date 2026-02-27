@@ -1,58 +1,59 @@
 {
   "budget": {
     "monthly_limit": 20,
-    "currency": "USD",
-    "alert_at": 15
+    "spent": 0,
+    "strategy": "Cloudflare Workers AI first (free), then AI Gateway for others"
   },
-  "providers": {
-    "cloudflare": {
-      "name": "Cloudflare Workers AI",
+  "sources": {
+    "cloudflare_workers": {
+      "type": "free_tier",
+      "limit": "10,000 neurons/day",
       "models": {
         "qwen3-30b": {
           "id": "@cf/qwen/qwen3-30b-a3b-fp8",
-          "cost_per_1k": 0.0005,
+          "cost": "FREE",
           "neurons": 120,
-          "use_for": "default coding tasks"
+          "use_for": "default - coding, tools, reasoning"
         },
         "glm-4.7": {
-          "id": "@cf/zai-org/glm-4.7-flash", 
-          "cost_per_1k": 0.0002,
+          "id": "@cf/zai-org/glm-4.7-flash",
+          "cost": "FREE",
           "neurons": 50,
           "use_for": "simple queries"
         }
       }
     },
-    "openai": {
-      "name": "OpenAI via AI Gateway",
+    "ai_gateway": {
+      "type": "paid",
+      "budget_remaining": 20,
       "models": {
         "gpt-4.1-mini": {
+          "provider": "openai",
           "id": "gpt-4.1-mini",
-          "cost_per_1k_input": 0.0004,
-          "cost_per_1k_output": 0.0016,
-          "use_for": "when Cloudflare fails"
-        }
-      }
-    },
-    "anthropic": {
-      "name": "Anthropic via AI Gateway",
-      "models": {
-        "claude-sonnet-4-6": {
+          "cost_per_1k": "$0.002",
+          "use_for": "when Workers fails or complex tasks"
+        },
+        "claude-sonnet": {
+          "provider": "anthropic",
           "id": "claude-sonnet-4-6",
-          "cost_per_1k_input": 0.003,
-          "cost_per_1k_output": 0.015,
-          "use_for": "complex problems only"
+          "cost_per_1k": "$0.009",
+          "use_for": "hard problems only - expensive!"
+        },
+        "deepseek-chat": {
+          "provider": "deepseek",
+          "id": "deepseek-chat",
+          "cost_per_1k": "$0.0005",
+          "use_for": "cheap alternative to Workers"
         }
       }
     }
   },
-  "strategy": {
-    "default": "cloudflare/qwen3-30b",
-    "fallback": "openai/gpt-4.1-mini",
-    "escalate": "anthropic/claude-sonnet-4-6"
-  },
-  "cost_tracking": {
-    "month": "2025-02",
-    "spent": 0,
-    "requests": 0
-  }
+  "usage_rules": [
+    "ALWAYS try Cloudflare Workers first (it's FREE)",
+    "Only use AI Gateway if:",
+    "  - Workers is down/rate limited",
+    "  - Need model not on Workers",
+    "  - Complex task worth paying for",
+    "Track spending - stop at $20"
+  ]
 }
