@@ -82,6 +82,7 @@ interface DurableObjectStateLike {
   storage: {
     sql: SqlStorage;
     setAlarm?: (scheduledTime: number | Date) => Promise<void> | void;
+    getAlarm?: () => Promise<number | null>;
   };
 }
 
