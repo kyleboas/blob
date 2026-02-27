@@ -435,8 +435,12 @@ export async function classifyMessage(input: {
   const routingPrompt = [
     "Classify the message type for model routing.",
     'Respond with JSON only using this schema: {"type":"chat"|"routine"|"complex"}.',
-    'Use "chat" only when the user is purely conversational and is not asking Blob to perform work.',
-    'Use "routine" for actionable execution requests, including capability checks like "can you create a pull request" or "test if you can".',
+    'Use "chat" ONLY when the user is purely conversational (greetings, small talk, opinions) and is NOT asking Blob to perform work or provide information from its systems.',
+    'Use "routine" for:',
+    '  - Actionable execution requests (create PR, run tests, deploy)',
+    '  - Status queries ("show my heartbeats", "what are my goals", "deployment status")',
+    '  - Capability checks ("can you create a pull request", "test if you can")',
+    '  - ANY request that requires checking Blob\'s internal state or databases',
     'Use "complex" for architecture-level decisions, deep multi-step planning, or large refactors.'
   ].join(" ");
 
