@@ -1,14 +1,9 @@
 {
   "name": "model",
-  "description": "Switch LLM model. Default is routine (Mistral 7B). Use escalate for hard tasks, simple for chat only.",
+  "description": "Show free tier info. Cloudflare Workers AI is FREE - just use Llama 70B for everything!",
   "input_schema": {
     "type": "object",
-    "properties": {
-      "command": {
-        "type": "string",
-        "enum": ["current", "escalate", "simple", "list"]
-      }
-    },
-    "required": ["command"]
+    "properties": {},
+    "required": []
   }
 }

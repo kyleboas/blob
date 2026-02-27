@@ -1,0 +1,20 @@
+{
+  "current": "free",
+  "models": {
+    "free": {
+      "id": "@cf/meta/llama-3.3-70b-instruct-fp8",
+      "description": "Llama 3.3 70B - FREE tier (10k requests/day, 100k tokens/request)",
+      "cost": "FREE",
+      "limits": "10k requests/day, 100k tokens/request",
+      "strengths": ["everything - best free model"]
+    },
+    "fast": {
+      "id": "@cf/mistral/mistral-7b-instruct-v0.2",
+      "description": "Mistral 7B - FREE tier, faster for simple tasks",
+      "cost": "FREE", 
+      "limits": "10k requests/day, 100k tokens/request",
+      "strengths": ["fast responses", "simple coding"]
+    }
+  },
+  "note": "Cloudflare Workers AI is FREE up to 10k requests/day. Just use the best model (Llama 70B) for everything!"
+}
