@@ -331,7 +331,7 @@ function renderLiveLogPage(): string {
 
       logNode.innerHTML = reversed.map((build, idx) => {
         const labelHtml = build.label !== null ? escHtml(build.label) : 'Event';
-        const isLast = idx === filtered.length - 1;
+        const isLast = idx === 0; // First item in reversed array is newest
         const key = build.key;
         const defaultCollapsed = !isLast;
         const isCollapsed = userCollapsedState.has(key) ? userCollapsedState.get(key) : defaultCollapsed;
