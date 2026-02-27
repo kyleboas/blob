@@ -622,7 +622,15 @@ export class AgentDO {
           }
 
           // Use LLM to classify intent and extract entities
-          const classification = await this.classifyIntentWithEntities(event.text ?? "");
+          let classification;
+          try {
+            classification = await this.classifyIntentWithEntities(event.text ?? "");
+          } catch (error) {
+            console.error("[CLASSIFY] Error:", error);
+            this.forwardToGlobalLogs("classification_error", `[#${channel}] ${error instanceof Error ? error.message : String(error)}`);
+            // Fall back to general_chat
+            classification = { intent: "general_chat", confidence: 0, entities: {} };
+          }
           
           // Fallback: Check for heartbeat patterns if LLM confidence is low
           const text = event.text?.toLowerCase() ?? "";
@@ -644,6 +652,10 @@ export class AgentDO {
               }
             }
           }
+          
+          // Log classification for debugging
+          console.log(`[CLASSIFY] text="${text.slice(0, 50)}..." intent=${intent} confidence=${confidence}`);
+          this.forwardToGlobalLogs("classification", `[#${channel}] intent=${intent} confidence=${confidence}`);
           switch (intent) {
             case "time_query": {
               const now = new Date();
@@ -2366,31 +2378,42 @@ export class AgentDO {
   }
 
   private async showHeartbeatStatus(channel: string): Promise<string> {
-    // Check if heartbeats are paused or no alarm is scheduled - auto-start if needed
-    const isPaused = getSetting(this.db, "heartbeats_paused") === "true";
-    const alarmTime = await this.ctx.storage.getAlarm?.();
-    const hasAlarm = alarmTime !== null && alarmTime !== undefined;
-    
-    if (isPaused || !hasAlarm) {
-      // Auto-start heartbeats
-      await this.startHeartbeats(channel);
-      return "Heartbeats were stopped. I've started them for you.";
-    }
-    
-    const heartbeats = listHeartbeats(this.db, 10);
-    if (heartbeats.length === 0) {
-      return "Heartbeats are enabled and running. The queue is currently empty - I'll generate new autonomous tasks shortly.";
-    }
+    try {
+      // Check if heartbeats are paused or no alarm is scheduled - auto-start if needed
+      const isPaused = getSetting(this.db, "heartbeats_paused") === "true";
+      let hasAlarm = false;
+      
+      try {
+        const alarmTime = await this.ctx.storage.getAlarm?.();
+        hasAlarm = alarmTime !== null && alarmTime !== undefined;
+      } catch (alarmError) {
+        console.error("[HEARTBEAT] Error checking alarm:", alarmError);
+      }
+      
+      if (isPaused || !hasAlarm) {
+        // Auto-start heartbeats
+        await this.startHeartbeats(channel);
+        return "Heartbeats were stopped. I've started them for you.";
+      }
+      
+      const heartbeats = listHeartbeats(this.db, 10);
+      if (heartbeats.length === 0) {
+        return "Heartbeats are enabled and running. The queue is currently empty - I'll generate new autonomous tasks shortly.";
+      }
 
-    const statusLines = heartbeats.map(h => {
-      const statusEmoji = h.status === 'completed' ? '✅' :
-                         h.status === 'failed' ? '❌' :
-                         h.status === 'running' ? '🔄' : '⏳';
-      const time = new Date(h.createdAt).toLocaleTimeString();
-      return `${statusEmoji} #${h.id} [${h.status}] ${time}: ${h.task.slice(0, 60)}${h.task.length > 60 ? '...' : ''}`;
-    });
+      const statusLines = heartbeats.map(h => {
+        const statusEmoji = h.status === 'completed' ? '✅' :
+                           h.status === 'failed' ? '❌' :
+                           h.status === 'running' ? '🔄' : '⏳';
+        const time = new Date(h.createdAt).toLocaleTimeString();
+        return `${statusEmoji} #${h.id} [${h.status}] ${time}: ${h.task.slice(0, 60)}${h.task.length > 60 ? '...' : ''}`;
+      });
 
-    return `📊 Recent Heartbeats:\n\n${statusLines.join('\n')}`;
+      return `📊 Recent Heartbeats:\n\n${statusLines.join('\n')}`;
+    } catch (error) {
+      console.error("[HEARTBEAT] Error in showHeartbeatStatus:", error);
+      return `Error checking heartbeat status: ${error instanceof Error ? error.message : String(error)}`;
+    }
   }
 
   private async showDeploymentStatus(channel: string): Promise<string> {
