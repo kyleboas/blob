@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { callLLM, selectModel } from "./llm";
+import { callLLM, classifyMessage, selectModel } from "./llm";
 import { MODEL_CHAT, MODEL_COMPLEX, MODEL_ROUTINE } from "./config";
 
 describe("selectModel", () => {
@@ -488,3 +488,46 @@ describe("callLLM", () => {
   });
 
 });
+
+describe("classifyMessage", () => {
+  it("routes actionable capability checks as routine via router model", async () => {
+    const fetchSpy = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: '{"type":"routine"}' } }]
+      })
+    }));
+
+    const result = await classifyMessage({
+      fetchImpl: fetchSpy as unknown as typeof fetch,
+      openAiApiKey: "test-token",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "Test to see if you can create a pull request to the blob repo" }],
+      routerModel: "gpt-4o-mini"
+    });
+
+    expect(result).toBe("routine");
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  });
+
+  it("still routes conversational questions as chat via router model", async () => {
+    const fetchSpy = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: '{"type":"chat"}' } }]
+      })
+    }));
+
+    const result = await classifyMessage({
+      fetchImpl: fetchSpy as unknown as typeof fetch,
+      openAiApiKey: "test-token",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "How are you today?" }],
+      routerModel: "gpt-4o-mini"
+    });
+
+    expect(result).toBe("chat");
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  });
+});
+
