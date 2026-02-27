@@ -2295,6 +2295,16 @@ ${auditContext}` }
       /(?:heartbeat|goal|task|deploy)\s+status/i,
     ];
     const isStatusQuery = statusQueryPatterns.some(p => p.test(task));
+    
+    // Fast-path simple greetings to chat without router call
+    const greetingPatterns = [
+      /^(hi|hello|hey|yo|sup|howdy|greetings)(\s|$)/i,
+      /^(good\s+(morning|afternoon|evening))/i,
+      /^(thanks|thank you|ty)(\s|$)/i,
+      /^(ok|okay|got it|understood)(\s|$)/i,
+      /^(bye|goodbye|see ya|cya)(\s|$)/i,
+    ];
+    const isGreeting = greetingPatterns.some(p => p.test(task));
 
     // Orchestrator owns session lifecycle and conversation memory.
     // It resolves (or creates) the current session, handles end-of-session
@@ -2317,6 +2327,8 @@ ${auditContext}` }
     let messageType: "chat" | "routine" | "complex";
     if (isStatusQuery) {
       messageType = "routine";
+    } else if (isGreeting) {
+      messageType = "chat";
     } else {
       // Build minimal system prompt for routing (no KV fetch needed)
       const routingSystemPrompt = buildSystemPrompt(getKnowledge(this.db), this.getPromptPolicies(), null);
@@ -2344,19 +2356,12 @@ ${auditContext}` }
       void this.summarizePreviousSession(previousSessionId);
     }
 
-    // Build full system prompt with goals for sub-agents (chat doesn't need this)
-    const userConfig = await this.getUserConfiguration();
-    const repoGoals = getRepositoryGoals(userConfig, "kyleboas", "blob");
-    const systemPrompt = buildSystemPrompt(getKnowledge(this.db), this.getPromptPolicies(), repoGoals);
-
     // Persist the incoming user message on the orchestrator side now so that
     // even if the sub-agent crashes the turn is recorded.
-    saveMessage(this.db, sessionId, { role: "user", content: task });    if (messageType === "chat") {
-      // Respond conversationally without spinning up a sub-agent or using tools.
-      // Use a focused system prompt that describes actual capabilities without
-      // inheriting proactive agent directives from AGENT.md (e.g. "take initiative",
-      // "check tasks.json on startup") that would cause the chat model to behave
-      // like a task-execution agent.
+    saveMessage(this.db, sessionId, { role: "user", content: task });
+    
+    // FAST PATH: Handle chat immediately without loading config or building full system prompt
+    if (messageType === "chat") {
       const chatSystemPrompt = [
         "You are Blob, the top-level conversational interface. Users talk to you directly.",
         "You are their constant point of contact for all interactions.",
@@ -2387,6 +2392,11 @@ ${auditContext}` }
       this.forwardToGlobalLogs("chat_reply", `[#${channel}] ${responseText.slice(0, 500)}`);
       return;
     }
+    
+    // SLOW PATH: Build full system prompt for sub-agents
+    const userConfig = await this.getUserConfiguration();
+    const repoGoals = getRepositoryGoals(userConfig, "kyleboas", "blob");
+    const systemPrompt = buildSystemPrompt(getKnowledge(this.db), this.getPromptPolicies(), repoGoals);
 
     // Task path: spawn a sub-agent and pass the pre-determined complexity hint
     // so the sub-agent does not need to run the router a second time.
