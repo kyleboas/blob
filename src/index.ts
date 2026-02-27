@@ -243,20 +243,39 @@ function renderLiveLogPage(): string {
 
     function computeBuilds(events) {
       const builds = [];
-      let current = null;
       for (const event of events) {
-        if (event.eventType === 'task_received' || event.eventType === 'heartbeat_start') {
-          current = { label: event.message, type: event.eventType === 'heartbeat_start' ? 'heartbeat' : 'task', model: null, events: [] };
-          builds.push(current);
+        // Each individual message or background task gets its own dropdown
+        // Group by message_received, background_task, heartbeat, or other individual events
+        let label = event.message;
+        let type = 'other';
+        let model = null;
+        
+        if (event.eventType === 'message_received') {
+          type = 'message';
+          label = event.message.slice(0, 80);
+        } else if (event.eventType === 'task_received') {
+          type = 'task';
+          label = event.message.slice(0, 80);
+        } else if (event.eventType === 'heartbeat_start') {
+          type = 'heartbeat';
+          label = 'Heartbeat: ' + event.message.slice(0, 60);
+        } else if (event.eventType === 'background_task') {
+          type = 'background';
+          label = 'Background: ' + event.message.slice(0, 60);
+        } else if (event.eventType === 'model_used') {
+          model = extractModel(event.message);
+          label = 'Model: ' + shortModel(model);
+        } else {
+          label = event.eventType + ': ' + event.message.slice(0, 60);
         }
-        if (!current) {
-          current = { label: null, type: 'other', model: null, events: [] };
-          builds.push(current);
-        }
-        if (event.eventType === 'model_used' && current.model === null) {
-          current.model = extractModel(event.message);
-        }
-        current.events.push(event);
+        
+        builds.push({ 
+          label: label, 
+          type: type, 
+          model: model, 
+          event: event,
+          key: event.createdAt + '-' + event.eventType + '-' + Math.random().toString(36).slice(2, 8)
+        });
       }
       return builds;
     }
@@ -300,16 +319,16 @@ function renderLiveLogPage(): string {
       const atBottom = logNode.scrollHeight - logNode.scrollTop <= logNode.clientHeight + 50;
 
       logNode.innerHTML = filtered.map((build, idx) => {
-        const labelHtml = build.label !== null ? escHtml(build.label.slice(0, 120)) : 'Events';
+        const labelHtml = build.label !== null ? escHtml(build.label) : 'Event';
         const isLast = idx === filtered.length - 1;
-        const key = build.label !== null ? build.label : '__events__';
+        const key = build.key;
         const defaultCollapsed = !isLast;
         const isCollapsed = userCollapsedState.has(key) ? userCollapsedState.get(key) : defaultCollapsed;
         const collapsedClass = isCollapsed ? ' collapsed' : '';
         const modelBadge = build.model ? ' <span style="color:#86efac;font-size:0.75rem">' + escHtml(shortModel(build.model)) + '</span>' : '';
         const header = '<div class="build-header"><span class="build-chevron">&#9660;</span><span class="build-label">' + labelHtml + modelBadge + '</span><button class="build-copy-btn" data-idx="' + idx + '">Copy</button></div>';
-        const lines = build.events.map(formatLine).join('\\n');
-        return '<div class="build-group' + collapsedClass + '" data-key="' + escHtml(key.slice(0, 120)) + '">' + header + '<div class="build-body">' + lines + '</div></div>';
+        const line = formatLine(build.event);
+        return '<div class="build-group' + collapsedClass + '" data-key="' + escHtml(key) + '">' + header + '<div class="build-body">' + line + '</div></div>';
       }).join('');
 
       // Attach collapse toggle handlers
@@ -331,10 +350,7 @@ function renderLiveLogPage(): string {
           e.stopPropagation();
           const idx = parseInt(btn.getAttribute('data-idx'));
           const build = filtered[idx];
-          const text = build.events.map((event) => {
-            const when = new Date(event.createdAt * 1000).toISOString().replace('T', ' ').replace('Z', '');
-            return when + '  [' + event.eventType + ']  ' + event.message;
-          }).join('\\n');
+          const text = formatLine(build.event).replace(/<[^>]*>/g, ''); // Strip HTML tags
           navigator.clipboard.writeText(text).then(() => {
             btn.textContent = 'Copied!';
             btn.classList.add('copied');
