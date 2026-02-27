@@ -67,6 +67,7 @@ import {
   BASH_TOOL,
   CREATE_TOOL_TOOL,
   WEB_FETCH_TOOL,
+  WEATHER_TOOL,
   compileDynamicToolCommand,
   dynamicToolToAnthropicSchema,
   formatToolResult,
@@ -641,6 +642,20 @@ export class AgentDO {
               await this.sendResponse(channel, location ? `Your location is ${location}.` : "I don't know your location yet. You can tell me by saying 'my location is ...'");
               return;
             }
+            
+            // Weather queries - if location known, fetch weather directly
+            if (/^(?:what's|what is)\s+(?:the\s+)?weather/i.test(text) || /weather\s+(?:today|now|outside)/i.test(text)) {
+              const location = getSetting(this.db, "user_location");
+              if (location) {
+                await this.sendResponse(channel, `🌤️ Getting weather for ${location}...`);
+                const weatherResult = await this.handleWeather(location);
+                await this.sendResponse(channel, weatherResult);
+                return;
+              }
+              // No location - ask user
+              await this.sendResponse(channel, "I'd be happy to check the weather! What's your location? (You can also say 'my location is ...' to save it for next time)");
+              return;
+            }
           }
           
           await this.spawnSubAgent(event);
@@ -976,7 +991,7 @@ export class AgentDO {
     const dynamicTools = new Map<string, DynamicToolDefinition>();
 
     // System prompt now includes instruction for LLM to generate status updates
-    const systemPromptWithStatus = `${systemPrompt}\n\nWhen you start working on a task, begin your response with a brief status update in brackets like [Planning my approach...] or [Looking up the weather data...]. This helps the user understand what you're doing in real-time.`;
+    const systemPromptWithStatus = `${systemPrompt}\n\nWhen you start working on a task, begin your response with a brief status update in brackets like [Planning my approach...] or [Looking up the weather data...]. This helps the user understand what you're doing in real-time.\n\nWhen asked about weather, use the weather tool with the user's location from memory. If no location is stored, ask the user for their location first.`;
 
     let finalText = "";
     let steps = 0;
@@ -1627,6 +1642,13 @@ export class AgentDO {
         continue;
       }
 
+      if (toolBlock.name === WEATHER_TOOL.name) {
+        const location = String(toolBlock.input.location ?? "");
+        const weatherResult = await this.handleWeather(location);
+        observations.push(formatToolResult(toolBlock.id, weatherResult));
+        continue;
+      }
+
       const dynamicTool = options.dynamicTools.get(toolBlock.name);
       const commandResult = dynamicTool
         ? compileDynamicToolCommand(dynamicTool, toolBlock.input)
@@ -1747,7 +1769,7 @@ export class AgentDO {
   }
 
   private buildToolList(dynamicTools: Map<string, DynamicToolDefinition>): unknown[] {
-    return [BASH_TOOL, CREATE_TOOL_TOOL, WEB_FETCH_TOOL, ...Array.from(dynamicTools.values()).map((tool) => dynamicToolToAnthropicSchema(tool))];
+    return [BASH_TOOL, CREATE_TOOL_TOOL, WEB_FETCH_TOOL, WEATHER_TOOL, ...Array.from(dynamicTools.values()).map((tool) => dynamicToolToAnthropicSchema(tool))];
   }
 
   private async handleWebFetch(url: string, maxLength: number): Promise<string> {
@@ -1797,6 +1819,36 @@ export class AgentDO {
       return markdown;
     } catch (error) {
       return `Error: ${error instanceof Error ? error.message : 'Fetch failed'}`;
+    }
+  }
+
+  private async handleWeather(location: string): Promise<string> {
+    if (!location.trim()) {
+      return "Error: Location is required";
+    }
+    
+    try {
+      // Use wttr.in free weather service
+      const encodedLocation = encodeURIComponent(location);
+      const response = await fetch(`https://wttr.in/${encodedLocation}?format=%C|%t|%w|%h|%p|%l`, {
+        headers: { 'User-Agent': 'curl/7.64.1' }
+      });
+      
+      if (!response.ok) {
+        return `Error: Failed to fetch weather (HTTP ${response.status})`;
+      }
+      
+      const data = await response.text();
+      const [condition, temp, wind, humidity, precipitation, loc] = data.split('|');
+      
+      return `Weather for ${loc.trim()}:\n` +
+             `Condition: ${condition.trim()}\n` +
+             `Temperature: ${temp.trim()}\n` +
+             `Wind: ${wind.trim()}\n` +
+             `Humidity: ${humidity.trim()}\n` +
+             `Precipitation: ${precipitation.trim()}`;
+    } catch (error) {
+      return `Error: ${error instanceof Error ? error.message : 'Failed to fetch weather'}`;
     }
   }
 

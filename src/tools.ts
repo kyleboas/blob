@@ -62,6 +62,21 @@ export const WEB_FETCH_TOOL = {
   }
 } as const;
 
+export const WEATHER_TOOL = {
+  name: "weather",
+  description: "Get current weather for a location. Uses wttr.in free weather service. Pass location as city name or 'lat,lon' coordinates.",
+  input_schema: {
+    type: "object",
+    properties: {
+      location: {
+        type: "string",
+        description: "City name (e.g. 'London', 'New York', 'Shanghai') or coordinates (e.g. '31.2304,121.4737')"
+      }
+    },
+    required: ["location"]
+  }
+} as const;
+
 export function sanitizeToolName(rawName: string): string {
   return rawName.trim().toLowerCase().replace(/[^a-z0-9_]/g, "_");
 }
