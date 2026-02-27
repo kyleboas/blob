@@ -184,9 +184,7 @@ function renderLiveLogPage(): string {
     const copyBtn = document.getElementById('copy-btn');
     let lastSnapshotSig = '';
     let currentEvents = [];
-    let allBuilds = [];
     let activeTab = 'all';
-    // Track user-toggled collapsed state: label -> boolean (true = collapsed)
     const userCollapsedState = new Map();
 
     copyBtn.addEventListener('click', () => {
@@ -217,7 +215,8 @@ function renderLiveLogPage(): string {
       tabsNode.querySelectorAll('.tab').forEach((btn) => {
         btn.classList.toggle('active', btn.getAttribute('data-tab') === tab);
       });
-      renderBuilds(allBuilds);
+      const builds = computeBuilds(currentEvents);
+      renderBuilds(builds);
     }
 
     function escHtml(s) {
@@ -243,40 +242,49 @@ function renderLiveLogPage(): string {
 
     function computeBuilds(events) {
       const builds = [];
+      let currentBuild = null;
+      
       for (const event of events) {
-        // Each individual message or background task gets its own dropdown
-        // Group by message_received, background_task, heartbeat, or other individual events
-        let label = event.message;
-        let type = 'other';
-        let model = null;
-        
-        if (event.eventType === 'message_received') {
-          type = 'message';
-          label = event.message.slice(0, 80);
-        } else if (event.eventType === 'task_received') {
-          type = 'task';
-          label = event.message.slice(0, 80);
-        } else if (event.eventType === 'heartbeat_start') {
-          type = 'heartbeat';
-          label = 'Heartbeat: ' + event.message.slice(0, 60);
-        } else if (event.eventType === 'background_task') {
-          type = 'background';
-          label = 'Background: ' + event.message.slice(0, 60);
-        } else if (event.eventType === 'model_used') {
-          model = extractModel(event.message);
-          label = 'Model: ' + shortModel(model);
+        // Start a new build when we see a user message or task start
+        if (event.eventType === 'task_received' || 
+            event.eventType === 'message_received' || 
+            event.eventType === 'heartbeat_start') {
+          // Save previous build if exists
+          if (currentBuild) {
+            builds.push(currentBuild);
+          }
+          // Start new build
+          currentBuild = {
+            label: event.message.slice(0, 120),
+            type: event.eventType === 'heartbeat_start' ? 'heartbeat' : 'task',
+            model: null,
+            events: [event],
+            key: event.createdAt + '-' + event.eventType
+          };
+        } else if (currentBuild) {
+          // Add event to current build
+          currentBuild.events.push(event);
+          // Track model used
+          if (event.eventType === 'model_used' && !currentBuild.model) {
+            currentBuild.model = extractModel(event.message);
+          }
         } else {
-          label = event.eventType + ': ' + event.message.slice(0, 60);
+          // Orphaned event (no parent) - create a small build
+          builds.push({
+            label: event.eventType + ': ' + event.message.slice(0, 60),
+            type: 'other',
+            model: null,
+            events: [event],
+            key: event.createdAt + '-' + event.eventType
+          });
         }
-        
-        builds.push({ 
-          label: label, 
-          type: type, 
-          model: model, 
-          event: event,
-          key: event.createdAt + '-' + event.eventType + '-' + Math.random().toString(36).slice(2, 8)
-        });
       }
+      
+      // Don't forget the last build
+      if (currentBuild) {
+        builds.push(currentBuild);
+      }
+      
       return builds;
     }
 
@@ -318,7 +326,10 @@ function renderLiveLogPage(): string {
 
       const atBottom = logNode.scrollHeight - logNode.scrollTop <= logNode.clientHeight + 50;
 
-      logNode.innerHTML = filtered.map((build, idx) => {
+      // Reverse to show newest first
+      const reversed = [...filtered].reverse();
+
+      logNode.innerHTML = reversed.map((build, idx) => {
         const labelHtml = build.label !== null ? escHtml(build.label) : 'Event';
         const isLast = idx === filtered.length - 1;
         const key = build.key;
@@ -327,8 +338,8 @@ function renderLiveLogPage(): string {
         const collapsedClass = isCollapsed ? ' collapsed' : '';
         const modelBadge = build.model ? ' <span style="color:#86efac;font-size:0.75rem">' + escHtml(shortModel(build.model)) + '</span>' : '';
         const header = '<div class="build-header"><span class="build-chevron">&#9660;</span><span class="build-label">' + labelHtml + modelBadge + '</span><button class="build-copy-btn" data-idx="' + idx + '">Copy</button></div>';
-        const line = formatLine(build.event);
-        return '<div class="build-group' + collapsedClass + '" data-key="' + escHtml(key) + '">' + header + '<div class="build-body">' + line + '</div></div>';
+        const lines = build.events.map(formatLine).join('\\n');
+        return '<div class="build-group' + collapsedClass + '" data-key="' + escHtml(key) + '">' + header + '<div class="build-body">' + lines + '</div></div>';
       }).join('');
 
       // Attach collapse toggle handlers
@@ -345,12 +356,14 @@ function renderLiveLogPage(): string {
       });
 
       // Attach per-build copy button handlers
-      logNode.querySelectorAll('.build-copy-btn').forEach((btn) => {
+      logNode.querySelectorAll('.build-copy-btn').forEach((btn, btnIdx) => {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
-          const idx = parseInt(btn.getAttribute('data-idx'));
-          const build = filtered[idx];
-          const text = formatLine(build.event).replace(/<[^>]*>/g, ''); // Strip HTML tags
+          const build = reversed[btnIdx];
+          const text = build.events.map((event) => {
+            const when = new Date(event.createdAt * 1000).toISOString().replace('T', ' ').replace('Z', '');
+            return when + '  [' + event.eventType + ']  ' + event.message;
+          }).join('\n');
           navigator.clipboard.writeText(text).then(() => {
             btn.textContent = 'Copied!';
             btn.classList.add('copied');
@@ -364,9 +377,9 @@ function renderLiveLogPage(): string {
 
     function renderEvents(events) {
       currentEvents = events;
-      allBuilds = computeBuilds(events);
-      updateModelTabs(allBuilds);
-      renderBuilds(allBuilds);
+      const builds = computeBuilds(events);
+      updateModelTabs(builds);
+      renderBuilds(builds);
       if (events.length === 0) {
         logNode.innerHTML = '<span class="empty">No events yet. Blob activity will appear here automatically.</span>';
       }
