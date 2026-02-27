@@ -116,3 +116,4 @@ Response format:
 - `trace_id`
 - `ok`
 - `checks[]` (`name`, `ok`, `ms`, optional `error`)
+# Tests passing
