@@ -2000,11 +2000,13 @@ export class AgentDO {
     }
 
     // Show heartbeat status
-    // Matches: "show my heartbeats", "what are my heartbeats", "heartbeat status", etc.
+    // Matches: "show my heartbeats", "what are my heartbeats", "heartbeat status", "are heartbeats on", etc.
     const heartbeatStatusPatterns = [
       /(?:show|what\s+are|list)\s+(?:my\s+)?heartbeats/i,
       /heartbeat\s+status/i,
       /(?:show|view)\s+(?:my\s+)?(?:task|work)\s+queue/i,
+      /(?:are|is)\s+(?:the\s+)?heartbeats?\s+(?:on|running|enabled|active)/i,
+      /(?:are|is)\s+(?:the\s+)?heartbeats?\s+(?:paused|stopped|off)/i,
     ];
 
     for (const pattern of heartbeatStatusPatterns) {
