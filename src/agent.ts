@@ -2081,21 +2081,40 @@ ${auditContext}` }
 
     const subAgentId = this.env.AGENT_DO.idFromName(subAgentDoName);
     const subAgentStub = this.env.AGENT_DO.get(subAgentId);
-    await subAgentStub.fetch("https://agent.internal/event", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        action: "run_task",
-        event,
-        orchestratorName,
-        doName: subAgentDoName,
-        // Conversation context from the orchestrator
-        priorMessages,
-        systemPrompt,
-        orchestratorSessionId: sessionId,
-        taskComplexityHint
-      })
-    });
+    
+    // Send immediate acknowledgment to user
+    await this.deps.postSlackMessage(
+      this.env.SLACK_BOT_TOKEN,
+      channel,
+      "🔄 Working on it... I'll let you know when it's done."
+    );
+    
+    // Spawn sub-agent in background so user can continue chatting
+    this.runInBackground((async () => {
+      try {
+        await subAgentStub.fetch("https://agent.internal/event", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            action: "run_task",
+            event,
+            orchestratorName,
+            doName: subAgentDoName,
+            priorMessages,
+            systemPrompt,
+            orchestratorSessionId: sessionId,
+            taskComplexityHint
+          })
+        });
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        await this.deps.postSlackMessage(
+          this.env.SLACK_BOT_TOKEN,
+          channel,
+          `❌ Task failed: ${errorMessage}`
+        );
+      }
+    })());
   }
 
   private async startSandboxSession(sessionId: string): Promise<void> {
