@@ -2305,6 +2305,20 @@ ${auditContext}` }
       /^(bye|goodbye|see ya|cya)(\s|$)/i,
     ];
     const isGreeting = greetingPatterns.some(p => p.test(task));
+    
+    // Fast-path self-knowledge questions to chat (no lookup needed)
+    const selfKnowledgePatterns = [
+      /what\s+(model|ai|llm|agent)\s+(are|running|using|is)/i,
+      /who\s+(are|made|built|created)\s+you/i,
+      /what\s+(can|do)\s+you\s+do/i,
+      /how\s+(do|does)\s+(you|blob)\s+work/i,
+      /what\s+is\s+(your|blob's)\s+(name|purpose|goal)/i,
+      /tell\s+me\s+about\s+(yourself|blob)/i,
+      /what\s+time\s+is\s+it/i,
+      /what's\s+the\s+time/i,
+      /current\s+time/i,
+    ];
+    const isSelfKnowledge = selfKnowledgePatterns.some(p => p.test(task));
 
     // Orchestrator owns session lifecycle and conversation memory.
     // It resolves (or creates) the current session, handles end-of-session
@@ -2361,7 +2375,17 @@ ${auditContext}` }
     saveMessage(this.db, sessionId, { role: "user", content: task });
     
     // FAST PATH: Handle chat immediately without loading config or building full system prompt
-    if (messageType === "chat") {
+    if (messageType === "chat" || isGreeting || isSelfKnowledge) {
+      const now = new Date();
+      const timeString = now.toLocaleString('en-US', { 
+        weekday: 'long', 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZoneName: 'short'
+      });
       const chatSystemPrompt = [
         "You are Blob, the top-level conversational interface. Users talk to you directly.",
         "You are their constant point of contact for all interactions.",
@@ -2378,7 +2402,8 @@ ${auditContext}` }
         "IMPORTANT: Your role is conversational responses ONLY. You do NOT execute code or modify files directly.",
         "The router model (@cf/ibm-granite/granite-4.0-h-micro) decides whether to route to you for chat, or spawn a sub-agent for execution.",
         "When execution is needed, the router delegates to simple or complex sub-agents — you don't choose, the router does.",
-        "You are the conversational interface — the router is the coordinator that decides who handles what."
+        "You are the conversational interface — the router is the coordinator that decides who handles what.",
+        `Current date and time: ${timeString}. When asked about the time, respond with this information directly.`
       ].join(" ");
       const conversation = [...priorMessages, { role: "user" as const, content: task }];
       const chatResponse = await this.deps.llmCall(this.buildLlmInput({
