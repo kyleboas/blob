@@ -1283,7 +1283,7 @@ describe("AgentDO sub-agent system", () => {
     const postSlackMessage = vi.fn().mockResolvedValue(undefined);
 
     const agent = new AgentDO({ storage: { sql } }, env, {
-      llmCall: vi.fn() as never,
+      llmCall: vi.fn().mockResolvedValue({ content: [{ type: "text", text: '{"intent": "general_chat", "confidence": 0.9, "entities": {}}' }] }) as never,
       postSlackMessage: postSlackMessage as never,
       postSlackApproval: vi.fn() as never
     });

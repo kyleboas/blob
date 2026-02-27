@@ -767,3 +767,66 @@ No other text, no markdown, just the JSON.`;
 
   return { intent: "general_chat", confidence: 0 };
 }
+
+// Extended intent classification with entity extraction
+export interface IntentClassificationWithEntities {
+  intent: "time_query" | "memory_name_query" | "memory_location_query" | "weather_query" | "set_name" | "set_location" | "set_repo" | "heartbeat_status" | "pause_heartbeats" | "start_heartbeats" | "deployment_status" | "record_deployment" | "merge_staging" | "show_goals" | "set_goals" | "general_chat";
+  confidence: number;
+  entities: {
+    location?: string;
+    name?: string;
+    owner?: string;
+    repo?: string;
+  };
+}
+
+// Classify user intent and extract entities using LLM
+export async function classifyIntentWithEntities(
+  text: string,
+  llmCall: (input: CallLLMInput) => Promise<LLMResponse>
+): Promise<IntentClassificationWithEntities> {
+  const systemPrompt = `You are an intent classifier for Blob, an AI assistant.
+Classify the user's message into one of these intents and extract relevant entities:
+
+Intents:
+- time_query: Questions about current time ("what time is it", "current time")
+- memory_name_query: Asking for user's stored name ("what's my name")
+- memory_location_query: Asking for user's stored location ("where do I live", "what's my location")
+- weather_query: Weather questions ("what's the weather", "weather in London") - extract location
+- set_name: Setting user's name ("my name is John", "call me Jane") - extract name
+- set_location: Setting user's location ("my location is Paris", "I live in Tokyo") - extract location
+- set_repo: Setting default repository ("my repo is owner/repo") - extract owner and repo
+- heartbeat_status: Checking heartbeat status ("are heartbeats on", "show heartbeats")
+- pause_heartbeats: Pausing heartbeats ("pause heartbeats", "stop heartbeats")
+- start_heartbeats: Starting heartbeats ("start heartbeats", "resume heartbeats")
+- deployment_status: Checking deployment status
+- record_deployment: Recording a deployment ("just deployed", "deployed to production")
+- merge_staging: Merging staging to production ("merge staging to production")
+- general_chat: General conversation or unclear intent
+
+Respond with ONLY a JSON object:
+{"intent": "intent_name", "confidence": 0.95, "entities": {"location": "London", "name": "", "owner": "", "repo": ""}}
+
+Include only relevant entities. Use empty strings for missing entities. No markdown, just JSON.`;
+
+  try {
+    const response = await llmCall({
+      systemPrompt,
+      messages: [{ role: "user", content: text }],
+      taskComplexityHint: "routine"
+    });
+
+    const content = extractTextContent(response);
+    const jsonMatch = content.match(/\{[^}]+\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]) as IntentClassificationWithEntities;
+      if (parsed.intent && typeof parsed.confidence === "number") {
+        return parsed;
+      }
+    }
+  } catch {
+    // Fall through to default
+  }
+
+  return { intent: "general_chat", confidence: 0, entities: {} };
+}

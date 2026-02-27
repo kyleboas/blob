@@ -76,7 +76,7 @@ import {
 } from "./tools";
 import { mapChannelToDO, postApprovalRequest, postMessage } from "./slack";
 import { createApprovalRequest, expireTimedOutApprovals, resolveApprovalReaction, type PendingApproval } from "./approval";
-import { classifyIntent, extractTextContent, type IntentClassification } from "./llm";
+import { classifyIntentWithEntities, extractTextContent } from "./llm";
 import type { ConversationMessage, Env, SlackEvent } from "./types";
 import type { ToolResult } from "./types";
 
@@ -466,6 +466,11 @@ export class AgentDO {
     this.scheduleInitialHeartbeatAlarm();
   }
 
+  // LLM-based intent classification with entity extraction
+  private async classifyIntentWithEntities(text: string): Promise<import("./llm").IntentClassificationWithEntities> {
+    return classifyIntentWithEntities(text, (input) => this.deps.llmCall(this.buildLlmInput(input)));
+  }
+
   private async scheduleInitialHeartbeatAlarm(): Promise<void> {
     try {
       // Check if alarm is already set
@@ -605,64 +610,113 @@ export class AgentDO {
       const event = body.event;
       await this.runInBackground((async () => {
         try {
-          const handled = await this.handleSettingsCommand(event);
-          if (handled) {
+          const channel = event.channel;
+          if (!channel) return;
+
+          // First check for settings commands (model settings, etc.)
+          const settingsHandled = await this.handleSettingsCommand(event);
+          if (settingsHandled) {
             return;
           }
+
+          // Use LLM to classify intent and extract entities
+          const classification = await this.classifyIntentWithEntities(event.text ?? "");
           
-          // FAST PATH: Check for simple memory-based queries that can be answered instantly
-          const text = event.text?.toLowerCase().trim() ?? "";
-          const channel = event.channel;
-          
-          if (channel) {
-            // Time queries - instant response
-            if (/^(?:what\s+)?time\s+(?:is\s+it|now)/i.test(text) || /current\s+time/i.test(text)) {
+          // Handle based on LLM classification
+          switch (classification.intent) {
+            case "time_query": {
               const now = new Date();
               const timeString = now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZoneName: "short" });
               const dateString = now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
-              await this.sendResponse(channel, `🕐 It's ${timeString} on ${dateString}.`);
+              await this.sendResponse(channel, `It's ${timeString} on ${dateString}.`);
               return;
             }
             
-            // Memory queries - instant from settings
-            if (/^(?:what's|what is)\s+my\s+name/i.test(text)) {
+            case "memory_name_query": {
               const name = getSetting(this.db, "user_name");
               await this.sendResponse(channel, name ? `Your name is ${name}.` : "I don't know your name yet. You can tell me by saying 'my name is ...'");
               return;
             }
             
-            if (/^(?:where\s+)?do\s+i\s+live/i.test(text) || /^(?:what's|what is)\s+my\s+location/i.test(text)) {
+            case "memory_location_query": {
               const location = getSetting(this.db, "user_location");
               await this.sendResponse(channel, location ? `Your location is ${location}.` : "I don't know your location yet. You can tell me by saying 'my location is ...'");
               return;
             }
             
-            // Weather queries - extract location from message or use stored location
-            if (/^(?:what's|what is)\s+(?:the\s+)?weather/i.test(text) || /weather\s+(?:today|now|outside|in|at|for)/i.test(text)) {
-              // Try to extract location from message using LLM
-              let location: string | null = null;
-              
-              // Quick regex check for "in/at/for LOCATION" pattern
-              const locationMatch = text.match(/(?:in|at|for)\s+([a-z\s]+?)(?:\s+(?:today|now|tomorrow|this\s+week))?(?:\?|$)/i);
-              if (locationMatch) {
-                location = locationMatch[1].trim();
-              }
-              
-              // If no location in message, check stored location
-              if (!location) {
-                location = getSetting(this.db, "user_location");
-              }
-              
+            case "weather_query": {
+              const location = classification.entities?.location || getSetting(this.db, "user_location");
               if (location) {
                 await this.sendResponse(channel, `Getting weather for ${location}...`);
                 const weatherResult = await this.handleWeather(location);
                 await this.sendResponse(channel, weatherResult);
-                return;
+              } else {
+                await this.sendResponse(channel, "I'd be happy to check the weather! What's your location? (You can also say 'my location is ...' to save it for next time)");
               }
-              // No location - ask user
-              await this.sendResponse(channel, "I'd be happy to check the weather! What's your location? (You can also say 'my location is ...' to save it for next time)");
               return;
             }
+            
+            case "set_name": {
+              const name = classification.entities?.name;
+              if (name) {
+                setSetting(this.db, "user_name", name);
+                await this.sendResponse(channel, `Got it! I'll remember your name is ${name}.`);
+              } else {
+                await this.sendResponse(channel, "What's your name?");
+              }
+              return;
+            }
+            
+            case "set_location": {
+              const location = classification.entities?.location;
+              if (location) {
+                setSetting(this.db, "user_location", location);
+                await this.sendResponse(channel, `Got it! I'll remember your location is ${location}.`);
+              } else {
+                await this.sendResponse(channel, "What's your location?");
+              }
+              return;
+            }
+            
+            case "set_repo": {
+              const owner = classification.entities?.owner;
+              const repo = classification.entities?.repo;
+              if (owner && repo) {
+                setSetting(this.db, "user:github_username", owner);
+                setSetting(this.db, "user:primary_repo", repo);
+                await this.sendResponse(channel, `Got it! I'll use ${owner}/${repo} as your default repository.`);
+              }
+              return;
+            }
+            
+            case "heartbeat_status":
+              await this.sendResponse(channel, await this.showHeartbeatStatus(channel));
+              return;
+              
+            case "pause_heartbeats":
+              await this.sendResponse(channel, await this.pauseHeartbeats(channel));
+              return;
+              
+            case "start_heartbeats":
+              await this.sendResponse(channel, await this.startHeartbeats(channel));
+              return;
+              
+            case "deployment_status":
+              await this.sendResponse(channel, await this.showDeploymentStatus(channel));
+              return;
+              
+            case "record_deployment":
+              await this.sendResponse(channel, await this.recordDeployment(channel));
+              return;
+              
+            case "merge_staging":
+              await this.sendResponse(channel, await this.mergeStagingToProduction(channel));
+              return;
+              
+            case "general_chat":
+            default:
+              // Fall through to spawnSubAgent for general conversation
+              break;
           }
           
           await this.spawnSubAgent(event);
@@ -1946,7 +2000,7 @@ export class AgentDO {
     
     if (useLlmIntent) {
       try {
-        const classification = await classifyIntent(task, (input) => this.deps.llmCall(this.buildLlmInput(input)));
+        const classification = await this.classifyIntentWithEntities(task);
         
         if (classification.confidence > 0.7) {
           switch (classification.intent) {
