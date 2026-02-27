@@ -1852,7 +1852,53 @@ export class AgentDO {
       }
     }
 
+    // Set repository goals via Slack
+    // Matches: "set goals for owner/repo to: goal1, goal2, goal3" or "my goals are: ..."
+    const setGoalsPatterns = [
+      /(?:set|my)\s+goals?(?:\s+for\s+([\w-]+)\/([\w-]+))?\s*(?:to\s*[:\-]?|:|-)\s*(.+)/is,
+    ];
+
+    for (const pattern of setGoalsPatterns) {
+      const match = task.match(pattern);
+      if (match) {
+        const owner = match[1] || "kyleboas";
+        const repo = match[2] || "blob";
+        const goalsText = match[3];
+        return await this.setRepositoryGoalsFromSlack(channel, owner, repo, goalsText);
+      }
+    }
+
     return null;
+  }
+
+  private async setRepositoryGoalsFromSlack(channel: string, owner: string, repo: string, goalsText: string): Promise<string> {
+    try {
+      // Parse goals from text (split by commas, newlines, or bullet points)
+      const goals = goalsText
+        .split(/[,\n•\-]+/)
+        .map(g => g.trim())
+        .filter(g => g.length > 0);
+
+      if (goals.length === 0) {
+        return "❌ No goals found. Please provide goals separated by commas or new lines.";
+      }
+
+      // Store in database settings (since we can't easily update KV from here)
+      const repoKey = `repo_goals:${owner}/${repo}`;
+      setSetting(this.db, repoKey, JSON.stringify(goals));
+
+      await this.deps.postSlackMessage(
+        this.env.SLACK_BOT_TOKEN,
+        channel,
+        `🎯 Set ${goals.length} goal(s) for ${owner}/${repo}:\n${goals.map(g => `• ${g}`).join('\n')}\n\n` +
+        `Note: These are stored locally. For permanent storage, add to Cloudflare KV.`
+      );
+
+      return `✅ Goals set for ${owner}/${repo}! I'll work towards these in my autonomous tasks.`;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return `❌ Failed to set goals: ${msg}`;
+    }
   }
 
   private async showRepositoryGoals(channel: string, owner: string, repo: string): Promise<string> {
@@ -2595,12 +2641,37 @@ ${history}` }]
       .map((h) => `- [${h.status}] ${h.task}`)
       .join("\n");
 
-    // Load repository goals from KV config
+    // Load repository goals from KV config or local settings
     const userConfig = await this.getUserConfiguration();
-    const repoGoals = getRepositoryGoals(userConfig, "kyleboas", "blob");
-    const goalsContext = repoGoals
-      ? `Repository goals for kyleboas/blob:\n${repoGoals.goals.map(g => `- ${g}`).join("\n")}`
-      : "No specific repository goals configured.";
+    const kvGoals = getRepositoryGoals(userConfig, "kyleboas", "blob");
+    
+    // Also check for locally set goals (from Slack)
+    const localGoalsJson = getSetting(this.db, "repo_goals:kyleboas/blob");
+    const localGoals = localGoalsJson ? JSON.parse(localGoalsJson) as string[] : null;
+    
+    const repoGoals = kvGoals || (localGoals ? { goals: localGoals } : null);
+    
+    // If no goals configured, notify user but still continue with generic goals
+    let goalsContext: string;
+    if (!repoGoals) {
+      goalsContext = "No specific repository goals configured. Using generic self-improvement goals.";
+      
+      // Only notify once per day about missing goals
+      const lastNotified = getSetting(this.db, "goals_notification_sent");
+      const today = new Date().toISOString().slice(0, 10);
+      if (lastNotified !== today) {
+        await this.deps.postSlackMessage(
+          this.env.SLACK_BOT_TOKEN,
+          channel,
+          "🎯 I don't have specific goals configured for kyleboas/blob yet.\n\n" +
+          "What should I work towards? Tell me: 'My goals are: Keep code lightweight, maintain security, improve features'\n\n" +
+          "Until then, I'll use generic self-improvement goals."
+        );
+        setSetting(this.db, "goals_notification_sent", today);
+      }
+    } else {
+      goalsContext = `Repository goals for kyleboas/blob:\n${repoGoals.goals.map(g => `- ${g}`).join("\n")}`;
+    }
 
     const generationResponse = await this.deps.llmCall(this.buildLlmInput({
       model: this.getRuntimeModelSettings().chatModel,
