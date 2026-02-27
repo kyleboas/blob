@@ -139,8 +139,6 @@ function renderLiveLogPage(): string {
     }
     #log {
       margin: 0;
-      padding: 12px;
-      border: 1px solid #000000;
       white-space: pre-wrap;
       min-height: 280px;
       max-height: calc(100vh - 120px);
