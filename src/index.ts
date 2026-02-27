@@ -284,20 +284,24 @@ async function handleWebSocket(request: Request, env: Env): Promise<Response> {
     const response = await fetchGlobalLogsSnapshot(env);
     const payload = await response.json();
     server.send(JSON.stringify({ type: "snapshot", data: payload }));
-  } catch {
-    server.send(JSON.stringify({ type: "error", message: "Failed to fetch logs" }));
+  } catch (error) {
+    console.error("[LOGS] WebSocket initial snapshot failed:", error);
+    server.send(JSON.stringify({ type: "error", message: "Failed to fetch logs - will retry" }));
+    // Send empty events array so client shows something
+    server.send(JSON.stringify({ type: "snapshot", data: { events: [] } }));
   }
 
-  // Set up periodic updates
+  // Set up periodic updates (every 5 seconds instead of 1)
   const intervalId = setInterval(async () => {
     try {
       const response = await fetchGlobalLogsSnapshot(env);
       const payload = await response.json();
       server.send(JSON.stringify({ type: "snapshot", data: payload }));
-    } catch {
-      // Silently fail - client will reconnect if needed
+    } catch (error) {
+      // Log error but don't crash - client will reconnect if needed
+      console.error("[LOGS] Periodic update failed:", error);
     }
-  }, 1000);
+  }, 5000);
 
   // Clean up on close
   server.addEventListener("close", () => {
