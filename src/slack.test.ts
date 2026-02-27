@@ -92,7 +92,7 @@ describe("posting helpers", () => {
       new Response(JSON.stringify({ ok: true, ts: "123.4" }), { status: 200 })
     );
 
-    await postMessage("xoxb-token", "C123", "hello", "123.4", fetchImpl);
+    await postMessage("xoxb-token", "C123", "hello", "123.4", undefined, fetchImpl);
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];

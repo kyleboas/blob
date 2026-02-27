@@ -80,19 +80,26 @@ export async function postMessage(
   channel: string,
   text: string,
   threadTs?: string,
+  blocks?: unknown[],
   fetchImpl: typeof fetch = fetch
 ): Promise<{ ts: string }> {
+  const body: Record<string, unknown> = {
+    channel,
+    text,
+    ...(threadTs ? { thread_ts: threadTs } : {})
+  };
+  
+  if (blocks && blocks.length > 0) {
+    body.blocks = blocks;
+  }
+  
   const response = await fetchImpl(`${SLACK_API_BASE}/chat.postMessage`, {
     method: "POST",
     headers: {
       "content-type": "application/json; charset=utf-8",
       authorization: `Bearer ${token}`
     },
-    body: JSON.stringify({
-      channel,
-      text,
-      ...(threadTs ? { thread_ts: threadTs } : {})
-    })
+    body: JSON.stringify(body)
   });
 
   const bodyJson = (await response.json()) as { ok?: boolean; error?: string; ts?: string };
@@ -114,7 +121,7 @@ export async function postApprovalRequest(
     "React with :thumbsup: to approve or :thumbsdown: to deny."
   ].join("\n");
 
-  return postMessage(token, channel, text, undefined, fetchImpl);
+  return postMessage(token, channel, text, undefined, undefined, fetchImpl);
 }
 
 export function mapChannelToDO(channel: string): string {

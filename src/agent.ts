@@ -82,6 +82,7 @@ import { SessionTree, generateSessionId, type SessionMessage, type SessionNode }
 import { registerBuiltinExtensions } from "./pi-extensions";
 import { ExtensionReloader, checkExtensionReload } from "./pi-hot-reload";
 import { TUIRenderer, parseTUICommands, TUI } from "./pi-tui";
+import { SlackBlockBuilder, SlackUI, parseTUIToSlack } from "./slack-blocks";
 import type { ConversationMessage, Env, SlackEvent } from "./types";
 import type { ToolResult } from "./types";
 
@@ -1403,6 +1404,27 @@ export class AgentDO {
         const errorMsg = err instanceof Error ? err.message : String(err);
         this.forwardToGlobalLogs("slack_send_failed", `[#${channel}] ${errorMsg}: ${text.slice(0, 100)}`);
       }
+    }
+  }
+
+  // Send Slack Block Kit message
+  private async sendSlackBlocks(
+    channel: string,
+    text: string,
+    blocks: unknown[],
+    threadTs?: string
+  ): Promise<void> {
+    try {
+      await this.deps.postSlackMessage(
+        this.env.SLACK_BOT_TOKEN,
+        channel,
+        text,
+        threadTs,
+        blocks
+      );
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      this.forwardToGlobalLogs("slack_send_failed", `[#${channel}] ${errorMsg}: ${text.slice(0, 100)}`);
     }
   }
 
