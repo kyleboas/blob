@@ -77,6 +77,7 @@ import {
 import { mapChannelToDO, postApprovalRequest, postMessage } from "./slack";
 import { createApprovalRequest, expireTimedOutApprovals, resolveApprovalReaction, type PendingApproval } from "./approval";
 import { classifyIntentWithEntities, extractTextContent, getCacheStats } from "./llm";
+import { findSimilarSolutions, storeSolution, getMemoryStats } from "./memory";
 import type { ConversationMessage, Env, SlackEvent } from "./types";
 import type { ToolResult } from "./types";
 
@@ -1005,6 +1006,16 @@ export class AgentDO {
     logAgentEvent(this.db, sessionId, "task_received", task);
     this.forwardToGlobalLogs("task_received", `[#${channel}] ${task}`);
 
+    // Search memory for similar past solutions
+    const similarSolutions = findSimilarSolutions(task, 0.7);
+    if (similarSolutions.length > 0) {
+      const memoryContext = similarSolutions
+        .map((s, i) => `Similar task ${i + 1}: ${s.task}\nSolution: ${s.solution.slice(0, 500)}`)
+        .join("\n\n");
+      this.forwardToGlobalLogs("memory_recall", `[#${channel}] Found ${similarSolutions.length} similar solutions in memory`);
+      console.log(`[MEMORY] Found ${similarSolutions.length} similar solutions for task`);
+    }
+
     // If the orchestrator supplied prior conversation messages use them directly;
     // otherwise fall back to loading from this DO's own DB (standalone / legacy path).
     let conversation: ConversationMessage[];
@@ -1166,6 +1177,13 @@ export class AgentDO {
     await this.sendResponse(channel, cleanFinalText);
     logAgentEvent(this.db, sessionId, "completed", finalText);
     this.forwardToGlobalLogs("completed", `[#${channel}] ${finalText.slice(0, 300)}`);
+
+    // Store solution in memory for future recall
+    if (finalText && !finalText.startsWith("❌ Error")) {
+      storeSolution(task, finalText);
+      const stats = getMemoryStats();
+      this.forwardToGlobalLogs("memory_store", `[#${channel}] Stored solution. Memory: ${stats.total} total, ${stats.recent} recent`);
+    }
 
     return { finalText, steps };
   }
