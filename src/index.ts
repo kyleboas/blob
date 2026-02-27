@@ -237,7 +237,7 @@ function renderLiveLogPage(): string {
 
     // Short display name for a model (strips provider prefix, truncates)
     function shortModel(model) {
-      return model.replace(/^(anthropic\\/|openai\\/)/, '').slice(0, 32);
+      return model.replace(/^(anthropic\\\\/|openai\\\\/)/, '').slice(0, 32);
     }
 
     function computeBuilds(events) {
