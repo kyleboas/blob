@@ -76,7 +76,7 @@ import {
 } from "./tools";
 import { mapChannelToDO, postApprovalRequest, postMessage } from "./slack";
 import { createApprovalRequest, expireTimedOutApprovals, resolveApprovalReaction, type PendingApproval } from "./approval";
-import { classifyIntentWithEntities, extractTextContent } from "./llm";
+import { classifyIntentWithEntities, extractTextContent, getCacheStats } from "./llm";
 import type { ConversationMessage, Env, SlackEvent } from "./types";
 import type { ToolResult } from "./types";
 
@@ -1235,6 +1235,15 @@ export class AgentDO {
     }).catch(() => {
       // Non-critical logging; silently discard errors
     });
+  }
+
+  // Log cache stats periodically
+  private logCacheStats(): void {
+    const stats = getCacheStats();
+    if (stats.totalCalls > 0) {
+      const hitRate = ((stats.cacheHits / stats.totalCalls) * 100).toFixed(1);
+      this.forwardToGlobalLogs("cache_stats", `Cache: ${stats.cacheHits}/${stats.totalCalls} hits (${hitRate}%), ${stats.tokensSaved} tokens saved`);
+    }
   }
 
   // --- command normalization helpers (repo-agnostic) ---

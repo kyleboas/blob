@@ -12,6 +12,51 @@ import {
   MODEL_COMPLEX
 } from "./config";
 
+// Cache tracking for monitoring
+interface CacheStats {
+  totalCalls: number;
+  cacheHits: number;
+  cacheMisses: number;
+  tokensSaved: number;
+}
+
+const cacheStats: CacheStats = {
+  totalCalls: 0,
+  cacheHits: 0,
+  cacheMisses: 0,
+  tokensSaved: 0
+};
+
+export function getCacheStats(): CacheStats {
+  return { ...cacheStats };
+}
+
+export function resetCacheStats(): void {
+  cacheStats.totalCalls = 0;
+  cacheStats.cacheHits = 0;
+  cacheStats.cacheMisses = 0;
+  cacheStats.tokensSaved = 0;
+}
+
+// Update cache stats from LLM response
+function updateCacheStats(response: Record<string, any>): void {
+  cacheStats.totalCalls++;
+  
+  // Check for Anthropic cache metrics
+  const usage = response.usage as Record<string, any> | undefined;
+  if (usage) {
+    const cacheCreation = usage.cache_creation_input_tokens as number | undefined;
+    const cacheRead = usage.cache_read_input_tokens as number | undefined;
+    
+    if (cacheRead && cacheRead > 0) {
+      cacheStats.cacheHits++;
+      cacheStats.tokensSaved += cacheRead;
+    } else if (cacheCreation && cacheCreation > 0) {
+      cacheStats.cacheMisses++;
+    }
+  }
+}
+
 export interface AnthropicMessage {
   role: "user" | "assistant";
   content: string | unknown[];
@@ -633,6 +678,10 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
 
     if (response.ok) {
       const payload = (await response.json()) as Record<string, any>;
+      
+      // Update cache stats for tracking
+      updateCacheStats(payload);
+      
       if (useOpenAICompat) {
         // Cloudflare Workers AI tool-calling bug: the gateway occasionally returns
         // finish_reason="stop" with content=null and no tool_calls when the model
