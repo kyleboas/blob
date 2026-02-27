@@ -6,6 +6,7 @@ export { AgentDO } from "./agent";
 
 const GLOBAL_LOGS_CHANNEL = "__global__";
 const HEARTBEAT_DO_NAME = "blob:heartbeats";
+const LOG_FETCH_TIMEOUT_MS = 8000;
 
 interface DiagCheckResult {
   name: string;
@@ -433,6 +434,12 @@ function renderLiveLogPage(): string {
     function connectLiveStream() {
       if (source) source.close();
       source = new EventSource('/logs/stream');
+      source.onopen = () => {
+        lastLiveEventAt = Date.now();
+        statusNode.textContent = 'Connected • waiting for events...';
+        statusNode.className = '';
+        dotNode.className = '';
+      };
       source.addEventListener('snapshot', (event) => {
         lastLiveEventAt = Date.now();
         try {
@@ -473,11 +480,16 @@ function renderLiveLogPage(): string {
 async function fetchGlobalLogsSnapshot(env: Env): Promise<Response> {
   const id = env.AGENT_DO.idFromName(mapChannelToDO(GLOBAL_LOGS_CHANNEL));
   const stub = env.AGENT_DO.get(id);
-  const response = await stub.fetch("https://agent.internal/event", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ action: "logs_snapshot" })
-  });
+  const response = await Promise.race([
+    stub.fetch("https://agent.internal/event", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "logs_snapshot" })
+    }),
+    new Promise<Response>((_, reject) => {
+      setTimeout(() => reject(new Error("logs snapshot timed out")), LOG_FETCH_TIMEOUT_MS);
+    })
+  ]);
 
   if (!response.ok) {
     throw new Error("failed to read logs");
