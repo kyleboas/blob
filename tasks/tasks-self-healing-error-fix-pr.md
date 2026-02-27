@@ -29,35 +29,35 @@
 IMPORTANT: As you complete each task, you must check it off in this markdown file by changing `- [ ]` to `- [x]`. This helps track progress and ensures you don't skip any steps.
 
 Example:
-- `- [ ] 1.1 Read file` → `- [x] 1.1 Read file` (after completing)
+- `- [x] 1.1 Read file` → `- [x] 1.1 Read file` (after completing)
 
 Update the file after completing each sub-task, not just after completing an entire parent task.
 
 ## Tasks
 
-- [ ] 0.0 Create feature branch
-  - [ ] 0.1 Create and checkout a new branch for this feature (e.g., `git checkout -b feature/self-healing-error-fix-pr`)
+- [x] 0.0 Create feature branch
+  - [x] 0.1 Create and checkout a new branch for this feature (e.g., `git checkout -b feature/self-healing-error-fix-pr`)
 
-- [ ] 1.0 Define error ingestion and eligibility criteria for autonomous remediation
-  - [ ] 1.1 Enumerate and document in-scope error sources for v1 (CI, runtime logs, lint/type/test failures).
-  - [ ] 1.2 Implement error normalization to convert source-specific payloads into a common error schema.
-  - [ ] 1.3 Implement error classification rules that decide whether an error is eligible for autonomous remediation.
-  - [ ] 1.4 Add deterministic error fingerprinting fields for downstream deduplication and tracking.
-  - [ ] 1.5 Add unit tests for ingestion, normalization, and eligibility classification behavior.
+- [x] 1.0 Define error ingestion and eligibility criteria for autonomous remediation
+  - [x] 1.1 Enumerate and document in-scope error sources for v1 (CI, runtime logs, lint/type/test failures).
+  - [x] 1.2 Implement error normalization to convert source-specific payloads into a common error schema.
+  - [x] 1.3 Implement error classification rules that decide whether an error is eligible for autonomous remediation.
+  - [x] 1.4 Add deterministic error fingerprinting fields for downstream deduplication and tracking.
+  - [x] 1.5 Add unit tests for ingestion, normalization, and eligibility classification behavior.
 
-- [ ] 2.0 Build remediation workflow to generate and apply candidate fixes
-  - [ ] 2.1 Implement remediation orchestrator that transitions through detect → propose fix → apply patch states.
-  - [ ] 2.2 Integrate fix generation strategy with repository context and failing signal inputs.
-  - [ ] 2.3 Add patch application safeguards (scope boundaries, file allowlist/denylist, max-change limits).
-  - [ ] 2.4 Implement failure handling and retry/backoff policy for unsuccessful remediation attempts.
-  - [ ] 2.5 Add tests for successful patch application and guarded failure scenarios.
+- [x] 2.0 Build remediation workflow to generate and apply candidate fixes
+  - [x] 2.1 Implement remediation orchestrator that transitions through detect → propose fix → apply patch states.
+  - [x] 2.2 Integrate fix generation strategy with repository context and failing signal inputs.
+  - [x] 2.3 Add patch application safeguards (scope boundaries, file allowlist/denylist, max-change limits).
+  - [x] 2.4 Implement failure handling and retry/backoff policy for unsuccessful remediation attempts.
+  - [x] 2.5 Add tests for successful patch application and guarded failure scenarios.
 
-- [ ] 3.0 Implement validation gate that runs required checks including full test suite
-  - [ ] 3.1 Define validation policy model (required vs optional checks, default behavior, per-repo overrides).
-  - [ ] 3.2 Implement command resolver for lint/typecheck/test commands with sensible fallbacks.
-  - [ ] 3.3 Implement validation runner to execute checks and capture structured pass/fail output.
-  - [ ] 3.4 Enforce hard stop when required checks fail so PR creation is blocked.
-  - [ ] 3.5 Add tests for full-suite success paths and required-check failure blocking.
+- [x] 3.0 Implement validation gate that runs required checks including full test suite
+  - [x] 3.1 Define validation policy model (required vs optional checks, default behavior, per-repo overrides).
+  - [x] 3.2 Implement command resolver for lint/typecheck/test commands with sensible fallbacks.
+  - [x] 3.3 Implement validation runner to execute checks and capture structured pass/fail output.
+  - [x] 3.4 Enforce hard stop when required checks fail so PR creation is blocked.
+  - [x] 3.5 Add tests for full-suite success paths and required-check failure blocking.
 
 - [ ] 4.0 Implement branch creation and pull request automation for successful remediations
   - [ ] 4.1 Implement deterministic branch naming convention using error fingerprint + timestamp.
