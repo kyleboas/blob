@@ -1,4 +1,7 @@
-import type { SqlStorage } from "./types";
+// SqlStorage type matching Durable Object storage
+type SqlStorage = {
+  exec: (query: string, ...bindings: (string | number | null)[]) => { toArray: () => Array<Record<string, unknown>> };
+};
 
 export interface SessionNode {
   id: string;

@@ -1,4 +1,4 @@
-import type { SqlStorage } from "./types";
+// Pi-style tools - 4 core tools + extension system
 
 export interface Tool {
   name: string;
@@ -9,6 +9,11 @@ export interface Tool {
     required?: string[];
   };
 }
+
+// SqlStorage type matching Durable Object storage
+type SqlStorage = {
+  exec: (query: string, ...bindings: (string | number | null)[]) => { toArray: () => Array<Record<string, unknown>> };
+};
 
 // The 4 core Pi-style tools
 export const CORE_TOOLS: Tool[] = [
@@ -79,7 +84,7 @@ export function loadExtensions(sql: SqlStorage): ExtensionTool[] {
       WHERE enabled = 1
     `);
     
-    for (const row of result) {
+    for (const row of result.toArray()) {
       extensions.push({
         name: String(row.name),
         description: String(row.description),

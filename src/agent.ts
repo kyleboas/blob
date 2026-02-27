@@ -77,8 +77,8 @@ import {
 import { mapChannelToDO, postApprovalRequest, postMessage } from "./slack";
 import { createApprovalRequest, expireTimedOutApprovals, resolveApprovalReaction, type PendingApproval } from "./approval";
 import { classifyIntentWithEntities, extractTextContent, getCacheStats } from "./llm";
-import { findSimilarSolutions, storeSolution, getMemoryStats } from "./memory";
-import { generateWithPython, isPythonGenerationEnabled } from "./python-bridge";
+import { CORE_TOOLS, loadExtensions, type ExtensionTool } from "./pi-tools";
+import { SessionTree, generateSessionId, type SessionMessage, type SessionNode } from "./pi-sessions";
 import type { ConversationMessage, Env, SlackEvent } from "./types";
 import type { ToolResult } from "./types";
 
@@ -471,6 +471,106 @@ export class AgentDO {
   // LLM-based intent classification with entity extraction
   private async classifyIntentWithEntities(text: string): Promise<import("./llm").IntentClassificationWithEntities> {
     return classifyIntentWithEntities(text, (input) => this.deps.llmCall(this.buildLlmInput(input)));
+  }
+
+  // Pi-style tool execution: 4 core tools + extensions
+  private async executePiTool(
+    toolName: string,
+    input: Record<string, unknown>,
+    sessionId: string,
+    channel: string
+  ): Promise<{ output: string; exitCode: number }> {
+    // Check for built-in tools first
+    switch (toolName) {
+      case "read": {
+        const path = String(input.path ?? "");
+        try {
+          const result = await this.sandbox.exec(`cat "${path}"`, 10000);
+          return { output: result.stdout ?? "", exitCode: result.exitCode ?? 0 };
+        } catch (error) {
+          return { output: `Error reading ${path}: ${error}`, exitCode: 1 };
+        }
+      }
+
+      case "write": {
+        const path = String(input.path ?? "");
+        const content = String(input.content ?? "");
+        try {
+          // Escape content for shell
+          const escaped = content.replace(/'/g, "'\"'\"'");
+          const result = await this.sandbox.exec(`printf '%s' '${escaped}' > "${path}"`, 10000);
+          return { output: `Wrote ${path}`, exitCode: result.exitCode ?? 0 };
+        } catch (error) {
+          return { output: `Error writing ${path}: ${error}`, exitCode: 1 };
+        }
+      }
+
+      case "edit": {
+        const path = String(input.path ?? "");
+        const oldText = String(input.oldText ?? "");
+        const newText = String(input.newText ?? "");
+        try {
+          // Read current content
+          const readResult = await this.sandbox.exec(`cat "${path}"`, 10000);
+          if (readResult.exitCode !== 0) {
+            return { output: `Error reading ${path}`, exitCode: 1 };
+          }
+          
+          const currentContent = readResult.stdout ?? "";
+          if (!currentContent.includes(oldText)) {
+            return { output: `Error: oldText not found in ${path}`, exitCode: 1 };
+          }
+          
+          // Replace using sed
+          const escapedOld = oldText.replace(/[\/\\&]/g, "\\&").replace(/'/g, "'\"'\"'");
+          const escapedNew = newText.replace(/[\/\\&]/g, "\\&").replace(/'/g, "'\"'\"'");
+          const result = await this.sandbox.exec(
+            `sed -i 's/${escapedOld}/${escapedNew}/g' "${path}"`,
+            10000
+          );
+          return { output: `Edited ${path}`, exitCode: result.exitCode ?? 0 };
+        } catch (error) {
+          return { output: `Error editing ${path}: ${error}`, exitCode: 1 };
+        }
+      }
+
+      case "bash": {
+        const command = String(input.command ?? "");
+        const timeout = Number(input.timeout ?? 30000);
+        try {
+          const result = await this.sandbox.exec(command, timeout);
+          const output = [result.stdout, result.stderr].filter(Boolean).join("\n");
+          return { output, exitCode: result.exitCode ?? 0 };
+        } catch (error) {
+          return { output: `Error: ${error}`, exitCode: 1 };
+        }
+      }
+
+      default: {
+        // Try extension tools
+        const extensions = loadExtensions(this.db);
+        const extension = extensions.find(e => e.name === toolName);
+        
+        if (extension) {
+          try {
+            // Convert input to JSON for the script
+            const inputJson = JSON.stringify(input);
+            const result = await this.sandbox.exec(
+              `echo '${inputJson}' | ${extension.scriptPath}`,
+              30000
+            );
+            return { 
+              output: result.stdout ?? "", 
+              exitCode: result.exitCode ?? 0 
+            };
+          } catch (error) {
+            return { output: `Extension error: ${error}`, exitCode: 1 };
+          }
+        }
+
+        return { output: `Unknown tool: ${toolName}`, exitCode: 1 };
+      }
+    }
   }
 
   private async scheduleInitialHeartbeatAlarm(): Promise<void> {
@@ -1038,31 +1138,9 @@ export class AgentDO {
     logAgentEvent(this.db, sessionId, "task_received", task);
     this.forwardToGlobalLogs("task_received", `[#${channel}] ${task}`);
 
-    // Search memory for similar past solutions
-    const similarSolutions = findSimilarSolutions(task, 0.7);
-    if (similarSolutions.length > 0) {
-      const memoryContext = similarSolutions
-        .map((s, i) => `Similar task ${i + 1}: ${s.task}\nSolution: ${s.solution.slice(0, 500)}`)
-        .join("\n\n");
-      this.forwardToGlobalLogs("memory_recall", `[#${channel}] Found ${similarSolutions.length} similar solutions in memory`);
-      console.log(`[MEMORY] Found ${similarSolutions.length} similar solutions for task`);
-    }
-
-    // Try Python-based code generation for self-modification tasks
-    let pythonGeneratedCode: string | undefined;
-    if (isPythonGenerationEnabled(this.db) && this.sandbox && isSelfModificationCommand(task)) {
-      try {
-        const pythonResult = await generateWithPython(this.sandbox, task);
-        if (pythonResult.success && pythonResult.code) {
-          pythonGeneratedCode = pythonResult.code;
-          this.forwardToGlobalLogs("python_generation", `[#${channel}] ✓ Python generated ${pythonResult.action} code`);
-          console.log(`[PYTHON] Generated ${pythonResult.action} code for self-modification`);
-        }
-      } catch (error) {
-        console.error("[PYTHON] Generation failed:", error);
-        this.forwardToGlobalLogs("python_generation", `[#${channel}] ✗ Python generation failed, falling back to LLM`);
-      }
-    }
+    // Pi-style: No pre-built memory search, no Python generation
+    // Agent uses the 4 core tools (read, write, edit, bash) to accomplish everything
+    // Extensions can be built on-demand using bash to write scripts
 
     // If the orchestrator supplied prior conversation messages use them directly;
     // otherwise fall back to loading from this DO's own DB (standalone / legacy path).
@@ -1226,12 +1304,9 @@ export class AgentDO {
     logAgentEvent(this.db, sessionId, "completed", finalText);
     this.forwardToGlobalLogs("completed", `[#${channel}] ${finalText.slice(0, 300)}`);
 
-    // Store solution in memory for future recall
-    if (finalText && !finalText.startsWith("❌ Error")) {
-      storeSolution(task, finalText);
-      const stats = getMemoryStats();
-      this.forwardToGlobalLogs("memory_store", `[#${channel}] Stored solution. Memory: ${stats.total} total, ${stats.recent} recent`);
-    }
+    // Pi-style: No automatic memory storage
+    // Agent can use write tool to save notes if needed
+    // Or build its own memory extension
 
     return { finalText, steps };
   }

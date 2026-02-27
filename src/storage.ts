@@ -147,6 +147,36 @@ export function initSchema(sql: SqlStorage): void {
     )
   `);
 
+  // Pi-style extensions table
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS extensions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      description TEXT NOT NULL,
+      script_path TEXT NOT NULL,
+      input_schema TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )
+  `);
+
+  // Pi-style session tree nodes
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS session_nodes (
+      id TEXT PRIMARY KEY,
+      parent_id TEXT,
+      messages TEXT NOT NULL,
+      metadata TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      FOREIGN KEY (parent_id) REFERENCES session_nodes(id)
+    )
+  `);
+
+  sql.exec(`
+    CREATE INDEX IF NOT EXISTS idx_session_parent ON session_nodes(parent_id)
+  `);
+
   sql.exec(`
     CREATE TABLE IF NOT EXISTS agent_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
