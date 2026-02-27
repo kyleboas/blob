@@ -200,40 +200,31 @@ function renderLiveLogPage(): string {
     }
 
     function connectStream() {
-      if (typeof EventSource === 'undefined') {
-        statusNode.textContent = 'Live stream unsupported in this browser; polling logs.';
-        return null;
-      }
-
-      const source = new EventSource('/logs/stream');
-
-      source.addEventListener('snapshot', (event) => {
+      // TEMPORARY: Use polling instead of SSE to avoid hanging issues
+      statusNode.textContent = 'Polling logs...';
+      
+      const poll = async () => {
         try {
-          const data = JSON.parse(event.data);
+          const response = await fetch('/logs/stream');
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          const data = await response.json();
           currentEvents = Array.isArray(data.events) ? data.events : [];
           renderLogs(currentEvents);
-          statusNode.textContent = 'Live across all channels.';
-        } catch {
-          statusNode.textContent = 'Invalid stream payload.';
+          statusNode.textContent = 'Live across all channels • ' + currentEvents.length + ' events';
+        } catch (err) {
+          statusNode.textContent = 'Poll failed: ' + (err instanceof Error ? err.message : String(err));
         }
-      });
-
-      source.addEventListener('error', () => {
-        statusNode.textContent = 'Live stream disconnected.';
-        source.close();
-        if (reconnectTimer) clearTimeout(reconnectTimer);
-        reconnectTimer = setTimeout(() => {
-          stream = connectStream();
-        }, 2000);
-      });
-
-      return source;
+      };
+      
+      // Poll immediately and then every 5 seconds
+      poll();
+      return setInterval(poll, 5000);
     }
 
     renderLogs(currentEvents);
     loadSnapshot();
     setInterval(loadSnapshot, 5000);
-    stream = connectStream();
+    const pollInterval = connectStream();
   </script>
 </body>
 </html>`;
@@ -577,11 +568,22 @@ export default {
     }
 
     if (request.method === "GET" && (url.pathname === "/logs/stream" || url.pathname === "/live-logs/stream")) {
-      const upgradeHeader = request.headers.get("Upgrade");
-      if (upgradeHeader === "websocket") {
-        return handleWebSocket(request, env);
+      // TEMPORARY: Return JSON instead of SSE to avoid hanging issues
+      // The SSE handler is having issues with DO timeouts
+      try {
+        const response = await fetchGlobalLogsSnapshot(env);
+        const payload = await response.json();
+        return Response.json(payload, { 
+          status: 200, 
+          headers: { 
+            "content-type": "application/json",
+            "cache-control": "no-cache"
+          } 
+        });
+      } catch (error) {
+        console.error("[LOGS] Stream fallback failed:", error);
+        return Response.json({ events: [] }, { status: 200 });
       }
-      return handleSSE(env);
     }
 
     // Blob WebSocket response endpoint (for AgentDO to send responses back)

@@ -250,12 +250,12 @@ describe("worker entry point", () => {
     expect(response.status).toBe(200);
     expect(html).toContain("/logs/stream");
     expect(html).toContain("class=\"line\"");
-    expect(html).toContain("Live stream disconnected");
+    expect(html).toContain("Polling logs");
     expect(html).not.toContain("stale stream");
   });
 
 
-  it("serves an SSE endpoint for live log streaming", async () => {
+  it("serves a JSON endpoint for live log streaming (polling)", async () => {
     const stub = { fetch: vi.fn().mockResolvedValue(Response.json({ events: [] })) };
     const env = makeEnv(stub);
     const { ctx } = makeCtx();
@@ -263,7 +263,7 @@ describe("worker entry point", () => {
     const response = await worker.fetch(new Request("https://example.com/logs/stream"), env, ctx);
 
     expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(response.headers.get("content-type")).toContain("application/json");
   });
 
   it("proxies live log data from the global stream", async () => {
