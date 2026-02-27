@@ -379,6 +379,7 @@ function parseMessageType(decisionText: string): "chat" | "routine" | "complex" 
   }
 }
 
+
 /**
  * Uses the router model to classify an incoming message as "chat" (conversational,
  * no task execution needed), "routine" (straightforward coding/automation task), or
@@ -434,15 +435,16 @@ export async function classifyMessage(input: {
   const routingPrompt = [
     "Classify the message type for model routing.",
     'Respond with JSON only using this schema: {"type":"chat"|"routine"|"complex"}.',
-    '"chat": conversational reply, question, or comment — no coding or automation task required.',
-    '"routine": coding or automation task that is straightforward to complete.',
-    '"complex": deep multi-step reasoning, large refactors, or architecture-level decisions.'
+    'Use "chat" only when the user is purely conversational and is not asking Blob to perform work.',
+    'Use "routine" for actionable execution requests, including capability checks like "can you create a pull request" or "test if you can".',
+    'Use "complex" for architecture-level decisions, deep multi-step planning, or large refactors.'
   ].join(" ");
 
   const lastUserMessage = [...input.messages].reverse().find((m) => m.role === "user");
   const routingPayload = typeof lastUserMessage?.content === "string"
     ? lastUserMessage.content
     : JSON.stringify(lastUserMessage?.content ?? "");
+
 
   const body = useOpenAICompat
     ? JSON.stringify({
