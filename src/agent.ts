@@ -1730,7 +1730,59 @@ export class AgentDO {
       }
     }
 
+    // Natural language for merging staging to production
+    // Matches: "merge staging to production", "deploy staging to prod", "promote staging", etc.
+    const mergePatterns = [
+      /(?:merge|deploy|promote)\s+(?:from\s+)?staging\s+(?:to\s+)?(?:production|prod|main|master)/i,
+      /(?:push|ship)\s+staging\s+(?:to\s+)?(?:production|prod|main|master)/i,
+      /(?:release|go\s+live\s+with)\s+staging/i,
+      /staging\s+(?:looks|is)\s+good\s*(?:,\s*)?(?:ship|deploy|merge)\s+it/i,
+    ];
+
+    for (const pattern of mergePatterns) {
+      if (pattern.test(task)) {
+        return await this.mergeStagingToProduction(channel);
+      }
+    }
+
     return null;
+  }
+
+  private async mergeStagingToProduction(channel: string): Promise<string> {
+    try {
+      // Check if staging branch exists and is ahead of main
+      const checkCmd = `git log main..staging --oneline | wc -l`;
+      const checkResult = await this.executeWithRetry(checkCmd);
+      const commitCount = parseInt(checkResult.stdout.trim(), 10);
+
+      if (commitCount === 0) {
+        return `⚠️ Staging branch has no new commits to merge. Everything is already in production.`;
+      }
+
+      // Merge staging to main
+      await this.deps.postSlackMessage(
+        this.env.SLACK_BOT_TOKEN,
+        channel,
+        `🚀 Merging ${commitCount} commit(s) from staging to production...`
+      );
+
+      const mergeCmd = `git checkout main && git merge staging --no-edit -m "Merge staging to production"`;
+      const mergeResult = await this.executeWithRetry(mergeCmd);
+      if (mergeResult.exitCode !== 0) {
+        throw new Error(`Merge failed: ${mergeResult.stderr}`);
+      }
+
+      // Push to main
+      const pushResult = await this.executeWithRetry(`git push origin main`);
+      if (pushResult.exitCode !== 0) {
+        throw new Error(`Push failed: ${pushResult.stderr}`);
+      }
+
+      return `✅ Successfully merged staging to production! ${commitCount} commit(s) deployed.`;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return `❌ Merge to production failed: ${msg}`;
+    }
   }
 
   private async executeTaskWithPlannerAudit(
