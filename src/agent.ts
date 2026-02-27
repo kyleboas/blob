@@ -624,8 +624,27 @@ export class AgentDO {
           // Use LLM to classify intent and extract entities
           const classification = await this.classifyIntentWithEntities(event.text ?? "");
           
-          // Handle based on LLM classification
-          switch (classification.intent) {
+          // Fallback: Check for heartbeat patterns if LLM confidence is low
+          const text = event.text?.toLowerCase() ?? "";
+          let intent = classification.intent;
+          let confidence = classification.confidence;
+          
+          if (confidence < 0.7) {
+            // Pattern matching fallback for critical commands
+            if (/heartbeat|heartbeats/.test(text)) {
+              if (/status|on|enabled|running|working|check|show/.test(text)) {
+                intent = "heartbeat_status";
+                confidence = 0.9;
+              } else if (/pause|stop|disable|off/.test(text)) {
+                intent = "pause_heartbeats";
+                confidence = 0.9;
+              } else if (/start|resume|enable|on/.test(text)) {
+                intent = "start_heartbeats";
+                confidence = 0.9;
+              }
+            }
+          }
+          switch (intent) {
             case "time_query": {
               const now = new Date();
               const timeString = now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZoneName: "short" });

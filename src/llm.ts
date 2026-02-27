@@ -882,7 +882,7 @@ Intents:
 - set_name: Setting user's name ("my name is John", "call me Jane") - extract name
 - set_location: Setting user's location ("my location is Paris", "I live in Tokyo") - extract location
 - set_repo: Setting default repository ("my repo is owner/repo") - extract owner and repo
-- heartbeat_status: Checking heartbeat status ("are heartbeats on", "show heartbeats")
+- heartbeat_status: Checking heartbeat status ("are heartbeats on/enabled", "show heartbeats", "heartbeat status", "are heartbeats working")
 - pause_heartbeats: Pausing heartbeats ("pause heartbeats", "stop heartbeats")
 - start_heartbeats: Starting heartbeats ("start heartbeats", "resume heartbeats")
 - deployment_status: Checking deployment status
