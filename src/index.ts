@@ -327,28 +327,44 @@ function handleSSE(env: Env): Response {
       const encoder = new TextEncoder();
       controller.enqueue(encoder.encode(": connected\n\n"));
 
-      while (!closed) {
-        // Send a ping every 5s while the snapshot fetch is in progress so the
-        // client stale-watchdog doesn't fire before the first snapshot arrives.
-        // (The fetch can take up to LOG_FETCH_TIMEOUT_MS = 8s.)
-        const pingTimer = setInterval(() => {
-          if (!closed) {
-            controller.enqueue(encoder.encode("event: ping\ndata: {}\n\n"));
-          }
-        }, 5000);
+      // Send initial empty snapshot immediately so page shows something
+      controller.enqueue(encoder.encode(`event: snapshot\ndata: ${JSON.stringify({ events: [] })}\n\n`));
 
+      let consecutiveErrors = 0;
+      const MAX_CONSECUTIVE_ERRORS = 3;
+
+      while (!closed && consecutiveErrors < MAX_CONSECUTIVE_ERRORS) {
         try {
-          const response = await fetchGlobalLogsSnapshot(env);
+          // Fetch with shorter timeout for SSE (5s instead of 8s)
+          const response = await Promise.race([
+            fetchGlobalLogsSnapshot(env),
+            new Promise<Response>((_, reject) => 
+              setTimeout(() => reject(new Error("SSE fetch timeout")), 5000)
+            )
+          ]);
           const payload = await response.text();
           controller.enqueue(encoder.encode(`event: snapshot\ndata: ${payload}\n\n`));
-        } catch {
-          controller.enqueue(encoder.encode("event: error\ndata: {\"error\":\"failed to read logs\"}\n\n"));
-        } finally {
-          clearInterval(pingTimer);
+          consecutiveErrors = 0; // Reset on success
+        } catch (error) {
+          consecutiveErrors++;
+          console.error(`[SSE] Fetch error (${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}):`, error);
+          controller.enqueue(encoder.encode(`event: error\ndata: {"error":"failed to read logs - retrying"}\n\n`));
+          
+          // Send empty events to keep client alive
+          controller.enqueue(encoder.encode(`event: snapshot\ndata: ${JSON.stringify({ events: [] })}\n\n`));
+          
+          if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+            console.error("[SSE] Too many errors, closing stream");
+            controller.enqueue(encoder.encode(`event: error\ndata: {"error":"max retries exceeded"}\n\n`));
+            closed = true;
+          }
         }
 
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        // Wait before next fetch (5 seconds)
+        await new Promise((resolve) => setTimeout(resolve, 5000));
       }
+      
+      controller.close();
     },
     cancel() {
       closed = true;
