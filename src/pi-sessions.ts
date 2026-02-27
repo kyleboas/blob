@@ -37,6 +37,14 @@ export interface SessionMetadata {
   [key: string]: unknown;
 }
 
+// Extension state - stored in session but not sent to AI
+export interface ExtensionState {
+  [extensionName: string]: {
+    data: unknown;
+    updatedAt: number;
+  };
+}
+
 // Session tree operations
 export class SessionTree {
   constructor(private db: SqlStorage) {
@@ -57,6 +65,19 @@ export class SessionTree {
 
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_session_parent ON session_nodes(parent_id)
+    `);
+
+    // Extension state table - stores data that extensions want to persist
+    // This data is NOT sent to the AI, it's for extension use only
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS extension_state (
+        session_id TEXT NOT NULL,
+        extension_name TEXT NOT NULL,
+        data TEXT NOT NULL, -- JSON object
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        PRIMARY KEY (session_id, extension_name),
+        FOREIGN KEY (session_id) REFERENCES session_nodes(id) ON DELETE CASCADE
+      )
     `);
   }
 
@@ -100,6 +121,9 @@ export class SessionTree {
       INSERT INTO session_nodes (id, parent_id, messages, metadata, created_at)
       VALUES (?, ?, ?, ?, ?)
     `, id, parentId, JSON.stringify(node.messages), JSON.stringify(node.metadata), node.createdAt);
+
+    // Copy parent's extension states to the new branch
+    this.copyExtensionStates(parentId, id);
 
     return node;
   }
@@ -209,6 +233,9 @@ export class SessionTree {
       VALUES (?, ?, ?, ?, ?)
     `, branchId, nodeId, JSON.stringify(truncatedMessages), JSON.stringify(metadata), Date.now());
 
+    // Copy extension states to the rewound branch
+    this.copyExtensionStates(nodeId, branchId);
+
     return {
       id: branchId,
       parentId: nodeId,
@@ -233,6 +260,98 @@ export class SessionTree {
     if (summaries.length === 0) return "";
 
     return `Branch activity: ${summaries.join("; ")}`;
+  }
+
+  // Extension State Management
+  // Stores data that extensions want to persist per session
+  // This data is NOT sent to the AI - it's for extension use only
+
+  /**
+   * Get extension state for a session
+   * @param sessionId - The session/node ID
+   * @param extensionName - Unique name of the extension
+   * @returns The stored data, or null if not found
+   */
+  getExtensionState(sessionId: string, extensionName: string): unknown | null {
+    const result = this.db.exec(`
+      SELECT data FROM extension_state
+      WHERE session_id = ? AND extension_name = ?
+    `, sessionId, extensionName);
+
+    const rows = result.toArray();
+    if (rows.length === 0) return null;
+
+    try {
+      return JSON.parse(String(rows[0].data));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Set extension state for a session
+   * @param sessionId - The session/node ID
+   * @param extensionName - Unique name of the extension
+   * @param data - Data to store (must be JSON serializable)
+   */
+  setExtensionState(sessionId: string, extensionName: string, data: unknown): void {
+    const now = Date.now();
+    const jsonData = JSON.stringify(data);
+
+    this.db.exec(`
+      INSERT INTO extension_state (session_id, extension_name, data, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(session_id, extension_name) DO UPDATE SET
+        data = excluded.data,
+        updated_at = excluded.updated_at
+    `, sessionId, extensionName, jsonData, now);
+  }
+
+  /**
+   * Delete extension state for a session
+   * @param sessionId - The session/node ID
+   * @param extensionName - Unique name of the extension
+   */
+  deleteExtensionState(sessionId: string, extensionName: string): void {
+    this.db.exec(`
+      DELETE FROM extension_state
+      WHERE session_id = ? AND extension_name = ?
+    `, sessionId, extensionName);
+  }
+
+  /**
+   * Get all extension states for a session
+   * @param sessionId - The session/node ID
+   * @returns Object mapping extension names to their data
+   */
+  getAllExtensionStates(sessionId: string): Record<string, unknown> {
+    const result = this.db.exec(`
+      SELECT extension_name, data FROM extension_state
+      WHERE session_id = ?
+    `, sessionId);
+
+    const states: Record<string, unknown> = {};
+    for (const row of result.toArray()) {
+      try {
+        states[String(row.extension_name)] = JSON.parse(String(row.data));
+      } catch {
+        // Skip invalid JSON
+      }
+    }
+    return states;
+  }
+
+  /**
+   * Copy all extension states from one session to another
+   * Useful when creating branches
+   * @param fromSessionId - Source session ID
+   * @param toSessionId - Destination session ID
+   */
+  copyExtensionStates(fromSessionId: string, toSessionId: string): void {
+    const states = this.getAllExtensionStates(fromSessionId);
+    for (const [extensionName, data] of Object.entries(states)) {
+      this.setExtensionState(toSessionId, extensionName, data);
+    }
   }
 }
 

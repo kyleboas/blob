@@ -1,0 +1,19 @@
+{
+  "name": "counter",
+  "description": "Simple counter that persists per session. Demonstrates extension state API.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["get", "increment", "reset", "set"],
+        "description": "Action to perform"
+      },
+      "value": {
+        "type": "number",
+        "description": "Value for set action"
+      }
+    },
+    "required": ["action"]
+  }
+}
