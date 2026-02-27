@@ -76,6 +76,10 @@ class FakeSql implements SqlStorage {
       return { toArray: () => [] };
     }
 
+    if (normalized.startsWith("CREATE INDEX")) {
+      return { toArray: () => [] };
+    }
+
     if (normalized.startsWith("INSERT INTO conversation_messages")) {
       this.messages.push({
         id: this.nextMessageId++,

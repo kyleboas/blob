@@ -8,6 +8,17 @@ import { registerExtension, loadExtensions } from "./pi-tools";
 const lastReloadTimes = new Map<string, number>();
 const RELOAD_DEBOUNCE_MS = 1000; // Don't reload same extension more than once per second
 
+// Global flag to disable hot reload (for tests)
+let globalHotReloadEnabled = true;
+
+export function disableHotReload(): void {
+  globalHotReloadEnabled = false;
+}
+
+export function enableHotReload(): void {
+  globalHotReloadEnabled = true;
+}
+
 export interface FileWatcher {
   watch: (path: string, callback: () => void) => void;
   unwatch: (path: string) => void;
@@ -67,6 +78,10 @@ export class ExtensionReloader {
   
   // Start watching an extension directory
   watchExtension(extensionPath: string): void {
+    if (!globalHotReloadEnabled) {
+      return; // Hot reload disabled
+    }
+    
     if (this.watchedPaths.has(extensionPath)) {
       return; // Already watching
     }
@@ -124,6 +139,10 @@ export class ExtensionReloader {
   
   // Watch all extensions in .blob/extensions/
   async watchAllExtensions(): Promise<void> {
+    if (!globalHotReloadEnabled) {
+      return; // Hot reload disabled globally
+    }
+    
     const result = await this.sandbox.exec("ls -d .blob/extensions/*/ 2>/dev/null");
     
     if (result.exitCode !== 0) {
@@ -165,7 +184,7 @@ export async function checkExtensionReload(
   sandbox: { exec: (cmd: string) => Promise<{ stdout?: string; exitCode?: number }> },
   extensionName: string
 ): Promise<boolean> {
-  if (!hotReloadEnabled) {
+  if (!hotReloadEnabled || !globalHotReloadEnabled) {
     return false;
   }
   

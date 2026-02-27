@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { AgentDO, parseSessionMemoryUpdate } from "./agent";
 import type { Env } from "./types";
 import type { SqlStorage } from "./storage";
+import { disableHotReload } from "./pi-hot-reload";
+
+// Disable hot reload for tests to avoid extra sandbox calls
+disableHotReload();
 
 interface HeartbeatRow {
   id: number;
