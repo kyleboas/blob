@@ -43,6 +43,25 @@ export const CREATE_TOOL_TOOL = {
   }
 } as const;
 
+export const WEB_FETCH_TOOL = {
+  name: "web_fetch",
+  description: "Fetch a web page and return its content as markdown. Use this to read web pages. Returns only text content, no scripts or styles.",
+  input_schema: {
+    type: "object",
+    properties: {
+      url: {
+        type: "string",
+        description: "URL to fetch (must be http or https)"
+      },
+      max_length: {
+        type: "number",
+        description: "Maximum characters to return (default 4000)"
+      }
+    },
+    required: ["url"]
+  }
+} as const;
+
 export function sanitizeToolName(rawName: string): string {
   return rawName.trim().toLowerCase().replace(/[^a-z0-9_]/g, "_");
 }

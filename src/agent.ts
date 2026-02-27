@@ -66,6 +66,7 @@ import {
 import {
   BASH_TOOL,
   CREATE_TOOL_TOOL,
+  WEB_FETCH_TOOL,
   compileDynamicToolCommand,
   dynamicToolToAnthropicSchema,
   formatToolResult,
@@ -1512,6 +1513,7 @@ export class AgentDO {
         continue;
       }
 
+
       if (toolBlock.name === CREATE_TOOL_TOOL.name) {
         const validation = validateDynamicToolDefinition(toolBlock.input);
         const dangerousTemplateReason = validation.ok
@@ -1522,11 +1524,19 @@ export class AgentDO {
             ? `Tool creation rejected: ${dangerousTemplateReason}`
             : (() => {
               options.dynamicTools.set(validation.definition.name, validation.definition);
-              return `Created tool \"${validation.definition.name}\" with args: ${validation.definition.args.join(", ") || "(none)"}.`;
+              return `Created tool "${validation.definition.name}" with args: ${validation.definition.args.join(", ") || "(none)"}.`;
             })()
           : `Tool creation failed: ${validation.reason}`;
 
         observations.push(formatToolResult(toolBlock.id, toolResult));
+        continue;
+      }
+
+      if (toolBlock.name === WEB_FETCH_TOOL.name) {
+        const url = String(toolBlock.input.url ?? "");
+        const maxLength = Number(toolBlock.input.max_length ?? 4000);
+        const fetchResult = await this.handleWebFetch(url, maxLength);
+        observations.push(formatToolResult(toolBlock.id, fetchResult));
         continue;
       }
 
@@ -1650,7 +1660,57 @@ export class AgentDO {
   }
 
   private buildToolList(dynamicTools: Map<string, DynamicToolDefinition>): unknown[] {
-    return [BASH_TOOL, CREATE_TOOL_TOOL, ...Array.from(dynamicTools.values()).map((tool) => dynamicToolToAnthropicSchema(tool))];
+    return [BASH_TOOL, CREATE_TOOL_TOOL, WEB_FETCH_TOOL, ...Array.from(dynamicTools.values()).map((tool) => dynamicToolToAnthropicSchema(tool))];
+  }
+
+  private async handleWebFetch(url: string, maxLength: number): Promise<string> {
+    // Validate URL
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return 'Error: Only HTTP and HTTPS URLs are allowed';
+      }
+      // Block internal IPs and localhost
+      const hostname = parsed.hostname;
+      if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname.startsWith('169.254.') || hostname.startsWith('10.') || hostname.startsWith('192.168.') || hostname.startsWith('172.')) {
+        return 'Error: Internal addresses are blocked';
+      }
+    } catch {
+      return 'Error: Invalid URL';
+    }
+
+    try {
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'Blob-Agent/1.0 (Web Fetch Bot)'
+        }
+      });
+      if (!response.ok) {
+        return `Error: HTTP ${response.status}`;
+      }
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('text/html') && !contentType.includes('text/plain')) {
+        return `Error: Unsupported content type: ${contentType}`;
+      }
+      const html = await response.text();
+      // Simple HTML to markdown conversion
+      let markdown = html
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+        .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '')
+        .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, '')
+        .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, '')
+        .replace(/<aside[^>]*>[\s\S]*?<\/aside>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (markdown.length > maxLength) {
+        markdown = markdown.slice(0, maxLength) + '\n...[truncated]';
+      }
+      return markdown;
+    } catch (error) {
+      return `Error: ${error instanceof Error ? error.message : 'Fetch failed'}`;
+    }
   }
 
   private async executeWithRetry(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
