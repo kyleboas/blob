@@ -459,6 +459,9 @@ function renderLiveLogPage(): string {
           dotNode.className = 'error';
         }
       });
+      source.addEventListener('ping', () => {
+        lastLiveEventAt = Date.now();
+      });
       source.onerror = () => {
         scheduleReconnect('network issue');
       };
@@ -469,7 +472,7 @@ function renderLiveLogPage(): string {
 
     setInterval(() => {
       const staleMs = Date.now() - lastLiveEventAt;
-      if (staleMs > 10000) {
+      if (staleMs > 30000) {
         scheduleReconnect('stale stream');
       }
     }, 5000);
@@ -562,12 +565,23 @@ function handleSSE(env: Env): Response {
       controller.enqueue(encoder.encode(": connected\n\n"));
 
       while (!closed) {
+        // Send a ping every 5s while the snapshot fetch is in progress so the
+        // client stale-watchdog doesn't fire before the first snapshot arrives.
+        // (The fetch can take up to LOG_FETCH_TIMEOUT_MS = 8s.)
+        const pingTimer = setInterval(() => {
+          if (!closed) {
+            controller.enqueue(encoder.encode("event: ping\ndata: {}\n\n"));
+          }
+        }, 5000);
+
         try {
           const response = await fetchGlobalLogsSnapshot(env);
           const payload = await response.text();
           controller.enqueue(encoder.encode(`event: snapshot\ndata: ${payload}\n\n`));
         } catch {
           controller.enqueue(encoder.encode("event: error\ndata: {\"error\":\"failed to read logs\"}\n\n"));
+        } finally {
+          clearInterval(pingTimer);
         }
 
         await new Promise((resolve) => setTimeout(resolve, 1000));
