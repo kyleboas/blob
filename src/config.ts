@@ -44,6 +44,10 @@ export const LLM_OVERLOAD_RETRY_MAX = 4;
 export const LLM_OVERLOAD_RETRY_BASE_MS = 5_000;
 export const LLM_REQUEST_TIMEOUT_MS = 120_000;
 export const LLM_MAX_TOKENS = 4096;
+export const LLM_MAX_TOKENS_CHAT = 4096;
+export const LLM_MAX_TOKENS_SIMPLE = 4096;
+export const LLM_MAX_TOKENS_COMPLEX = 8192;
+export const LLM_MAX_TOKENS_ROUTER = 16;
 
 /**
  * Factory functions for configuration-driven values.

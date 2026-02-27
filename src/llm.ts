@@ -2,6 +2,9 @@ import {
   LLM_OVERLOAD_RETRY_BASE_MS,
   LLM_OVERLOAD_RETRY_MAX,
   LLM_MAX_TOKENS,
+  LLM_MAX_TOKENS_CHAT,
+  LLM_MAX_TOKENS_SIMPLE,
+  LLM_MAX_TOKENS_COMPLEX,
   LLM_REQUEST_TIMEOUT_MS,
   MODEL_ROUTER,
   MODEL_CHAT,
@@ -482,20 +485,34 @@ export async function classifyMessage(input: {
   }
 }
 
+function getModelSpecificMaxTokens(model: string, hint?: "chat" | "routine" | "complex"): number {
+  // Use hint if provided, otherwise infer from model name
+  if (hint === "chat") return LLM_MAX_TOKENS_CHAT;
+  if (hint === "complex") return LLM_MAX_TOKENS_COMPLEX;
+  if (hint === "routine") return LLM_MAX_TOKENS_SIMPLE;
+  
+  // Infer from model name
+  if (model.includes("claude")) return LLM_MAX_TOKENS_COMPLEX;
+  if (model.includes("glm") || model.includes("chat")) return LLM_MAX_TOKENS_CHAT;
+  return LLM_MAX_TOKENS_SIMPLE;
+}
+
 export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
   const fetchImpl = input.fetchImpl ?? fetch;
   const sleepImpl = input.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const maxTokens = input.maxTokens ?? LLM_MAX_TOKENS;
   const routerModel = input.routerModel ?? input.routineModel ?? MODEL_ROUTER;
   const chatModel = input.chatModel ?? MODEL_CHAT;
   const simpleModel = input.simpleModel ?? input.routineModel ?? MODEL_SIMPLE;
   const complexModel = input.complexModel ?? MODEL_COMPLEX;
 
   let model = input.model;
+  let modelHint: "chat" | "routine" | "complex" | undefined;
+  
   if (!model) {
     const isChatTurn = !input.tools?.length && !input.taskComplexityHint;
     if (isChatTurn) {
       model = chatModel;
+      modelHint = "chat";
     } else {
       const taskComplexityHint = input.taskComplexityHint
         ?? (simpleModel === complexModel
@@ -511,8 +528,12 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
               routerModel
             }));
       model = selectModel(input.systemPrompt, input.messages, taskComplexityHint, simpleModel, complexModel);
+      modelHint = taskComplexityHint === "complex" ? "complex" : "routine";
     }
   }
+  
+  // Use model-specific max tokens, with override if provided
+  const maxTokens = input.maxTokens ?? getModelSpecificMaxTokens(model, modelHint);
 
   const viaGateway = Boolean(input.aiGatewayBaseUrl);
   const useOpenAICompat = viaGateway || isOpenAIModel(model);
