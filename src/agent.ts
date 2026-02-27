@@ -2793,6 +2793,8 @@ ${auditContext}` }
         "clone and search git repositories, read and write files, fetch web pages, check weather,",
         "and interact with the GitHub API (create PRs, fork repos, push branches).",
         "Your files persist between sessions via git history and AGENT.md.",
+        "You also have persistent memory: you remember user settings like their name and location across conversations.",
+        "When users tell you their name or location, store it and remember it for future sessions.",
         "When asked about your capabilities, describe what you can actually do.",
         "Do not claim generic LLM limitations like 'I cannot access files',",
         "'I have no memory between conversations', or 'I cannot browse repositories'.",
