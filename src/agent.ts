@@ -432,6 +432,23 @@ export class AgentDO {
     this.sandbox = new SandboxClient((env.SANDBOX as unknown as SandboxBinding | undefined) ?? UNCONFIGURED_SANDBOX);
     this.deps = { ...DEFAULT_DEPS, ...deps };
     initSchema(this.db);
+    
+    // Schedule initial heartbeat alarm if not already set
+    this.scheduleInitialHeartbeatAlarm();
+  }
+  
+  private async scheduleInitialHeartbeatAlarm(): Promise<void> {
+    try {
+      // Check if alarm is already set
+      const existingAlarm = await this.ctx.storage.getAlarm?.();
+      if (existingAlarm === null || existingAlarm === undefined) {
+        // Set initial alarm to start heartbeat processing
+        await this.ctx.storage.setAlarm?.(this.deps.now() + BACKGROUND_TASK_INTERVAL_MS);
+      }
+    } catch (err) {
+      // Non-critical: alarm scheduling failure shouldn't prevent DO creation
+      console.error("Failed to schedule initial heartbeat alarm:", err);
+    }
   }
 
   /**

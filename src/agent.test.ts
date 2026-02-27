@@ -610,7 +610,8 @@ describe("AgentDO runAgentLoop", () => {
 
     expect(result.finalText).toContain("Paused pending approval");
     expect(postSlackApproval).toHaveBeenCalledTimes(1);
-    expect(setAlarm).toHaveBeenCalledTimes(1);
+    // setAlarm is called once in constructor for initial heartbeat, once for approval timeout
+    expect(setAlarm).toHaveBeenCalledTimes(2);
   });
 
   it("enforces max steps", async () => {
