@@ -2287,28 +2287,21 @@ ${auditContext}` }
     if (!channel || !task) {
       return;
     }
+    // Quick path: Check for status queries that need data lookup - route to sub-agent immediately
+    const statusQueryPatterns = [
+      /show\s+(?:my\s+)?(?:heartbeat|goal|task|deploy)/i,
+      /what\s+(?:are\s+)?(?:my\s+)?(?:goal|heartbeat|task)/i,
+      /list\s+(?:my\s+)?(?:heartbeat|goal|task)/i,
+      /(?:heartbeat|goal|task|deploy)\s+status/i,
+    ];
+    const isStatusQuery = statusQueryPatterns.some(p => p.test(task));
 
     // Orchestrator owns session lifecycle and conversation memory.
     // It resolves (or creates) the current session, handles end-of-session
     // summarisation, and passes the accumulated history to the ephemeral
     // sub-agent so the sub-agent starts with full conversation context.
     const { sessionId, previousSessionId } = resolveOrCreateSession(this.db, this.deps.now());
-    if (previousSessionId) {
-      await this.traceOperation(
-        sessionId,
-        "session_summary",
-        () => this.summarizePreviousSession(previousSessionId),
-        channel
-      );
-    }
-
-    // Build the system prompt here from durable knowledge/settings only.
-    // Session summaries are intentionally excluded from the system prompt
-    // to reduce provider prompt-injection false positives.
-    const userConfig = await this.getUserConfiguration();
-    const repoGoals = getRepositoryGoals(userConfig, "kyleboas", "blob");
-    const systemPrompt = buildSystemPrompt(getKnowledge(this.db), this.getPromptPolicies(), repoGoals);
-
+    
     // Snapshot the history *before* appending the new user message so that
     // runAgentLoop on the sub-agent can append it itself (preserving the
     // existing load-then-append pattern).
@@ -2319,21 +2312,46 @@ ${auditContext}` }
     // by the chat model; tasks are siphoned off to a sub-agent running the
     // appropriate simple or complex model in the background.
     const settings = this.getRuntimeModelSettings();
-    const messageType = await classifyMessage({
-      aiGatewayToken: this.env.AI_GATEWAY_TOKEN,
-      aiGatewayBaseUrl: this.env.AI_GATEWAY_BASE_URL,
-      apiKey: this.env.ANTHROPIC_API_KEY,
-      openAiApiKey: this.env.OPENAI_API_KEY,
-      systemPrompt,
-      messages: [...priorMessages, { role: "user" as const, content: task }],
-      routerModel: settings.routerModel
-    });
+    
+    // Fast-path status queries to sub-agent without router call
+    let messageType: "chat" | "routine" | "complex";
+    if (isStatusQuery) {
+      messageType = "routine";
+    } else {
+      // Build minimal system prompt for routing (no KV fetch needed)
+      const routingSystemPrompt = buildSystemPrompt(getKnowledge(this.db), this.getPromptPolicies(), null);
+      messageType = await classifyMessage({
+        aiGatewayToken: this.env.AI_GATEWAY_TOKEN,
+        aiGatewayBaseUrl: this.env.AI_GATEWAY_BASE_URL,
+        apiKey: this.env.ANTHROPIC_API_KEY,
+        openAiApiKey: this.env.OPENAI_API_KEY,
+        systemPrompt: routingSystemPrompt,
+        messages: [...priorMessages, { role: "user" as const, content: task }],
+        routerModel: settings.routerModel
+      });
+    }
+
+    // Handle session summarization in background for chat messages to reduce latency
+    if (previousSessionId && messageType !== "chat") {
+      await this.traceOperation(
+        sessionId,
+        "session_summary",
+        () => this.summarizePreviousSession(previousSessionId),
+        channel
+      );
+    } else if (previousSessionId) {
+      // For chat, summarize in background without blocking
+      void this.summarizePreviousSession(previousSessionId);
+    }
+
+    // Build full system prompt with goals for sub-agents (chat doesn't need this)
+    const userConfig = await this.getUserConfiguration();
+    const repoGoals = getRepositoryGoals(userConfig, "kyleboas", "blob");
+    const systemPrompt = buildSystemPrompt(getKnowledge(this.db), this.getPromptPolicies(), repoGoals);
 
     // Persist the incoming user message on the orchestrator side now so that
     // even if the sub-agent crashes the turn is recorded.
-    saveMessage(this.db, sessionId, { role: "user", content: task });
-
-    if (messageType === "chat") {
+    saveMessage(this.db, sessionId, { role: "user", content: task });    if (messageType === "chat") {
       // Respond conversationally without spinning up a sub-agent or using tools.
       // Use a focused system prompt that describes actual capabilities without
       // inheriting proactive agent directives from AGENT.md (e.g. "take initiative",
