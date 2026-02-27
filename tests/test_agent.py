@@ -1,7 +1,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
-from agent import Agent, _extract_urls, _parse_github_repo
+from agent import Agent, _extract_urls, _parse_github_repo, _rewrite_github_auth_header
 from llm_client import LLMResponse, LLMUsage
 from sandbox import ExecutionResult
 
@@ -116,6 +116,39 @@ def test_parse_github_repo() -> None:
     assert _parse_github_repo("git@github.com:octo/example.git") == "octo/example"
     assert _parse_github_repo("https://github.com/octo/example.git") == "octo/example"
     assert _parse_github_repo("https://gitlab.com/octo/example.git") is None
+
+
+def test_rewrite_github_auth_header_uses_bearer_with_expandable_token() -> None:
+    command = "curl -X POST -H 'Authorization: token $GITHUB_TOKEN' https://api.github.com/repos/o/r/pulls"
+    rewritten = _rewrite_github_auth_header(command)
+    assert rewritten == 'curl -X POST -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/o/r/pulls'
+
+
+def test_agent_normalizes_bash_command_before_execution() -> None:
+    llm = MockLLM([
+        LLMResponse(
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "tool1",
+                    "name": "bash",
+                    "input": {
+                        "command": "curl -H 'Authorization: token $GITHUB_TOKEN' https://api.github.com/repos/o/r/pulls"
+                    },
+                }
+            ],
+            stop_reason="tool_use",
+            usage=LLMUsage(1, 1),
+        ),
+        LLMResponse(content=[{"type": "text", "text": "ok"}], stop_reason="end_turn", usage=LLMUsage(1, 1)),
+    ])
+    sandbox = DummySandbox()
+    agent = Agent(llm_client=llm, sandbox=sandbox, approval_gate=DummyApproval())
+
+    result = agent.run_task("open pr")
+
+    assert result == "ok"
+    assert sandbox.commands[0] == 'curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/o/r/pulls'
 
 
 def test_make_pr_tool_path() -> None:

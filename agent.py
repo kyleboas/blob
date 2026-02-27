@@ -81,6 +81,21 @@ def _parse_github_repo(remote_url: str) -> str | None:
     return None
 
 
+def _rewrite_github_auth_header(command: str) -> str:
+    """Normalize curl GitHub auth headers to expand token correctly in shell.
+
+    Some generated commands incorrectly use single quotes around
+    ``Authorization: token $GITHUB_TOKEN``, which prevents shell expansion and
+    causes GitHub API 401 errors.
+    """
+    return re.sub(
+        r"-H\s+'Authorization:\s*token\s+\$GITHUB_TOKEN'",
+        '-H "Authorization: Bearer $GITHUB_TOKEN"',
+        command,
+        flags=re.IGNORECASE,
+    )
+
+
 @dataclass(slots=True)
 class ImprovementTask:
     id: str
@@ -119,6 +134,10 @@ class Agent:
                 "When asked to remember long-term preferences, save them to AGENT.md.",
             ]
         )
+
+    def _normalize_bash_command(self, command: str) -> str:
+        """Apply low-risk command rewrites for known bad patterns."""
+        return _rewrite_github_auth_header(command)
 
     def _emit_status(self, message: str) -> None:
         log_activity("status", {"message": message})
@@ -428,7 +447,8 @@ class Agent:
                     if not allowed:
                         result_text = "Blocked: approval denied or timed out."
                     else:
-                        execution = self._execute_with_retry(command)
+                        normalized_command = self._normalize_bash_command(command)
+                        execution = self._execute_with_retry(normalized_command)
                         if is_modification:
                             self.rate_limiter.record_modification()
                             commit_message = f"agent: apply `{command[:80]}`"
@@ -440,6 +460,7 @@ class Agent:
                                 config.TOOL_AUDIT_LOG,
                                 {
                                     "command": command,
+                                    "normalized_command": normalized_command,
                                     "target_files": target_files,
                                     "tier": tier,
                                     "exit_code": execution.exit_code,
