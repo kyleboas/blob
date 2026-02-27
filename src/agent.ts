@@ -79,6 +79,7 @@ import { createApprovalRequest, expireTimedOutApprovals, resolveApprovalReaction
 import { classifyIntentWithEntities, extractTextContent, getCacheStats } from "./llm";
 import { CORE_TOOLS, loadExtensions, type ExtensionTool } from "./pi-tools";
 import { SessionTree, generateSessionId, type SessionMessage, type SessionNode } from "./pi-sessions";
+import { registerBuiltinExtensions } from "./pi-extensions";
 import type { ConversationMessage, Env, SlackEvent } from "./types";
 import type { ToolResult } from "./types";
 
@@ -463,6 +464,9 @@ export class AgentDO {
     this.sandbox = new SandboxClient((env.SANDBOX as unknown as SandboxBinding | undefined) ?? UNCONFIGURED_SANDBOX);
     this.deps = { ...DEFAULT_DEPS, ...deps };
     initSchema(this.db);
+    
+    // Register built-in lightweight extensions
+    registerBuiltinExtensions(this.db);
 
     // Schedule initial heartbeat alarm if not already set
     this.scheduleInitialHeartbeatAlarm();
