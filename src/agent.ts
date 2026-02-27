@@ -2200,9 +2200,20 @@ export class AgentDO {
   }
 
   private async showHeartbeatStatus(channel: string): Promise<string> {
+    // Check if heartbeats are paused or no alarm is scheduled - auto-start if needed
+    const isPaused = getSetting(this.db, "heartbeats_paused") === "true";
+    const alarmTime = await this.ctx.storage.getAlarm?.();
+    const hasAlarm = alarmTime !== null && alarmTime !== undefined;
+    
+    if (isPaused || !hasAlarm) {
+      // Auto-start heartbeats
+      await this.startHeartbeats(channel);
+      return "🔄 Heartbeats were stopped. I've started them for you.";
+    }
+    
     const heartbeats = listHeartbeats(this.db, 10);
     if (heartbeats.length === 0) {
-      return "📭 No heartbeats found. The queue is empty.";
+      return "📭 No heartbeats in the queue. Heartbeats are running - I'll generate new tasks automatically.";
     }
 
     const statusLines = heartbeats.map(h => {
