@@ -486,6 +486,93 @@ async function fetchGlobalLogsSnapshot(env: Env): Promise<Response> {
   return response;
 }
 
+// WebSocket handler for real-time logs
+async function handleWebSocket(request: Request, env: Env): Promise<Response> {
+  const upgradeHeader = request.headers.get("Upgrade");
+  if (upgradeHeader !== "websocket") {
+    return new Response("Expected websocket", { status: 400 });
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const WebSocketPairConstructor = (globalThis as any).WebSocketPair;
+  const webSocketPair = new WebSocketPairConstructor();
+  const client = webSocketPair[0] as WebSocket;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const server = webSocketPair[1] as any;
+
+  server.accept();
+
+  // Send initial snapshot
+  try {
+    const response = await fetchGlobalLogsSnapshot(env);
+    const payload = await response.json();
+    server.send(JSON.stringify({ type: "snapshot", data: payload }));
+  } catch {
+    server.send(JSON.stringify({ type: "error", message: "Failed to fetch logs" }));
+  }
+
+  // Set up periodic updates
+  const intervalId = setInterval(async () => {
+    try {
+      const response = await fetchGlobalLogsSnapshot(env);
+      const payload = await response.json();
+      server.send(JSON.stringify({ type: "snapshot", data: payload }));
+    } catch {
+      // Silently fail - client will reconnect if needed
+    }
+  }, 1000);
+
+  // Clean up on close
+  server.addEventListener("close", () => {
+    clearInterval(intervalId);
+  });
+
+  server.addEventListener("error", () => {
+    clearInterval(intervalId);
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return new Response(null, {
+    status: 101,
+    webSocket: client,
+  } as any);
+}
+
+// SSE handler for fallback
+function handleSSE(env: Env): Response {
+  let closed = false;
+  const stream = new ReadableStream({
+    async start(controller) {
+      const encoder = new TextEncoder();
+      controller.enqueue(encoder.encode(": connected\n\n"));
+
+      while (!closed) {
+        try {
+          const response = await fetchGlobalLogsSnapshot(env);
+          const payload = await response.text();
+          controller.enqueue(encoder.encode(`event: snapshot\ndata: ${payload}\n\n`));
+        } catch {
+          controller.enqueue(encoder.encode("event: error\ndata: {\"error\":\"failed to read logs\"}\n\n"));
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    },
+    cancel() {
+      closed = true;
+    }
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive"
+    }
+  });
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -526,37 +613,11 @@ export default {
     }
 
     if (request.method === "GET" && (url.pathname === "/logs/stream" || url.pathname === "/live-logs/stream")) {
-      let closed = false;
-      const stream = new ReadableStream({
-        async start(controller) {
-          const encoder = new TextEncoder();
-          controller.enqueue(encoder.encode(": connected\n\n"));
-
-          while (!closed) {
-            try {
-              const response = await fetchGlobalLogsSnapshot(env);
-              const payload = await response.text();
-              controller.enqueue(encoder.encode(`event: snapshot\ndata: ${payload}\n\n`));
-            } catch {
-              controller.enqueue(encoder.encode("event: error\ndata: {\"error\":\"failed to read logs\"}\n\n"));
-            }
-
-            await new Promise((resolve) => setTimeout(resolve, 1000));
-          }
-        },
-        cancel() {
-          closed = true;
-        }
-      });
-
-      return new Response(stream, {
-        status: 200,
-        headers: {
-          "content-type": "text/event-stream; charset=utf-8",
-          "cache-control": "no-cache, no-transform",
-          connection: "keep-alive"
-        }
-      });
+      const upgradeHeader = request.headers.get("Upgrade");
+      if (upgradeHeader === "websocket") {
+        return handleWebSocket(request, env);
+      }
+      return handleSSE(env);
     }
 
     // Heartbeat API – enqueue background tasks for Blob to work on proactively
