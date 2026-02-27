@@ -706,3 +706,64 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
 
   throw new Error("LLM API error: max retries exceeded");
 }
+
+// Extract text content from LLM response
+export function extractTextContent(response: LLMResponse): string {
+  return (response.content as Array<{ type?: string; text?: string }>)
+    .filter((b) => b.type === "text")
+    .map((b) => b.text ?? "")
+    .join("\n")
+    .trim();
+}
+
+// Intent classification result
+export interface IntentClassification {
+  intent: "heartbeat_status" | "pause_heartbeats" | "start_heartbeats" | "deployment_status" | "record_deployment" | "merge_staging" | "set_repo" | "show_goals" | "set_goals" | "general_chat";
+  confidence: number;
+  entities?: Record<string, string>;
+}
+
+// Classify user intent using LLM
+export async function classifyIntent(
+  text: string,
+  llmCall: (input: CallLLMInput) => Promise<LLMResponse>
+): Promise<IntentClassification> {
+  const systemPrompt = `You are an intent classifier for Blob, an AI assistant.
+Classify the user's message into one of these intents:
+- heartbeat_status: Questions about heartbeat status ("are heartbeats on", "show heartbeats", "heartbeat working")
+- pause_heartbeats: Request to pause/stop heartbeats
+- start_heartbeats: Request to start/resume heartbeats  
+- deployment_status: Questions about deployment status
+- record_deployment: User saying they just deployed
+- merge_staging: Request to merge staging to production
+- set_repo: Setting default repository ("my repo is owner/repo")
+- show_goals: Showing repository goals
+- set_goals: Setting repository goals
+- general_chat: General conversation or unclear intent
+
+Respond with ONLY a JSON object in this exact format:
+{"intent": "intent_name", "confidence": 0.95}
+
+No other text, no markdown, just the JSON.`;
+
+  try {
+    const response = await llmCall({
+      systemPrompt,
+      messages: [{ role: "user", content: text }],
+      taskComplexityHint: "routine"
+    });
+
+    const content = extractTextContent(response);
+    const jsonMatch = content.match(/\{[^}]+\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]) as IntentClassification;
+      if (parsed.intent && typeof parsed.confidence === "number") {
+        return parsed;
+      }
+    }
+  } catch {
+    // Fall through to default
+  }
+
+  return { intent: "general_chat", confidence: 0 };
+}

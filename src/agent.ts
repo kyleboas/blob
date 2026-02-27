@@ -76,6 +76,7 @@ import {
 } from "./tools";
 import { mapChannelToDO, postApprovalRequest, postMessage } from "./slack";
 import { createApprovalRequest, expireTimedOutApprovals, resolveApprovalReaction, type PendingApproval } from "./approval";
+import { classifyIntent, extractTextContent, type IntentClassification } from "./llm";
 import type { ConversationMessage, Env, SlackEvent } from "./types";
 import type { ToolResult } from "./types";
 
@@ -393,14 +394,6 @@ function detectMilestone(command: string, exitCode: number, stdout: string): Mil
   }
 
   return null;
-}
-
-function extractTextContent(response: LLMResponse): string {
-  return (response.content as Array<TextBlock | ToolUseBlock>)
-    .filter((b): b is TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
-    .trim();
 }
 
 function getToolUseIds(message: ConversationMessage): string[] {
@@ -1933,6 +1926,43 @@ export class AgentDO {
 
   private async handleSlackCommand(task: string, channel: string): Promise<string | null> {
     const lowerTask = task.toLowerCase();
+
+    // Try LLM-based intent classification first (more robust than regex)
+    // Only if USE_LLM_INTENT_CLASSIFICATION is enabled
+    const useLlmIntent = getSetting(this.db, "use_llm_intent_classification") === "true";
+    
+    if (useLlmIntent) {
+      try {
+        const classification = await classifyIntent(task, (input) => this.deps.llmCall(this.buildLlmInput(input)));
+        
+        if (classification.confidence > 0.7) {
+          switch (classification.intent) {
+            case "heartbeat_status":
+              return await this.showHeartbeatStatus(channel);
+            case "pause_heartbeats":
+              return await this.pauseHeartbeats(channel);
+            case "start_heartbeats":
+              return await this.startHeartbeats(channel);
+            case "deployment_status":
+              return await this.showDeploymentStatus(channel);
+            case "record_deployment":
+              return await this.recordDeployment(channel);
+            case "merge_staging":
+              return await this.mergeStagingToProduction(channel);
+            case "show_goals":
+              // Extract owner/repo from entities or use default
+              return "Use 'show goals for owner/repo' to see repository goals.";
+            case "set_goals":
+              return "Use 'set goals for owner/repo: goal1; goal2' to set repository goals.";
+            case "general_chat":
+              // Fall through to regex patterns
+              break;
+          }
+        }
+      } catch {
+        // Fall back to regex patterns if LLM classification fails
+      }
+    }
 
     // Natural language patterns for setting repo
     // Matches: "my repo is owner/repo", "use owner/repo", "set repo to owner/repo", etc.
