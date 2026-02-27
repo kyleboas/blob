@@ -1058,11 +1058,31 @@ export class AgentDO {
       await thinkingMessagePromise;
     }
 
-    await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, this.stripToolMarkupForSlack(finalText));
+    await this.sendResponse(channel, this.stripToolMarkupForSlack(finalText));
     logAgentEvent(this.db, sessionId, "completed", finalText);
     this.forwardToGlobalLogs("completed", `[#${channel}] ${finalText.slice(0, 300)}`);
 
     return { finalText, steps };
+  }
+
+  private async sendResponse(channel: string, text: string): Promise<void> {
+    // Check if this is a WebSocket channel
+    if (channel.startsWith("ws-")) {
+      // Send via WebSocket response endpoint
+      try {
+        await fetch("https://blob-agent.heyboas.workers.dev/chat/response", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ channel, text })
+        });
+      } catch {
+        // Fallback: log to global logs
+        this.forwardToGlobalLogs("ws_response_failed", `[#${channel}] ${text.slice(0, 100)}`);
+      }
+    } else {
+      // Send via Slack
+      await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, text);
+    }
   }
 
   private forwardToGlobalLogs(eventType: string, message: string): void {

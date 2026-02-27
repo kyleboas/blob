@@ -573,6 +573,104 @@ function handleSSE(env: Env): Response {
   });
 }
 
+// Blob WebSocket chat handler
+async function handleBlobWebSocket(request: Request, env: Env): Promise<Response> {
+  const upgradeHeader = request.headers.get("Upgrade");
+  if (upgradeHeader !== "websocket") {
+    return new Response("Expected websocket", { status: 400 });
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const WebSocketPairConstructor = (globalThis as any).WebSocketPair;
+  const webSocketPair = new WebSocketPairConstructor();
+  const client = webSocketPair[0] as WebSocket;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const server = webSocketPair[1] as any;
+
+  server.accept();
+
+  // Generate a unique channel for this WebSocket connection
+  const channel = `ws-${crypto.randomUUID()}`;
+  
+  // Store WebSocket connection in a global map (using env for simplicity)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if (!(env as any).wsConnections) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (env as any).wsConnections = new Map();
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (env as any).wsConnections.set(channel, server);
+
+  // Send welcome message
+  server.send(JSON.stringify({
+    type: "connected",
+    channel,
+    message: "Connected to Blob. Send a message to start chatting."
+  }));
+
+  // Handle incoming messages from client
+  server.addEventListener("message", async (event: { data: string }) => {
+    try {
+      const data = JSON.parse(event.data);
+
+      if (data.type === "message" && data.text) {
+        // Forward to AgentDO
+        const doName = `slack-channel:${channel}`;
+        const stub = env.AGENT_DO.get(env.AGENT_DO.idFromName(doName));
+        
+        // Send message to AgentDO
+        const response = await stub.fetch("https://agent.internal/event", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            action: "message",
+            event: {
+              type: "message",
+              channel,
+              text: data.text,
+              user: data.user || "web-user",
+              ts: Date.now().toString()
+            },
+            wsChannel: channel // Tell AgentDO this is a WebSocket channel
+          })
+        });
+
+        if (!response.ok) {
+          server.send(JSON.stringify({
+            type: "error",
+            message: "Failed to process message"
+          }));
+        }
+      } else if (data.type === "ping") {
+        server.send(JSON.stringify({ type: "pong" }));
+      }
+    } catch (err) {
+      server.send(JSON.stringify({
+        type: "error",
+        message: err instanceof Error ? err.message : "Invalid message format"
+      }));
+    }
+  });
+
+  // Handle close
+  server.addEventListener("close", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (env as any).wsConnections?.delete(channel);
+  });
+
+  server.addEventListener("error", (err: unknown) => {
+    console.error("WebSocket error:", err);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (env as any).wsConnections?.delete(channel);
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return new Response(null, {
+    status: 101,
+    webSocket: client,
+  } as any);
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -618,6 +716,35 @@ export default {
         return handleWebSocket(request, env);
       }
       return handleSSE(env);
+    }
+
+    // Blob WebSocket response endpoint (for AgentDO to send responses back)
+    if (request.method === "POST" && url.pathname === "/chat/response") {
+      const body = await request.json() as { channel?: string; text?: string; type?: string };
+      const channel = body.channel;
+      const text = body.text;
+      
+      if (!channel || !text) {
+        return Response.json({ error: "channel and text required" }, { status: 400 });
+      }
+      
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ws = (env as any).wsConnections?.get(channel);
+      if (ws && ws.readyState === 1) { // WebSocket.OPEN
+        ws.send(JSON.stringify({ type: body.type || "message", text }));
+        return new Response("ok");
+      }
+      
+      return Response.json({ error: "WebSocket not found or closed" }, { status: 404 });
+    }
+
+    // Blob WebSocket chat endpoint
+    if (request.method === "GET" && url.pathname === "/chat") {
+      const upgradeHeader = request.headers.get("Upgrade");
+      if (upgradeHeader === "websocket") {
+        return handleBlobWebSocket(request, env);
+      }
+      return new Response("Expected WebSocket", { status: 400 });
     }
 
     // Heartbeat API – enqueue background tasks for Blob to work on proactively
