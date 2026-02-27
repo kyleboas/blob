@@ -3,7 +3,6 @@ import {
   TOOL_RETRY_MAX,
   TOOL_RETRY_BACKOFF_BASE_MS,
   COMPACTION_TOKEN_THRESHOLD,
-  THINKING_MESSAGE_DELAY_MS,
   BACKGROUND_TASK_INTERVAL_MS,
   PLANNER_AUDIT_MAX_ATTEMPTS,
   MODEL_ROUTER,
@@ -141,7 +140,7 @@ function shellEscape(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-// DO name for the global logs channel – matches mapChannelToDO("__global__")
+// DO name for the global logs channel - matches mapChannelToDO("__global__")
 const GLOBAL_LOGS_DO_NAME = "slack-channel:__global__";
 const SLOW_OPERATION_WARN_MS = 15_000;
 
@@ -150,10 +149,10 @@ const BASE_SYSTEM_PROMPT = [
   "Use tools when needed.",
   "The sandbox working directory is /workspace.",
   "Always use absolute paths (e.g. /workspace/repo) rather than bare directory names when referencing cloned repos.",
-  "Each sandbox session starts fresh in /workspace — files from previous sessions are not automatically present.",
+  "Each sandbox session starts fresh in /workspace - files from previous sessions are not automatically present.",
   "If a workflow repeats, use create_tool to define a reusable tool and then call it directly in later steps.",
-  "For GitHub operations, use python github_tools.py (available in /workspace) — it handles authentication automatically. Commands: whoami, push, create-pr, fork, remote-url.",
-  "You have access to your own source code at https://github.com/kyleboas/blob — you can clone it, read it, modify it, and create PRs to improve yourself.",
+  "For GitHub operations, use python github_tools.py (available in /workspace) - it handles authentication automatically. Commands: whoami, push, create-pr, fork, remote-url.",
+  "You have access to your own source code at https://github.com/kyleboas/blob - you can clone it, read it, modify it, and create PRs to improve yourself.",
   "When working on your own code, clone to /workspace/blob and make changes there."
 ].join(" ");
 
@@ -231,7 +230,7 @@ function buildSystemPrompt(_knowledge: string, policies: PromptPolicies, repoGoa
       "REPOSITORY GOALS (configured in Cloudflare KV):",
       ...repoGoals.goals.map(g => `- ${g}`),
     ].join("\n");
-    
+
     if (repoGoals.constraints && repoGoals.constraints.length > 0) {
       prompt += [
         "",
@@ -239,7 +238,7 @@ function buildSystemPrompt(_knowledge: string, policies: PromptPolicies, repoGoa
         ...repoGoals.constraints.map(c => `- ${c}`),
       ].join("\n");
     }
-    
+
     prompt += [
       "",
       "When helping the user, steer your suggestions and actions towards these goals.",
@@ -467,11 +466,11 @@ export class AgentDO {
     this.sandbox = new SandboxClient((env.SANDBOX as unknown as SandboxBinding | undefined) ?? UNCONFIGURED_SANDBOX);
     this.deps = { ...DEFAULT_DEPS, ...deps };
     initSchema(this.db);
-    
+
     // Schedule initial heartbeat alarm if not already set
     this.scheduleInitialHeartbeatAlarm();
   }
-  
+
   private async scheduleInitialHeartbeatAlarm(): Promise<void> {
     try {
       // Check if alarm is already set
@@ -730,19 +729,19 @@ export class AgentDO {
     if (body.action === "deploy_trigger") {
       // Re-schedule heartbeat alarm on deploy to ensure heartbeats start
       await this.scheduleInitialHeartbeatAlarm();
-      
+
       // Also immediately trigger a heartbeat check
       await this.ctx.storage.setAlarm?.(this.deps.now());
-      
+
       const timestamp = (body as { timestamp?: string }).timestamp;
       const deployEvent = `Deploy triggered at ${timestamp || new Date().toISOString()}`;
       logAgentEvent(this.db, "global", "deploy_trigger", deployEvent);
       this.forwardToGlobalLogs("deploy_trigger", deployEvent);
-      
-      return Response.json({ 
-        status: "ok", 
+
+      return Response.json({
+        status: "ok",
         message: "Heartbeat alarm scheduled",
-        timestamp: timestamp 
+        timestamp: timestamp
       });
     }
 
@@ -934,7 +933,7 @@ export class AgentDO {
     // Load user configuration first to get repository goals
     const userConfig = await this.getUserConfiguration();
     const repoGoals = getRepositoryGoals(userConfig, "kyleboas", "blob");
-    
+
     const systemPromptBase =
       options.systemPrompt ??
       buildSystemPrompt(
@@ -947,25 +946,20 @@ export class AgentDO {
     const systemPrompt = `${systemPromptBase}\n\n${executionGuardrails}`;
     const dynamicTools = new Map<string, DynamicToolDefinition>();
 
-    let thinkingTimer: ReturnType<typeof setTimeout> | undefined;
-    let thinkingMessagePromise: Promise<void> | null = null;
-    thinkingTimer = setTimeout(() => {
-      const maybePromise = this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, "Thinking...");
-      thinkingMessagePromise = Promise.resolve(maybePromise).then(() => {
-        this.logDiagnostic(sessionId, "thinking", "Posted delayed thinking status.", channel);
-      });
-    }, THINKING_MESSAGE_DELAY_MS);
+    // System prompt now includes instruction for LLM to generate status updates
+    const systemPromptWithStatus = `${systemPrompt}\n\nWhen you start working on a task, begin your response with a brief status update in brackets like [Planning my approach...] or [Looking up the weather data...]. This helps the user understand what you're doing in real-time.`;
 
     let finalText = "";
     let steps = 0;
     let sandboxStarted = false;
+    let statusSent = false;
 
     try {
       const firstResponse = await this.traceOperation(
         sessionId,
         "llm_call_initial",
         () => this.deps.llmCall(this.buildLlmInput({
-          systemPrompt,
+          systemPrompt: systemPromptWithStatus,
           messages: conversation,
           tools: this.buildToolList(dynamicTools),
           taskComplexityHint: options.taskComplexityHint,
@@ -976,6 +970,17 @@ export class AgentDO {
 
       logAgentEvent(this.db, sessionId, "model_used", firstResponse.model);
       this.forwardToGlobalLogs("model_used", `[#${channel}] ${firstResponse.model}`);
+
+      // Extract and send status message if present
+      const firstBlocks = firstResponse.content as Array<ToolUseBlock | TextBlock>;
+      const firstTextBlock = firstBlocks.find((b): b is TextBlock => b.type === "text");
+      if (firstTextBlock) {
+        const statusMatch = firstTextBlock.text.match(/^\[([^\]]+)\]/);
+        if (statusMatch) {
+          await this.sendResponse(channel, `🔄 ${statusMatch[1]}`);
+          statusSent = true;
+        }
+      }
 
       let llmResponse = firstResponse;
 
@@ -1007,8 +1012,8 @@ export class AgentDO {
         const decision = await this.processLlmResponse(llmResponse, channel, sessionId, {
           applySelfModificationRateLimit,
           dynamicTools,
-          conversationContext: typeof conversation[conversation.length - 1]?.content === 'string' 
-            ? conversation[conversation.length - 1]?.content as string 
+          conversationContext: typeof conversation[conversation.length - 1]?.content === 'string'
+            ? conversation[conversation.length - 1]?.content as string
             : undefined
         });
         if (decision.observations.length > 0) {
@@ -1051,14 +1056,9 @@ export class AgentDO {
       finalText = `Stopped after reaching max steps (${MAX_STEPS}).`;
     }
 
-    if (thinkingTimer) {
-      clearTimeout(thinkingTimer);
-    }
-    if (thinkingMessagePromise) {
-      await thinkingMessagePromise;
-    }
-
-    await this.sendResponse(channel, this.stripToolMarkupForSlack(finalText));
+    // Send final response (only if we haven't sent a status or if it's different)
+    const cleanFinalText = this.stripToolMarkupForSlack(finalText);
+    await this.sendResponse(channel, cleanFinalText);
     logAgentEvent(this.db, sessionId, "completed", finalText);
     this.forwardToGlobalLogs("completed", `[#${channel}] ${finalText.slice(0, 300)}`);
 
@@ -1071,31 +1071,31 @@ export class AgentDO {
       // Send via WebSocket response endpoint with retry
       let attempts = 0;
       const maxAttempts = 3;
-      
+
       while (attempts < maxAttempts) {
         try {
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
-          
+
           const response = await fetch("https://blob-agent.heyboas.workers.dev/chat/response", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ channel, text }),
             signal: controller.signal
           });
-          
+
           clearTimeout(timeoutId);
-          
+
           if (response.ok) {
             return; // Success!
           }
-          
+
           // If WebSocket not found, the client may have disconnected
           if (response.status === 404) {
             this.forwardToGlobalLogs("ws_client_disconnected", `[#${channel}] Client disconnected`);
             return;
           }
-          
+
           throw new Error(`HTTP ${response.status}`);
         } catch (err) {
           attempts++;
@@ -1169,7 +1169,7 @@ export class AgentDO {
     if (!context) {
       return null;
     }
-    
+
     // Reject known placeholder or invalid owners
     const invalidOwners = ["prigol", "owner", "user", "example", "placeholder", "test"];
     if (invalidOwners.includes(context.owner.toLowerCase())) {
@@ -1186,7 +1186,7 @@ export class AgentDO {
     if (checkResult.stdout.trim() === "exists") {
       return;
     }
-    
+
     // Clone the repo
     const cloneCmd = `git clone https://github.com/${owner}/${repo}.git ${repoPath}`;
     const cloneResult = await this.executeWithRetry(cloneCmd);
@@ -1224,13 +1224,13 @@ export class AgentDO {
     if (repoMatch) {
       return { owner: "kyleboas", repo: "blob" };
     }
-    
+
     // Check for owner/repo pattern
     const genericMatch = conversation.match(/(\w+)[\/:](\w+)/);
     if (genericMatch && !["http", "https"].includes(genericMatch[1])) {
       return { owner: genericMatch[1], repo: genericMatch[2] };
     }
-    
+
     return null;
   }
 
@@ -1303,30 +1303,30 @@ export class AgentDO {
     const requestedBase = match?.[1] ?? "main";
     const cwd: string | null = null;
     let context = await this.maybeCaptureRepoContext(cwd);
-    
+
     // If no repo context, try to determine which repo to use
     if (!context) {
       let repoToUse: { owner: string; repo: string } | null = null;
-      
+
       // 1. Try to extract from conversation context
       if (conversationContext) {
         repoToUse = this.inferRepoFromConversation(conversationContext);
       }
-      
+
       // 2. Try to get from user configuration (Cloudflare KV)
       if (!repoToUse) {
         repoToUse = await this.getDefaultRepoFromConfig();
       }
-      
+
       // 3. Default to kyleboas/blob for Blob's own functionality
       if (!repoToUse) {
         repoToUse = { owner: "kyleboas", repo: "blob" };
       }
-      
+
       await this.ensureRepoCloned(sessionId, channel, repoToUse.owner, repoToUse.repo);
       context = repoToUse;
     }
-    
+
     // Validate that the remote URL matches expected GitHub repos
     if (context.owner === "prigol" || !context.owner || !context.repo) {
       throw new Error(`Invalid or placeholder repository detected (${context.owner}/${context.repo}). Please ensure you're working with a valid cloned repository.`);
@@ -2078,15 +2078,15 @@ export class AgentDO {
     try {
       // Cancel any existing alarm
       await this.ctx.storage.deleteAlarm?.();
-      
+
       setSetting(this.db, "heartbeats_paused", "true");
-      
+
       await this.deps.postSlackMessage(
         this.env.SLACK_BOT_TOKEN,
         channel,
         "⏸️ Heartbeats paused. I won't run autonomous tasks until you start them again."
       );
-      
+
       return "✅ Heartbeats paused. Say 'start heartbeats' to resume.";
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2098,16 +2098,16 @@ export class AgentDO {
     try {
       // Clear paused flag
       setSetting(this.db, "heartbeats_paused", "false");
-      
+
       // Schedule immediate heartbeat
       await this.ctx.storage.setAlarm?.(this.deps.now());
-      
+
       await this.deps.postSlackMessage(
         this.env.SLACK_BOT_TOKEN,
         channel,
         "▶️ Heartbeats started! Running autonomous tasks now."
       );
-      
+
       return "✅ Heartbeats started! I'll begin autonomous self-improvement.";
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2122,8 +2122,8 @@ export class AgentDO {
     }
 
     const statusLines = heartbeats.map(h => {
-      const statusEmoji = h.status === 'completed' ? '✅' : 
-                         h.status === 'failed' ? '❌' : 
+      const statusEmoji = h.status === 'completed' ? '✅' :
+                         h.status === 'failed' ? '❌' :
                          h.status === 'running' ? '🔄' : '⏳';
       const time = new Date(h.createdAt).toLocaleTimeString();
       return `${statusEmoji} #${h.id} [${h.status}] ${time}: ${h.task.slice(0, 60)}${h.task.length > 60 ? '...' : ''}`;
@@ -2164,7 +2164,7 @@ export class AgentDO {
       // Update settings
       const now = new Date().toISOString();
       const currentCount = parseInt(getSetting(this.db, "deployment_count") || "0", 10);
-      
+
       setSetting(this.db, "last_deployment_time", now);
       setSetting(this.db, "last_deployment_commit", commit);
       setSetting(this.db, "deployment_count", (currentCount + 1).toString());
@@ -2417,7 +2417,7 @@ ${auditContext}` }
       /(?:heartbeat|goal|task|deploy)\s+status/i,
     ];
     const isStatusQuery = statusQueryPatterns.some(p => p.test(task));
-    
+
     // Fast-path simple greetings to chat without router call
     const greetingPatterns = [
       /^(hi|hello|hey|yo|sup|howdy|greetings)(\s|$)/i,
@@ -2429,7 +2429,7 @@ ${auditContext}` }
       /^(cool|nice|awesome|great|good)(\s|$)/i,
     ];
     const isGreeting = greetingPatterns.some(p => p.test(task));
-    
+
     // Fast-path self-knowledge questions to chat (no lookup needed)
     const selfKnowledgePatterns = [
       /what\s+(model|ai|llm|agent)\s+(are|running|using|is)/i,
@@ -2461,7 +2461,7 @@ ${auditContext}` }
     // summarisation, and passes the accumulated history to the ephemeral
     // sub-agent so the sub-agent starts with full conversation context.
     const { sessionId, previousSessionId } = resolveOrCreateSession(this.db, this.deps.now());
-    
+
     // Snapshot the history *before* appending the new user message so that
     // runAgentLoop on the sub-agent can append it itself (preserving the
     // existing load-then-append pattern).
@@ -2472,7 +2472,7 @@ ${auditContext}` }
     // by the chat model; tasks are siphoned off to a sub-agent running the
     // appropriate simple or complex model in the background.
     const settings = this.getRuntimeModelSettings();
-    
+
     // Fast-path status queries to sub-agent without router call
     let messageType: "chat" | "routine" | "complex";
     let taskHint: string | undefined;
@@ -2513,7 +2513,7 @@ ${auditContext}` }
     // Persist the incoming user message on the orchestrator side now so that
     // even if the sub-agent crashes the turn is recorded.
     saveMessage(this.db, sessionId, { role: "user", content: task });
-    
+
     // FAST PATH: Use Workers AI for simple chat (no external API call)
     if ((messageType === "chat" || isGreeting || isSelfKnowledge) && shouldUseWorkersAI(task)) {
       const now = new Date();
@@ -2539,7 +2539,7 @@ ${auditContext}` }
           ].join(" "),
           messages: [
             ...priorMessages
-              .filter((m): m is { role: "user" | "assistant"; content: string } => 
+              .filter((m): m is { role: "user" | "assistant"; content: string } =>
                 typeof m.content === "string" && (m.role === "user" || m.role === "assistant")
               )
               .map(m => ({ role: m.role, content: m.content })),
@@ -2561,10 +2561,10 @@ ${auditContext}` }
     // FALLBACK: Regular chat model for complex conversations
     if (messageType === "chat" || isGreeting || isSelfKnowledge) {
       const now = new Date();
-      const timeString = now.toLocaleString('en-US', { 
-        weekday: 'long', 
-        year: 'numeric', 
-        month: 'long', 
+      const timeString = now.toLocaleString('en-US', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
         day: 'numeric',
         hour: '2-digit',
         minute: '2-digit',
@@ -2585,8 +2585,8 @@ ${auditContext}` }
         "When users ask about heartbeats, tell them about the heartbeat system and that they can check status by saying 'show my heartbeats'.",
         "IMPORTANT: Your role is conversational responses ONLY. You do NOT execute code or modify files directly.",
         "The router model (@cf/ibm-granite/granite-4.0-h-micro) decides whether to route to you for chat, or spawn a sub-agent for execution.",
-        "When execution is needed, the router delegates to simple or complex sub-agents — you don't choose, the router does.",
-        "You are the conversational interface — the router is the coordinator that decides who handles what.",
+        "When execution is needed, the router delegates to simple or complex sub-agents - you don't choose, the router does.",
+        "You are the conversational interface - the router is the coordinator that decides who handles what.",
         `Current date and time: ${timeString}. When asked about the time, respond with this information directly.`
       ].join(" ");
       const conversation = [...priorMessages, { role: "user" as const, content: task }];
@@ -2601,7 +2601,7 @@ ${auditContext}` }
       this.forwardToGlobalLogs("chat_reply", `[#${channel}] ${responseText.slice(0, 500)}`);
       return;
     }
-    
+
     // INLINE TASK PATH: Handle simple tasks directly without spawning sub-agent
     // This reduces latency for common operations
     const inlineTaskPatterns = [
@@ -2612,7 +2612,7 @@ ${auditContext}` }
       /^(?:stock|crypto|bitcoin|eth)\s+(?:price|value)/i,
     ];
     const isInlineTask = inlineTaskPatterns.some(p => p.test(task));
-    
+
     if (isInlineTask && messageType === "routine") {
       // Build system prompt for inline execution
       const userConfig = await this.getUserConfiguration();
@@ -2620,15 +2620,9 @@ ${auditContext}` }
       const systemPrompt = buildSystemPrompt(getKnowledge(this.db), this.getPromptPolicies(), repoGoals);
       const executionGuardrails = buildExecutionGuardrails(userConfig);
       const fullSystemPrompt = `${systemPrompt}\n\n${executionGuardrails}`;
-      
-      // Send acknowledgment
-      await this.deps.postSlackMessage(
-        this.env.SLACK_BOT_TOKEN,
-        channel,
-        "🔄 Working on it..."
-      );
-      
-      // Run task inline (no sub-agent spawn)
+
+      // Run task inline (no sub-agent spawn, no generic "working on it" message)
+      // The LLM will generate its own status updates
       this.runInBackground((async () => {
         try {
           const result = await this.runAgentLoop(task, channel, sessionId, {
@@ -2639,16 +2633,12 @@ ${auditContext}` }
           // Result is already posted to Slack by runAgentLoop
         } catch (err) {
           const errorMessage = err instanceof Error ? err.message : String(err);
-          await this.deps.postSlackMessage(
-            this.env.SLACK_BOT_TOKEN,
-            channel,
-            `❌ Task failed: ${errorMessage}`
-          );
+          await this.sendResponse(channel, `❌ Task failed: ${errorMessage}`);
         }
       })());
       return;
     }
-    
+
     // SLOW PATH: Build full system prompt for sub-agents
     const userConfig = await this.getUserConfiguration();
     const repoGoals = getRepositoryGoals(userConfig, "kyleboas", "blob");
@@ -2666,15 +2656,9 @@ ${auditContext}` }
 
     const subAgentId = this.env.AGENT_DO.idFromName(subAgentDoName);
     const subAgentStub = this.env.AGENT_DO.get(subAgentId);
-    
-    // Send immediate acknowledgment to user
-    await this.deps.postSlackMessage(
-      this.env.SLACK_BOT_TOKEN,
-      channel,
-      "🔄 Working on it... I'll let you know when it's done."
-    );
-    
+
     // Spawn sub-agent in background so user can continue chatting
+    // No generic "Working on it" - the LLM will generate its own status
     this.runInBackground((async () => {
       try {
         await subAgentStub.fetch("https://agent.internal/event", {
@@ -2694,11 +2678,7 @@ ${auditContext}` }
         });
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
-        await this.deps.postSlackMessage(
-          this.env.SLACK_BOT_TOKEN,
-          channel,
-          `❌ Task failed: ${errorMessage}`
-        );
+        await this.sendResponse(channel, `❌ Task failed: ${errorMessage}`);
       }
     })());
   }
@@ -2911,28 +2891,28 @@ ${history}` }]
           applySelfModificationRateLimit: true
         });
         completeHeartbeat(this.db, heartbeat.id, finalText);
-        
+
         // Log successful completion
         const successMessage = `✅ Completed in ${steps} steps: ${finalText.slice(0, 200)}`;
         logAgentEvent(this.db, heartbeat.id.toString(), "heartbeat_complete", successMessage);
         this.forwardToGlobalLogs("heartbeat_complete", `[#${heartbeat.channel}] ${successMessage}`);
-        
+
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         failHeartbeat(this.db, heartbeat.id, errorMessage);
-        
+
         // Log failure
         const failMessage = `❌ Failed: ${errorMessage}`;
         logAgentEvent(this.db, heartbeat.id.toString(), "heartbeat_failed", failMessage);
         this.forwardToGlobalLogs("heartbeat_failed", `[#${heartbeat.channel}] ${failMessage}`);
-        
+
         // Notify about the failure
         await this.deps.postSlackMessage(
           this.env.SLACK_BOT_TOKEN,
           heartbeat.channel,
           `Heartbeat failed: ${errorMessage}`
         );
-        
+
         // Attempt to create a self-healing PR if the error is recoverable
         await this.attemptSelfHeal(heartbeat.task, errorMessage, heartbeat.channel);
       }
@@ -2962,18 +2942,18 @@ ${history}` }]
     // Load repository goals from KV config or local settings
     const userConfig = await this.getUserConfiguration();
     const kvGoals = getRepositoryGoals(userConfig, "kyleboas", "blob");
-    
+
     // Also check for locally set goals (from Slack)
     const localGoalsJson = getSetting(this.db, "repo_goals:kyleboas/blob");
     const localGoals = localGoalsJson ? JSON.parse(localGoalsJson) as string[] : null;
-    
+
     const repoGoals = kvGoals || (localGoals ? { goals: localGoals } : null);
-    
+
     // If no goals configured, notify user but still continue with generic goals
     let goalsContext: string;
     if (!repoGoals) {
       goalsContext = "No specific repository goals configured. Using generic self-improvement goals.";
-      
+
       // Only notify once per day about missing goals
       const lastNotified = getSetting(this.db, "goals_notification_sent");
       const today = new Date().toISOString().slice(0, 10);

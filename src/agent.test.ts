@@ -828,14 +828,14 @@ describe("AgentDO runAgentLoop", () => {
   });
 
 
-  it("posts a delayed thinking message only when processing exceeds threshold", async () => {
+  it("allows LLM to generate its own status updates in brackets", async () => {
     vi.useFakeTimers();
     const sql = new FakeSql();
     const { env } = makeTestEnv();
     const postSlackMessage = vi.fn().mockResolvedValue(undefined);
-    const llmCall = vi.fn().mockImplementation(
-      () => new Promise((resolve) => setTimeout(() => resolve({ content: [{ type: "text", text: "Done" }] }), 6_100))
-    );
+    const llmCall = vi.fn().mockResolvedValue({ 
+      content: [{ type: "text", text: "[Analyzing the codebase...] Let me check the files." }] 
+    });
 
     const agent = new AgentDO({ storage: { sql } }, env, {
       llmCall: llmCall as never,
@@ -843,23 +843,21 @@ describe("AgentDO runAgentLoop", () => {
       postSlackApproval: vi.fn() as never
     });
 
-    const loopPromise = agent.runAgentLoop("slow request", "C1", "thread-slow-thinking");
-    await vi.advanceTimersByTimeAsync(6_000);
+    await agent.runAgentLoop("check files", "C1", "thread-status");
 
-    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Thinking...");
-
-    await vi.runAllTimersAsync();
-    await loopPromise;
-
+    // Should extract status from brackets and send it
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "🔄 Analyzing the codebase...");
     vi.useRealTimers();
   });
 
-  it("does not post a thinking message for fast responses", async () => {
+  it("does not send status if no brackets in response", async () => {
     vi.useFakeTimers();
     const sql = new FakeSql();
     const { env } = makeTestEnv();
     const postSlackMessage = vi.fn().mockResolvedValue(undefined);
-    const llmCall = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "Done" }] });
+    const llmCall = vi.fn().mockResolvedValue({ 
+      content: [{ type: "text", text: "Here's the result without status brackets." }] 
+    });
 
     const agent = new AgentDO({ storage: { sql } }, env, {
       llmCall: llmCall as never,
@@ -867,9 +865,13 @@ describe("AgentDO runAgentLoop", () => {
       postSlackApproval: vi.fn() as never
     });
 
-    await agent.runAgentLoop("fast request", "C1", "thread-fast-thinking");
+    await agent.runAgentLoop("simple request", "C1", "thread-no-status");
 
-    expect(postSlackMessage).not.toHaveBeenCalledWith("token", "C1", "Thinking...");
+    // Should only send final response, no status
+    const statusCalls = postSlackMessage.mock.calls.filter((call: unknown[]) => 
+      (call[2] as string).startsWith("🔄")
+    );
+    expect(statusCalls).toHaveLength(0);
     vi.useRealTimers();
   });
 
