@@ -122,106 +122,47 @@ function renderLiveLogPage(): string {
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Blob Live Logs</title>
   <style>
-    body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; background: #0f172a; color: #e2e8f0; }
-    h1 { margin-top: 0; font-size: 1.2rem; display: flex; align-items: center; gap: 0.5rem; }
-    #live-dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; display: inline-block; animation: pulse 2s ease-in-out infinite; }
-    #live-dot.error { background: #f87171; animation: none; }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-    #status { color: #94a3b8; margin-bottom: 0.5rem; font-size: 0.85rem; }
-    #status.error { color: #f87171; }
-    #tabs { display: flex; gap: 0.4rem; margin-bottom: 0.5rem; flex-wrap: wrap; align-items: center; }
-    .tab { font-family: inherit; font-size: 0.8rem; background: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 4px; padding: 0.2rem 0.6rem; cursor: pointer; }
-    .tab:hover { background: #334155; color: #e2e8f0; }
-    .tab.active { background: #1d4ed8; color: #e2e8f0; border-color: #3b82f6; }
-    .tab-sep { color: #334155; font-size: 0.8rem; padding: 0 0.1rem; }
-    .tab.model-tab { border-color: #4ade8066; color: #86efac; }
-    .tab.model-tab:hover { border-color: #4ade80; }
-    .tab.model-tab.active { background: #14532d; border-color: #4ade80; color: #4ade80; }
-    #log { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #020617; border: 1px solid #1e293b; border-radius: 8px; padding: 1rem; min-height: 300px; max-height: calc(100vh - 140px); overflow-y: auto; margin: 0; user-select: text; cursor: text; }
-    #log span { user-select: text; }
-    .line-task_received { color: #60a5fa; }
-    .line-command { color: #e2e8f0; }
-    .line-command_success { color: #4ade80; }
-    .line-command_failure { color: #f87171; }
-    .line-command_output { color: #93c5fd; }
-    .line-command_error { color: #fca5a5; }
-    .line-completed { color: #a78bfa; }
-    .line-message { color: #fbbf24; }
-    .line-thinking, .line-session, .line-trace { color: #94a3b8; }
-    .line-trace_warning { color: #f59e0b; }
-    .line-trace_error, .line-background_error { color: #f87171; }
-    .line-heartbeat_start { color: #22d3ee; }
-    .line-model_used { color: #86efac; }
-    .empty { color: #475569; font-style: italic; }
-    #copy-btn { margin-left: auto; font-family: inherit; font-size: 0.8rem; background: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 4px; padding: 0.25rem 0.6rem; cursor: pointer; }
-    #copy-btn:hover { background: #334155; color: #e2e8f0; }
-    #copy-btn.copied { color: #4ade80; border-color: #4ade80; }
-    .build-group { display: block; }
-    .build-group + .build-group { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #1e293b; }
-    .build-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; white-space: normal; cursor: pointer; user-select: none; }
-    .build-header:hover .build-label { color: #94a3b8; }
-    .build-chevron { color: #475569; font-size: 0.7rem; flex-shrink: 0; transition: transform 0.15s ease; display: inline-block; }
-    .build-group.collapsed .build-chevron { transform: rotate(-90deg); }
-    .build-label { color: #fff; font-size: 0.8rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .build-body { display: block; }
-    .build-group.collapsed .build-body { display: none; }
-    .build-copy-btn { font-family: inherit; font-size: 0.75rem; background: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 4px; padding: 0.15rem 0.5rem; cursor: pointer; flex-shrink: 0; }
-    .build-copy-btn:hover { background: #334155; color: #e2e8f0; }
-    .build-copy-btn.copied { color: #4ade80; border-color: #4ade80; }
+    body {
+      margin: 0;
+      padding: 16px;
+      background: #ffffff;
+      color: #000000;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 20px;
+    }
+    #status {
+      margin-bottom: 12px;
+      font-size: 13px;
+    }
+    #log {
+      margin: 0;
+      padding: 12px;
+      border: 1px solid #000000;
+      white-space: pre-wrap;
+      min-height: 280px;
+      max-height: calc(100vh - 120px);
+      overflow-y: auto;
+    }
+    .empty {
+      color: #000000;
+      font-style: italic;
+    }
+    .line {
+      color: #000000;
+    }
   </style>
 </head>
 <body>
-  <h1><span id="live-dot"></span>Blob Live Logs<button id="copy-btn" title="Copy all log text">Copy all</button></h1>
-  <div id="tabs">
-    <button class="tab active" data-tab="all">All</button>
-    <button class="tab" data-tab="tasks">Tasks</button>
-    <button class="tab" data-tab="heartbeats">Heartbeats</button>
-    <span class="tab-sep">|</span>
-  </div>
-  <div id="status">Connecting...</div>
+  <h1>Blob Live Logs</h1>
+  <div id="status">Live across all channels.</div>
   <div id="log"><span class="empty">Waiting for events...</span></div>
   <script>
     const logNode = document.getElementById('log');
     const statusNode = document.getElementById('status');
-    const dotNode = document.getElementById('live-dot');
-    const tabsNode = document.getElementById('tabs');
-    const copyBtn = document.getElementById('copy-btn');
-    let lastSnapshotSig = '';
     let currentEvents = [];
-    let activeTab = 'all';
-    const userCollapsedState = new Map();
-
-    copyBtn.addEventListener('click', () => {
-      const text = currentEvents.map((event) => {
-        const when = new Date(event.createdAt * 1000).toISOString().replace('T', ' ').replace('Z', '');
-        return when + '  [' + event.eventType + ']  ' + event.message;
-      }).join('\\n');
-      navigator.clipboard.writeText(text).then(() => {
-        copyBtn.textContent = 'Copied!';
-        copyBtn.className = 'copied';
-        setTimeout(() => { copyBtn.textContent = 'Copy all'; copyBtn.className = ''; }, 2000);
-      }).catch(() => {
-        const sel = window.getSelection();
-        const range = document.createRange();
-        range.selectNodeContents(logNode);
-        sel.removeAllRanges();
-        sel.addRange(range);
-      });
-    });
-
-    // Tab click handlers for static tabs
-    tabsNode.querySelectorAll('.tab[data-tab]').forEach((btn) => {
-      btn.addEventListener('click', () => setTab(btn.getAttribute('data-tab')));
-    });
-
-    function setTab(tab) {
-      activeTab = tab;
-      tabsNode.querySelectorAll('.tab').forEach((btn) => {
-        btn.classList.toggle('active', btn.getAttribute('data-tab') === tab);
-      });
-      const builds = computeBuilds(currentEvents);
-      renderBuilds(builds);
-    }
 
     function escHtml(s) {
       return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -229,255 +170,58 @@ function renderLiveLogPage(): string {
 
     function formatLine(event) {
       const when = new Date(event.createdAt * 1000).toISOString().replace('T', ' ').replace('Z', '');
-      const cls = 'line-' + event.eventType;
       const text = when + '  [' + event.eventType + ']  ' + event.message;
-      return '<span class="' + cls + '">' + escHtml(text) + '</span>';
+      return '<span class="line">' + escHtml(text) + '</span>';
     }
 
-    // Extract model name from a model_used event message (strips [#channel] prefix)
-    function extractModel(message) {
-      return message.replace(/^\\[#[^\\]]+\\]\\s*/, '').trim();
-    }
-
-    // Short display name for a model (strips provider prefix, truncates)
-    function shortModel(model) {
-      return model.replace(/^(anthropic\\\\/|openai\\\\/)/, '').slice(0, 32);
-    }
-
-    function computeBuilds(events) {
-      const builds = [];
-      let currentBuild = null;
-      
-      for (const event of events) {
-        // Start a new build when we see a user message or task start
-        if (event.eventType === 'task_received' || 
-            event.eventType === 'message_received' || 
-            event.eventType === 'heartbeat_start') {
-          // Save previous build if exists
-          if (currentBuild) {
-            builds.push(currentBuild);
-          }
-          // Start new build
-          currentBuild = {
-            label: event.message.slice(0, 120),
-            type: event.eventType === 'heartbeat_start' ? 'heartbeat' : 'task',
-            model: null,
-            events: [event],
-            key: event.createdAt + '-' + event.eventType
-          };
-        } else if (currentBuild) {
-          // Add event to current build
-          currentBuild.events.push(event);
-          // Track model used
-          if (event.eventType === 'model_used' && !currentBuild.model) {
-            currentBuild.model = extractModel(event.message);
-          }
-        } else {
-          // Orphaned event (no parent) - create a small build
-          builds.push({
-            label: event.eventType + ': ' + event.message.slice(0, 60),
-            type: 'other',
-            model: null,
-            events: [event],
-            key: event.createdAt + '-' + event.eventType
-          });
-        }
-      }
-      
-      // Don't forget the last build
-      if (currentBuild) {
-        builds.push(currentBuild);
-      }
-      
-      return builds;
-    }
-
-    function updateModelTabs(builds) {
-      // Collect unique models in order of first appearance
-      const seen = new Set();
-      const models = [];
-      for (const b of builds) {
-        if (b.model && !seen.has(b.model)) { seen.add(b.model); models.push(b.model); }
-      }
-      // Remove stale model tabs
-      tabsNode.querySelectorAll('.model-tab').forEach((t) => t.remove());
-      // Re-add model tabs after the separator
-      for (const model of models) {
-        const btn = document.createElement('button');
-        btn.className = 'tab model-tab' + (activeTab === model ? ' active' : '');
-        btn.setAttribute('data-tab', model);
-        btn.textContent = shortModel(model);
-        btn.title = model;
-        btn.addEventListener('click', () => setTab(model));
-        tabsNode.appendChild(btn);
-      }
-    }
-
-    function filterBuilds(builds) {
-      if (activeTab === 'all') return builds;
-      if (activeTab === 'tasks') return builds.filter((b) => b.type === 'task');
-      if (activeTab === 'heartbeats') return builds.filter((b) => b.type === 'heartbeat');
-      // model tab
-      return builds.filter((b) => b.model === activeTab);
-    }
-
-    function renderBuilds(builds) {
-      const filtered = filterBuilds(builds);
-      if (filtered.length === 0) {
-        logNode.innerHTML = '<span class="empty">No events for this filter yet.</span>';
+    function renderLogs(events) {
+      if (!events.length) {
+        logNode.innerHTML = '<span class="empty">No events yet.</span>';
         return;
       }
 
       const atBottom = logNode.scrollHeight - logNode.scrollTop <= logNode.clientHeight + 50;
-
-      // Reverse to show newest first
-      const reversed = [...filtered].reverse();
-
-      logNode.innerHTML = reversed.map((build, idx) => {
-        const labelHtml = build.label !== null ? escHtml(build.label) : 'Event';
-        const isLast = idx === 0; // First item in reversed array is newest
-        const key = build.key;
-        const defaultCollapsed = !isLast;
-        const isCollapsed = userCollapsedState.has(key) ? userCollapsedState.get(key) : defaultCollapsed;
-        const collapsedClass = isCollapsed ? ' collapsed' : '';
-        const modelBadge = build.model ? ' <span style="color:#86efac;font-size:0.75rem">' + escHtml(shortModel(build.model)) + '</span>' : '';
-        const header = '<div class="build-header"><span class="build-chevron">&#9660;</span><span class="build-label">' + labelHtml + modelBadge + '</span><button class="build-copy-btn" data-idx="' + idx + '">Copy</button></div>';
-        const lines = build.events.map(formatLine).join('\\n');
-        return '<div class="build-group' + collapsedClass + '" data-key="' + escHtml(key) + '">' + header + '<div class="build-body">' + lines + '</div></div>';
-      }).join('');
-
-      // Attach collapse toggle handlers
-      logNode.querySelectorAll('.build-header').forEach((header) => {
-        header.addEventListener('click', (e) => {
-          if (e.target.classList.contains('build-copy-btn')) return;
-          const group = header.closest('.build-group');
-          if (group) {
-            group.classList.toggle('collapsed');
-            const key = group.getAttribute('data-key') || '';
-            userCollapsedState.set(key, group.classList.contains('collapsed'));
-          }
-        });
-      });
-
-      // Attach per-build copy button handlers
-      logNode.querySelectorAll('.build-copy-btn').forEach((btn, btnIdx) => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const build = reversed[btnIdx];
-          const text = build.events.map((event) => {
-            const when = new Date(event.createdAt * 1000).toISOString().replace('T', ' ').replace('Z', '');
-            return when + '  [' + event.eventType + ']  ' + event.message;
-          }).join('\n');
-          navigator.clipboard.writeText(text).then(() => {
-            btn.textContent = 'Copied!';
-            btn.classList.add('copied');
-            setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
-          }).catch(() => {});
-        });
-      });
-
+      const lines = events.slice().reverse().map(formatLine).join('\n');
+      logNode.innerHTML = lines;
       if (atBottom) logNode.scrollTop = logNode.scrollHeight;
     }
 
-    function renderEvents(events) {
-      currentEvents = events;
-      const builds = computeBuilds(events);
-      updateModelTabs(builds);
-      renderBuilds(builds);
-      if (events.length === 0) {
-        logNode.innerHTML = '<span class="empty">No events yet. Blob activity will appear here automatically.</span>';
-      }
-    }
-
-    async function refreshLogs() {
-      let payload;
+    async function loadSnapshot() {
       try {
         const response = await fetch('/logs/data', { cache: 'no-store' });
-        if (!response.ok) {
-          statusNode.textContent = 'Error: HTTP ' + response.status;
-          statusNode.className = 'error';
-          dotNode.className = 'error';
-          return;
-        }
-        payload = await response.json();
-      } catch (e) {
-        statusNode.textContent = 'Error: ' + (e.message || 'fetch failed');
-        statusNode.className = 'error';
-        dotNode.className = 'error';
-        return;
+        if (!response.ok) throw new Error('snapshot request failed');
+        const data = await response.json();
+        currentEvents = Array.isArray(data.events) ? data.events : [];
+        renderLogs(currentEvents);
+        statusNode.textContent = 'Live across all channels.';
+      } catch {
+        statusNode.textContent = 'Failed to load logs snapshot.';
       }
-
-      dotNode.className = '';
-      statusNode.className = '';
-
-      const events = payload.events || [];
-      statusNode.textContent = 'Live across all channels • ' + events.length + ' event' + (events.length === 1 ? '' : 's') + ' • updated ' + new Date().toLocaleTimeString();
-
-      const snapshotSig = JSON.stringify(events.map((event) => [event.createdAt, event.eventType, event.message]));
-      if (snapshotSig === lastSnapshotSig) return;
-      lastSnapshotSig = snapshotSig;
-      renderEvents(events);
     }
 
-    let source;
-    let reconnectTimer;
-    let lastLiveEventAt = Date.now();
+    function connectStream() {
+      const source = new EventSource('/logs/stream');
 
-    function scheduleReconnect(reason) {
-      if (reconnectTimer) return;
-      statusNode.textContent = 'Live stream disconnected (' + reason + ') • reconnecting...';
-      statusNode.className = 'error';
-      dotNode.className = 'error';
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = undefined;
-        connectLiveStream();
-      }, 1000);
-    }
-
-    function connectLiveStream() {
-      if (source) source.close();
-      source = new EventSource('/logs/stream');
-      source.onopen = () => {
-        lastLiveEventAt = Date.now();
-        statusNode.textContent = 'Connected • waiting for events...';
-        statusNode.className = '';
-        dotNode.className = '';
-      };
       source.addEventListener('snapshot', (event) => {
-        lastLiveEventAt = Date.now();
         try {
-          const payload = JSON.parse(event.data || '{}');
-          const events = payload.events || [];
-          statusNode.textContent = 'Live across all channels • ' + events.length + ' event' + (events.length === 1 ? '' : 's') + ' • updated ' + new Date().toLocaleTimeString();
-          statusNode.className = '';
-          dotNode.className = '';
-          lastSnapshotSig = JSON.stringify(events.map((item) => [item.createdAt, item.eventType, item.message]));
-          renderEvents(events);
+          const data = JSON.parse(event.data);
+          currentEvents = Array.isArray(data.events) ? data.events : [];
+          renderLogs(currentEvents);
+          statusNode.textContent = 'Live across all channels.';
         } catch {
-          statusNode.textContent = 'Error: failed to parse live stream event';
-          statusNode.className = 'error';
-          dotNode.className = 'error';
+          statusNode.textContent = 'Invalid stream payload.';
         }
       });
-      source.addEventListener('ping', () => {
-        lastLiveEventAt = Date.now();
+
+      source.addEventListener('error', () => {
+        statusNode.textContent = 'Live stream disconnected.';
       });
-      source.onerror = () => {
-        scheduleReconnect('network issue');
-      };
+
+      return source;
     }
 
-    refreshLogs();
-    connectLiveStream();
-
-    setInterval(() => {
-      const staleMs = Date.now() - lastLiveEventAt;
-      if (staleMs > 30000) {
-        scheduleReconnect('stale stream');
-      }
-    }, 5000);
-
-    setInterval(refreshLogs, 10000);
+    loadSnapshot();
+    connectStream();
   </script>
 </body>
 </html>`;
