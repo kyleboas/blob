@@ -1745,7 +1745,38 @@ export class AgentDO {
       }
     }
 
+    // Show heartbeat status
+    // Matches: "show my heartbeats", "what are my heartbeats", "heartbeat status", etc.
+    const heartbeatStatusPatterns = [
+      /(?:show|what\s+are|list)\s+(?:my\s+)?heartbeats/i,
+      /heartbeat\s+status/i,
+      /(?:show|view)\s+(?:my\s+)?(?:task|work)\s+queue/i,
+    ];
+
+    for (const pattern of heartbeatStatusPatterns) {
+      if (pattern.test(task)) {
+        return await this.showHeartbeatStatus(channel);
+      }
+    }
+
     return null;
+  }
+
+  private async showHeartbeatStatus(channel: string): Promise<string> {
+    const heartbeats = listHeartbeats(this.db, 10);
+    if (heartbeats.length === 0) {
+      return "📭 No heartbeats found. The queue is empty.";
+    }
+
+    const statusLines = heartbeats.map(h => {
+      const statusEmoji = h.status === 'completed' ? '✅' : 
+                         h.status === 'failed' ? '❌' : 
+                         h.status === 'running' ? '🔄' : '⏳';
+      const time = new Date(h.created_at).toLocaleTimeString();
+      return `${statusEmoji} #${h.id} [${h.status}] ${time}: ${h.task.slice(0, 60)}${h.task.length > 60 ? '...' : ''}`;
+    });
+
+    return `📊 Recent Heartbeats:\n\n${statusLines.join('\n')}`;
   }
 
   private async mergeStagingToProduction(channel: string): Promise<string> {
@@ -2253,13 +2284,24 @@ ${history}` }]
         if (previousSessionId) {
           await this.summarizePreviousSession(previousSessionId);
         }
-        const { finalText } = await this.runAgentLoop(heartbeat.task, heartbeat.channel, sessionId, {
+        const { finalText, steps } = await this.runAgentLoop(heartbeat.task, heartbeat.channel, sessionId, {
           applySelfModificationRateLimit: true
         });
         completeHeartbeat(this.db, heartbeat.id, finalText);
+        
+        // Log successful completion
+        const successMessage = `✅ Completed in ${steps} steps: ${finalText.slice(0, 200)}`;
+        logAgentEvent(this.db, heartbeat.id.toString(), "heartbeat_complete", successMessage);
+        this.forwardToGlobalLogs("heartbeat_complete", `[#${heartbeat.channel}] ${successMessage}`);
+        
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         failHeartbeat(this.db, heartbeat.id, errorMessage);
+        
+        // Log failure
+        const failMessage = `❌ Failed: ${errorMessage}`;
+        logAgentEvent(this.db, heartbeat.id.toString(), "heartbeat_failed", failMessage);
+        this.forwardToGlobalLogs("heartbeat_failed", `[#${heartbeat.channel}] ${failMessage}`);
         
         // Notify about the failure
         await this.deps.postSlackMessage(
