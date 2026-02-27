@@ -2682,7 +2682,9 @@ ${history}` }]
         "Cross-reference recent and completed heartbeat history before proposing work.",
         "Avoid duplicate or near-duplicate tasks by semantic intent and scope.",
         "Keep it small, concrete, and actionable.",
-        "Align proposed tasks with the repository's configured goals.",
+        "STEER ALL TASKS TOWARDS THE REPOSITORY GOALS. The goals are your north star.",
+        "Every proposed task should advance at least one of the configured goals.",
+        "If a task doesn't serve the goals, propose a different task that does.",
         "If no meaningful task is available, respond with skip."
       ].join("\n"),
       messages: [{
@@ -2690,11 +2692,13 @@ ${history}` }]
         content: [
           "Generate exactly one task sentence for Blob's heartbeat queue.",
           "Return only the task text (or skip).",
+          "STEER TOWARDS THESE GOALS:",
+          goalsContext,
+          "",
           "Latest operator steering feedback:",
           feedbackContext || "- (none)",
           "Recent heartbeat history:",
-          completedOrPending || "- (none)",
-          goalsContext
+          completedOrPending || "- (none)"
         ].join("\n")
       }]
     }));
