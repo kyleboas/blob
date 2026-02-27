@@ -1034,6 +1034,12 @@ export class AgentDO {
     if (!context) {
       return null;
     }
+    
+    // Reject known placeholder or invalid owners
+    const invalidOwners = ["prigol", "owner", "user", "example", "placeholder", "test"];
+    if (invalidOwners.includes(context.owner.toLowerCase())) {
+      return null;
+    }
     this.repoContextByCwd.set(key, context);
     return context;
   }
@@ -1106,6 +1112,16 @@ export class AgentDO {
     const requestedBase = match?.[1] ?? "main";
     const cwd: string | null = null;
     const context = await this.maybeCaptureRepoContext(cwd);
+    
+    // Validate that we have a valid repo context
+    if (!context) {
+      throw new Error("No git remote configured. Please clone a repository first before attempting to create a pull request.");
+    }
+    
+    // Validate that the remote URL matches expected GitHub repos
+    if (context.owner === "prigol" || !context.owner || !context.repo) {
+      throw new Error(`Invalid or placeholder repository detected (${context.owner}/${context.repo}). Please ensure you're working with a valid cloned repository.`);
+    }
     const defaultBranch = context ? await this.resolveDefaultBranch(context) : "main";
     const baseBranch = ["main", "master"].includes(requestedBase) ? defaultBranch : requestedBase;
     const branch = `blob-auto-${Date.now()}`;
