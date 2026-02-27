@@ -1138,7 +1138,7 @@ export class AgentDO {
           // If WebSocket not found, the client may have disconnected
           if (response.status === 404) {
             this.forwardToGlobalLogs("ws_client_disconnected", `[#${channel}] Client disconnected`);
-            return;
+            // Fall through to retry
           }
 
           throw new Error(`HTTP ${response.status}`);
@@ -1155,7 +1155,12 @@ export class AgentDO {
       }
     } else {
       // Send via Slack
-      await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, text);
+      try {
+        await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, text);
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        this.forwardToGlobalLogs("slack_send_failed", `[#${channel}] ${errorMsg}: ${text.slice(0, 100)}`);
+      }
     }
   }
 
