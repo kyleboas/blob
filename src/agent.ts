@@ -637,11 +637,24 @@ export class AgentDO {
               return;
             }
             
-            // Weather queries - if location known, fetch weather directly
-            if (/^(?:what's|what is)\s+(?:the\s+)?weather/i.test(text) || /weather\s+(?:today|now|outside)/i.test(text)) {
-              const location = getSetting(this.db, "user_location");
+            // Weather queries - extract location from message or use stored location
+            if (/^(?:what's|what is)\s+(?:the\s+)?weather/i.test(text) || /weather\s+(?:today|now|outside|in|at|for)/i.test(text)) {
+              // Try to extract location from message using LLM
+              let location: string | null = null;
+              
+              // Quick regex check for "in/at/for LOCATION" pattern
+              const locationMatch = text.match(/(?:in|at|for)\s+([a-z\s]+?)(?:\s+(?:today|now|tomorrow|this\s+week))?(?:\?|$)/i);
+              if (locationMatch) {
+                location = locationMatch[1].trim();
+              }
+              
+              // If no location in message, check stored location
+              if (!location) {
+                location = getSetting(this.db, "user_location");
+              }
+              
               if (location) {
-                await this.sendResponse(channel, `🌤️ Getting weather for ${location}...`);
+                await this.sendResponse(channel, `Getting weather for ${location}...`);
                 const weatherResult = await this.handleWeather(location);
                 await this.sendResponse(channel, weatherResult);
                 return;
