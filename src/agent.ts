@@ -2048,7 +2048,9 @@ ${auditContext}` }
         "'I have no memory between conversations', or 'I cannot browse repositories'.",
         "You have an autonomous heartbeat system that runs every 5 minutes to self-improve.",
         "You can access and modify your own source code at https://github.com/kyleboas/blob.",
-        "When users ask about heartbeats, tell them about the heartbeat system and that they can check status by saying 'show my heartbeats'."
+        "When users ask about heartbeats, tell them about the heartbeat system and that they can check status by saying 'show my heartbeats'.",
+        "IMPORTANT: Your role is conversational responses ONLY. You do NOT execute code or modify files.",
+        "When the user wants to execute code or make changes, a sub-agent with the appropriate execution model (simple or complex) will be spawned to handle it."
       ].join(" ");
       const conversation = [...priorMessages, { role: "user" as const, content: task }];
       const chatResponse = await this.deps.llmCall(this.buildLlmInput({
