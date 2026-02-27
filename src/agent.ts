@@ -559,6 +559,7 @@ export class AgentDO {
       orchestratorSessionId?: string;
       finalText?: string;
       taskComplexityHint?: "routine" | "complex";
+      taskHint?: string;
       feedback?: string;
     };
 
@@ -637,11 +638,12 @@ export class AgentDO {
         ? String(body.orchestratorSessionId)
         : undefined;
       const taskComplexityHint = body.taskComplexityHint;
+      const taskHint = body.taskHint ? String(body.taskHint) : undefined;
       await this.runInBackground((async () => {
         let completionStatus: "completed" | "failed" = "completed";
         let finalText = "";
         try {
-          const audited = await this.executeTaskWithPlannerAudit(event, priorMessages, systemPrompt, taskComplexityHint);
+          const audited = await this.executeTaskWithPlannerAudit(event, priorMessages, systemPrompt, taskComplexityHint, taskHint);
           completionStatus = audited.status;
           finalText = audited.finalText;
         } catch (error) {
@@ -2182,7 +2184,8 @@ export class AgentDO {
     event: SlackEvent,
     priorMessages?: ConversationMessage[],
     systemPrompt?: string,
-    taskComplexityHint?: "routine" | "complex"
+    taskComplexityHint?: "routine" | "complex",
+    taskHint?: string
   ): Promise<{ status: "completed" | "failed"; finalText: string }> {
     const originalTask = (event.text ?? "").trim();
     const channel = event.channel;
@@ -2191,6 +2194,9 @@ export class AgentDO {
     }
 
     let currentTask = originalTask;
+    if (taskHint) {
+      currentTask = `${originalTask}\n\n[Hint: ${taskHint}]`;
+    }
     let finalText = await this.handleTaskEvent(event, priorMessages, systemPrompt, taskComplexityHint, currentTask);
 
     for (let attempt = 1; attempt <= PLANNER_AUDIT_MAX_ATTEMPTS; attempt += 1) {
@@ -2380,6 +2386,16 @@ ${auditContext}` }
     ];
     const isSelfKnowledge = selfKnowledgePatterns.some(p => p.test(task));
 
+    // Fast-path common web queries that need real-time data
+    const simpleWebQueryPatterns = [
+      /(?:what|which)\s+(?:team\s+)?(?:is\s+)?(?:playing|won|score)/i,
+      /(?:sports?|game|match)\s+(?:score|result|update)/i,
+      /(?:weather|temperature)\s+(?:in|at|for)/i,
+      /(?:stock|crypto|bitcoin|eth)\s+(?:price|value)/i,
+      /(?:current|today'?s?)\s+(?:date|day)/i,
+    ];
+    const isSimpleWebQuery = simpleWebQueryPatterns.some(p => p.test(task));
+
     // Orchestrator owns session lifecycle and conversation memory.
     // It resolves (or creates) the current session, handles end-of-session
     // summarisation, and passes the accumulated history to the ephemeral
@@ -2399,10 +2415,14 @@ ${auditContext}` }
     
     // Fast-path status queries to sub-agent without router call
     let messageType: "chat" | "routine" | "complex";
+    let taskHint: string | undefined;
     if (isStatusQuery) {
       messageType = "routine";
-    } else if (isGreeting) {
+    } else if (isGreeting || isSelfKnowledge) {
       messageType = "chat";
+    } else if (isSimpleWebQuery) {
+      messageType = "routine";
+      taskHint = "Use web_fetch tool to get current data";
     } else {
       // Build minimal system prompt for routing (no KV fetch needed)
       const routingSystemPrompt = buildSystemPrompt(getKnowledge(this.db), this.getPromptPolicies(), null);
@@ -2518,7 +2538,8 @@ ${auditContext}` }
             priorMessages,
             systemPrompt,
             orchestratorSessionId: sessionId,
-            taskComplexityHint
+            taskComplexityHint,
+            taskHint
           })
         });
       } catch (err) {
