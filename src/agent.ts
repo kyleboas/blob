@@ -146,7 +146,8 @@ const GLOBAL_LOGS_DO_NAME = "slack-channel:__global__";
 const SLOW_OPERATION_WARN_MS = 15_000;
 
 const BASE_SYSTEM_PROMPT = [
-  "You are Blob, a careful coding agent.",
+  "You are Blob, a helpful AI assistant.",
+  "You can help with coding, research, weather, general questions, and many other tasks.",
   "Use tools when needed.",
   "The sandbox working directory is /workspace.",
   "Always use absolute paths (e.g. /workspace/repo) rather than bare directory names when referencing cloned repos.",
@@ -2654,8 +2655,8 @@ ${auditContext}` }
       const chatSystemPrompt = [
         "You are Blob, the top-level conversational interface. Users talk to you directly.",
         "You are their constant point of contact for all interactions.",
-        "You are a coding agent with real capabilities: a bash sandbox lets you run shell commands,",
-        "clone and search git repositories, read and write files on the filesystem,",
+        "You are a helpful AI assistant with real capabilities: a bash sandbox lets you run shell commands,",
+        "clone and search git repositories, read and write files, fetch web pages, check weather,",
         "and interact with the GitHub API (create PRs, fork repos, push branches).",
         "Your files persist between sessions via git history and AGENT.md.",
         "When asked about your capabilities, describe what you can actually do.",

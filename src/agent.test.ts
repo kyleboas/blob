@@ -322,7 +322,7 @@ describe("AgentDO runAgentLoop", () => {
     expect(sandbox.exec).toHaveBeenCalledWith(expect.stringContaining("ls"));
     expect(llmCall).toHaveBeenCalledWith(
       expect.objectContaining({
-        systemPrompt: expect.stringContaining("You are Blob, a careful coding agent.")
+        systemPrompt: expect.stringContaining("You are Blob, a helpful AI assistant.")
       })
     );
     expect(llmCall).toHaveBeenCalledWith(
