@@ -693,6 +693,25 @@ export class AgentDO {
       return Response.json({ heartbeats: listHeartbeats(this.db) });
     }
 
+    if (body.action === "deploy_trigger") {
+      // Re-schedule heartbeat alarm on deploy to ensure heartbeats start
+      await this.scheduleInitialHeartbeatAlarm();
+      
+      // Also immediately trigger a heartbeat check
+      await this.ctx.storage.setAlarm?.(this.deps.now());
+      
+      const timestamp = (body as { timestamp?: string }).timestamp;
+      const deployEvent = `Deploy triggered at ${timestamp || new Date().toISOString()}`;
+      logAgentEvent(this.db, "global", "deploy_trigger", deployEvent);
+      this.forwardToGlobalLogs("deploy_trigger", deployEvent);
+      
+      return Response.json({ 
+        status: "ok", 
+        message: "Heartbeat alarm scheduled",
+        timestamp: timestamp 
+      });
+    }
+
     if (body.task && body.event?.channel) {
       await this.runInBackground((async () => {
         const { sessionId, previousSessionId } = resolveOrCreateSession(this.db, this.deps.now());

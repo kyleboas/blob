@@ -549,6 +549,26 @@ export default {
       return response;
     }
 
+    // Deploy hook - trigger heartbeats on all active channels after deployment
+    if (request.method === "POST" && url.pathname === "/deploy") {
+      const authHeader = request.headers.get("authorization") ?? "";
+      const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+      if (!env.DIAG_TOKEN || !token || token !== env.DIAG_TOKEN) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+
+      // Trigger heartbeat alarm on the global heartbeat DO
+      const response = await forwardToHeartbeatDO(env, { 
+        action: "deploy_trigger",
+        timestamp: new Date().toISOString()
+      });
+      
+      return Response.json({ 
+        status: "triggered", 
+        message: "Heartbeat alarms scheduled on all active channels"
+      }, { status: 200 });
+    }
+
     if (request.method !== "POST" || url.pathname !== "/slack/events") {
       return new Response("not found", { status: 404 });
     }
