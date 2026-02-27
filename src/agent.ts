@@ -2793,8 +2793,6 @@ ${auditContext}` }
         "clone and search git repositories, read and write files, fetch web pages, check weather,",
         "and interact with the GitHub API (create PRs, fork repos, push branches).",
         "Your files persist between sessions via git history and AGENT.md.",
-        "You also have persistent memory: you remember user settings like their name and location across conversations.",
-        "When users tell you their name or location, store it and remember it for future sessions.",
         "When asked about your capabilities, describe what you can actually do.",
         "Do not claim generic LLM limitations like 'I cannot access files',",
         "'I have no memory between conversations', or 'I cannot browse repositories'.",
@@ -2814,6 +2812,43 @@ ${auditContext}` }
         // Omitting tools routes callLLM to the chat model automatically.
       }));
       const responseText = extractTextContent(chatResponse) || "Done.";
+      
+      // Check if chat model incorrectly claimed no persistent memory
+      // This is a misclassification - should have been handled by fast path
+      const lowerResponse = responseText.toLowerCase();
+      const taskLower = task.toLowerCase();
+      const isMemoryQuery = /what['']?s my name|my name|what['']?s my location|where do i live|my location/i.test(taskLower);
+      const claimsNoMemory = /don['']?t store|no persistent|can['']?t remember|don['']?t have memory|no memory between/i.test(lowerResponse);
+      
+      if (isMemoryQuery && claimsNoMemory) {
+        // Record this misclassification for learning
+        const { recordMisclassification } = await import("./llm");
+        let correctIntent = "general_chat";
+        if (/what['']?s my name|my name/i.test(taskLower)) correctIntent = "memory_name_query";
+        else if (/what['']?s my location|where do i live|my location/i.test(taskLower)) correctIntent = "memory_location_query";
+        
+        recordMisclassification(task, "general_chat", correctIntent);
+        console.log(`[LEARN] Recorded misclassification: "${task}" should be ${correctIntent}`);
+        
+        // Override with correct response from memory
+        const name = getSetting(this.db, "user_name");
+        const location = getSetting(this.db, "user_location");
+        
+        if (/what['']?s my name/i.test(taskLower)) {
+          const correctedResponse = name ? `Your name is ${name}.` : "I don't know your name yet. You can tell me by saying 'my name is ...'";
+          saveMessage(this.db, sessionId, { role: "assistant", content: correctedResponse });
+          await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, correctedResponse);
+          this.forwardToGlobalLogs("chat_reply", `[#${channel}] ${correctedResponse.slice(0, 500)}`);
+          return;
+        } else if (/what['']?s my location|where do i live/i.test(taskLower)) {
+          const correctedResponse = location ? `Your location is ${location}.` : "I don't know your location yet. You can tell me by saying 'my location is ...'";
+          saveMessage(this.db, sessionId, { role: "assistant", content: correctedResponse });
+          await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, correctedResponse);
+          this.forwardToGlobalLogs("chat_reply", `[#${channel}] ${correctedResponse.slice(0, 500)}`);
+          return;
+        }
+      }
+      
       saveMessage(this.db, sessionId, { role: "assistant", content: responseText });
       await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, responseText);
       this.forwardToGlobalLogs("chat_reply", `[#${channel}] ${responseText.slice(0, 500)}`);

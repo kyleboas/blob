@@ -780,6 +780,43 @@ export interface IntentClassificationWithEntities {
   };
 }
 
+// Store for misclassifications to learn from
+interface Misclassification {
+  text: string;
+  predicted: string;
+  correct: string;
+  timestamp: number;
+}
+
+const misclassificationStore: Misclassification[] = [];
+const MAX_STORED_EXAMPLES = 20;
+
+// Record a misclassification for learning
+export function recordMisclassification(text: string, predicted: string, correct: string): void {
+  misclassificationStore.push({
+    text,
+    predicted,
+    correct,
+    timestamp: Date.now()
+  });
+  // Keep only recent examples
+  while (misclassificationStore.length > MAX_STORED_EXAMPLES) {
+    misclassificationStore.shift();
+  }
+}
+
+// Get recent misclassifications as few-shot examples
+function getLearningExamples(): string {
+  if (misclassificationStore.length === 0) return "";
+
+  const examples = misclassificationStore
+    .slice(-5) // Last 5 examples
+    .map(m => `Text: "${m.text}"\nPreviously classified as: ${m.predicted}\nShould be: ${m.correct}`)
+    .join("\n\n");
+
+  return "\n\nLearn from these previous corrections:\n" + examples;
+}
+
 // Classify user intent and extract entities using LLM
 export async function classifyIntentWithEntities(
   text: string,
@@ -807,7 +844,7 @@ Intents:
 Respond with ONLY a JSON object:
 {"intent": "intent_name", "confidence": 0.95, "entities": {"location": "London", "name": "", "owner": "", "repo": ""}}
 
-Include only relevant entities. Use empty strings for missing entities. No markdown, just JSON.`;
+Include only relevant entities. Use empty strings for missing entities. No markdown, just JSON.` + getLearningExamples();
 
   try {
     const response = await llmCall({
