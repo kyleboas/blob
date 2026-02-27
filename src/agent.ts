@@ -1761,6 +1761,35 @@ export class AgentDO {
       }
     }
 
+    // Show deployment status
+    // Matches: "deployment status", "when was last deploy", "show deploys", etc.
+    const deployStatusPatterns = [
+      /(?:show|what|check)\s+(?:the\s+)?(?:last\s+)?deploy(?:ment)?(?:\s+status)?/i,
+      /when\s+was\s+(?:the\s+)?last\s+deploy/i,
+      /deploy\s+history/i,
+    ];
+
+    for (const pattern of deployStatusPatterns) {
+      if (pattern.test(task)) {
+        return await this.showDeploymentStatus(channel);
+      }
+    }
+
+    // Notify about deployment
+    // Matches: "deployed to production", "just deployed", "new build live", etc.
+    const deployNotifyPatterns = [
+      /(?:just\s+)?deployed\s+(?:to\s+)?(?:production|prod|cloudflare)/i,
+      /new\s+build\s+(?:is\s+)?(?:live|deployed)/i,
+      /(?:finished|completed)\s+deploy/i,
+      /pushed\s+to\s+(?:production|prod)/i,
+    ];
+
+    for (const pattern of deployNotifyPatterns) {
+      if (pattern.test(task)) {
+        return await this.recordDeployment(channel);
+      }
+    }
+
     return null;
   }
 
@@ -1779,6 +1808,73 @@ export class AgentDO {
     });
 
     return `📊 Recent Heartbeats:\n\n${statusLines.join('\n')}`;
+  }
+
+  private async showDeploymentStatus(channel: string): Promise<string> {
+    const lastDeploy = getSetting(this.db, "last_deployment_time");
+    const lastDeployCommit = getSetting(this.db, "last_deployment_commit") || "unknown";
+    const deployCount = getSetting(this.db, "deployment_count") || "0";
+
+    if (!lastDeploy) {
+      return "📭 No deployments recorded yet.\n\nTell me when you deploy: \"Just deployed to production\"";
+    }
+
+    const deployDate = new Date(lastDeploy);
+    const timeAgo = this.getTimeAgo(deployDate);
+
+    return `📊 Deployment Status:\n\n` +
+      `Last deploy: ${timeAgo} (${deployDate.toLocaleString()})\n` +
+      `Commit: ${lastDeployCommit.slice(0, 7)}\n` +
+      `Total deploys: ${deployCount}`;
+  }
+
+  private async recordDeployment(channel: string): Promise<string> {
+    try {
+      // Get current commit
+      const commitResult = await this.executeWithRetry("git rev-parse HEAD");
+      const commit = commitResult.stdout.trim();
+      const shortCommit = commit.slice(0, 7);
+
+      // Get commit message
+      const msgResult = await this.executeWithRetry("git log -1 --pretty=%s");
+      const commitMsg = msgResult.stdout.trim();
+
+      // Update settings
+      const now = new Date().toISOString();
+      const currentCount = parseInt(getSetting(this.db, "deployment_count") || "0", 10);
+      
+      setSetting(this.db, "last_deployment_time", now);
+      setSetting(this.db, "last_deployment_commit", commit);
+      setSetting(this.db, "deployment_count", (currentCount + 1).toString());
+
+      // Notify channel
+      await this.deps.postSlackMessage(
+        this.env.SLACK_BOT_TOKEN,
+        channel,
+        `🚀 New deployment detected!\n` +
+        `Commit: ${shortCommit}\n` +
+        `Message: ${commitMsg.slice(0, 50)}${commitMsg.length > 50 ? '...' : ''}\n` +
+        `Time: ${new Date().toLocaleString()}`
+      );
+
+      return `✅ Deployment recorded! I'll track this as the latest production build.`;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return `⚠️ Could not record deployment: ${msg}`;
+    }
+  }
+
+  private getTimeAgo(date: Date): string {
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffMins < 1) return "just now";
+    if (diffMins < 60) return `${diffMins} minute(s) ago`;
+    if (diffHours < 24) return `${diffHours} hour(s) ago`;
+    return `${diffDays} day(s) ago`;
   }
 
   private async mergeStagingToProduction(channel: string): Promise<string> {
