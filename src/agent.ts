@@ -83,6 +83,7 @@ interface DurableObjectStateLike {
     sql: SqlStorage;
     setAlarm?: (scheduledTime: number | Date) => Promise<void> | void;
     getAlarm?: () => Promise<number | null>;
+    deleteAlarm?: () => Promise<void>;
   };
 }
 
@@ -1809,7 +1810,74 @@ export class AgentDO {
       }
     }
 
+    // Pause heartbeats
+    // Matches: "pause heartbeats", "stop heartbeats", "disable heartbeats", etc.
+    const pausePatterns = [
+      /(?:pause|stop|disable)\s+(?:the\s+)?heartbeats?/i,
+      /turn\s+(?:off|down)\s+(?:the\s+)?heartbeats?/i,
+    ];
+
+    for (const pattern of pausePatterns) {
+      if (pattern.test(task)) {
+        return await this.pauseHeartbeats(channel);
+      }
+    }
+
+    // Start/resume heartbeats
+    // Matches: "start heartbeats", "resume heartbeats", "enable heartbeats", etc.
+    const startPatterns = [
+      /(?:start|resume|enable)\s+(?:the\s+)?heartbeats?/i,
+      /turn\s+(?:on|up)\s+(?:the\s+)?heartbeats?/i,
+    ];
+
+    for (const pattern of startPatterns) {
+      if (pattern.test(task)) {
+        return await this.startHeartbeats(channel);
+      }
+    }
+
     return null;
+  }
+
+  private async pauseHeartbeats(channel: string): Promise<string> {
+    try {
+      // Cancel any existing alarm
+      await this.ctx.storage.deleteAlarm?.();
+      
+      setSetting(this.db, "heartbeats_paused", "true");
+      
+      await this.deps.postSlackMessage(
+        this.env.SLACK_BOT_TOKEN,
+        channel,
+        "⏸️ Heartbeats paused. I won't run autonomous tasks until you start them again."
+      );
+      
+      return "✅ Heartbeats paused. Say 'start heartbeats' to resume.";
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return `❌ Failed to pause heartbeats: ${msg}`;
+    }
+  }
+
+  private async startHeartbeats(channel: string): Promise<string> {
+    try {
+      // Clear paused flag
+      setSetting(this.db, "heartbeats_paused", "false");
+      
+      // Schedule immediate heartbeat
+      await this.ctx.storage.setAlarm?.(this.deps.now());
+      
+      await this.deps.postSlackMessage(
+        this.env.SLACK_BOT_TOKEN,
+        channel,
+        "▶️ Heartbeats started! Running autonomous tasks now."
+      );
+      
+      return "✅ Heartbeats started! I'll begin autonomous self-improvement.";
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return `❌ Failed to start heartbeats: ${msg}`;
+    }
   }
 
   private async showHeartbeatStatus(channel: string): Promise<string> {
@@ -2413,6 +2481,14 @@ ${history}` }]
   }
 
   private async processNextHeartbeat(): Promise<void> {
+    // Check if heartbeats are paused
+    const isPaused = getSetting(this.db, "heartbeats_paused") === "true";
+    if (isPaused) {
+      // Still schedule next alarm but don't process
+      await this.ctx.storage.setAlarm?.(this.deps.now() + BACKGROUND_TASK_INTERVAL_MS);
+      return;
+    }
+
     try {
       const heartbeat = getNextPendingHeartbeat(this.db);
       if (!heartbeat) {
