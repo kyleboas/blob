@@ -161,6 +161,8 @@ function renderLiveLogPage(): string {
     const logNode = document.getElementById('log');
     const statusNode = document.getElementById('status');
     let currentEvents = [];
+    let stream = null;
+    let reconnectTimer = null;
 
     function escHtml(s) {
       return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -198,6 +200,11 @@ function renderLiveLogPage(): string {
     }
 
     function connectStream() {
+      if (typeof EventSource === 'undefined') {
+        statusNode.textContent = 'Live stream unsupported in this browser; polling logs.';
+        return null;
+      }
+
       const source = new EventSource('/logs/stream');
 
       source.addEventListener('snapshot', (event) => {
@@ -213,13 +220,20 @@ function renderLiveLogPage(): string {
 
       source.addEventListener('error', () => {
         statusNode.textContent = 'Live stream disconnected.';
+        source.close();
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(() => {
+          stream = connectStream();
+        }, 2000);
       });
 
       return source;
     }
 
+    renderLogs(currentEvents);
     loadSnapshot();
-    connectStream();
+    setInterval(loadSnapshot, 5000);
+    stream = connectStream();
   </script>
 </body>
 </html>`;
