@@ -122,7 +122,7 @@ export class ExtensionReloader {
   }
   
   // Reload a single extension
-  private async reloadExtension(extensionPath: string): Promise<void> {
+  async reloadExtension(extensionPath: string): Promise<void> {
     // Read tool.json
     const toolJsonResult = await this.sandbox.exec(`cat "${extensionPath}/tool.json"`);
     if (toolJsonResult.exitCode !== 0) {
@@ -140,7 +140,7 @@ export class ExtensionReloader {
     }
     
     // Re-register the extension
-    registerExtension(this.db, toolDef.name, toolDef, scriptPath);
+    registerExtension(this.db, toolDef.name, toolDef.description || "", scriptPath, toolDef.input_schema || {});
   }
   
   // Watch all extensions

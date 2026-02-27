@@ -145,7 +145,7 @@ export const SlackUI = {
       .section(message)
       .actions([
         { text: "✓ Approve", action_id: `${actionId}_approve`, style: "primary" },
-        { text: "✗ Reject", action_id: `${actionId}_reject", style: "danger" }
+        { text: "✗ Reject", action_id: `${actionId}_reject`, style: "danger" }
       ])
       .build();
   },
