@@ -2375,6 +2375,8 @@ ${auditContext}` }
       /^(thanks|thank you|ty)(\s|$)/i,
       /^(ok|okay|got it|understood)(\s|$)/i,
       /^(bye|goodbye|see ya|cya)(\s|$)/i,
+      /^(yes|no|maybe)(\s|$)/i,
+      /^(cool|nice|awesome|great|good)(\s|$)/i,
     ];
     const isGreeting = greetingPatterns.some(p => p.test(task));
     
@@ -2389,6 +2391,8 @@ ${auditContext}` }
       /what\s+time\s+is\s+it/i,
       /what's\s+the\s+time/i,
       /current\s+time/i,
+      /where\s+are\s+you\s+(hosted|running|located)/i,
+      /what\s+(language|tech|stack)\s+(are|do)\s+you\s+use/i,
     ];
     const isSelfKnowledge = selfKnowledgePatterns.some(p => p.test(task));
 
@@ -2504,13 +2508,59 @@ ${auditContext}` }
       return;
     }
     
+    // INLINE TASK PATH: Handle simple tasks directly without spawning sub-agent
+    // This reduces latency for common operations
+    const inlineTaskPatterns = [
+      /^(?:show|list|get|check)\s+(?:my\s+)?(?:heartbeat|goal|task|deploy)/i,
+      /^(?:what|which)\s+(?:team\s+)?(?:is\s+)?(?:playing|won|score)/i,
+      /^(?:sports?|game|match)\s+(?:score|result|update)/i,
+      /^(?:weather|temperature)\s+(?:in|at|for)/i,
+      /^(?:stock|crypto|bitcoin|eth)\s+(?:price|value)/i,
+    ];
+    const isInlineTask = inlineTaskPatterns.some(p => p.test(task));
+    
+    if (isInlineTask && messageType === "routine") {
+      // Build system prompt for inline execution
+      const userConfig = await this.getUserConfiguration();
+      const repoGoals = getRepositoryGoals(userConfig, "kyleboas", "blob");
+      const systemPrompt = buildSystemPrompt(getKnowledge(this.db), this.getPromptPolicies(), repoGoals);
+      const executionGuardrails = buildExecutionGuardrails(userConfig);
+      const fullSystemPrompt = `${systemPrompt}\n\n${executionGuardrails}`;
+      
+      // Send acknowledgment
+      await this.deps.postSlackMessage(
+        this.env.SLACK_BOT_TOKEN,
+        channel,
+        "🔄 Working on it..."
+      );
+      
+      // Run task inline (no sub-agent spawn)
+      this.runInBackground((async () => {
+        try {
+          const result = await this.runAgentLoop(task, channel, sessionId, {
+            systemPrompt: fullSystemPrompt,
+            taskComplexityHint: "routine",
+            priorMessages
+          });
+          // Result is already posted to Slack by runAgentLoop
+        } catch (err) {
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          await this.deps.postSlackMessage(
+            this.env.SLACK_BOT_TOKEN,
+            channel,
+            `❌ Task failed: ${errorMessage}`
+          );
+        }
+      })());
+      return;
+    }
+    
     // SLOW PATH: Build full system prompt for sub-agents
     const userConfig = await this.getUserConfiguration();
     const repoGoals = getRepositoryGoals(userConfig, "kyleboas", "blob");
     const systemPrompt = buildSystemPrompt(getKnowledge(this.db), this.getPromptPolicies(), repoGoals);
 
-    // Task path: spawn a sub-agent and pass the pre-determined complexity hint
-    // so the sub-agent does not need to run the router a second time.
+    // Task path: spawn a sub-agent for complex tasks
     const taskComplexityHint: "routine" | "complex" = messageType;
 
     const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
