@@ -1928,8 +1928,8 @@ export class AgentDO {
     const lowerTask = task.toLowerCase();
 
     // Try LLM-based intent classification first (more robust than regex)
-    // Only if USE_LLM_INTENT_CLASSIFICATION is enabled
-    const useLlmIntent = getSetting(this.db, "use_llm_intent_classification") === "true";
+    // Enabled by default, can be disabled via setting
+    const useLlmIntent = getSetting(this.db, "use_llm_intent_classification") !== "false";
     
     if (useLlmIntent) {
       try {
