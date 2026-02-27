@@ -1772,7 +1772,7 @@ export class AgentDO {
       const statusEmoji = h.status === 'completed' ? '✅' : 
                          h.status === 'failed' ? '❌' : 
                          h.status === 'running' ? '🔄' : '⏳';
-      const time = new Date(h.created_at).toLocaleTimeString();
+      const time = new Date(h.createdAt).toLocaleTimeString();
       return `${statusEmoji} #${h.id} [${h.status}] ${time}: ${h.task.slice(0, 60)}${h.task.length > 60 ? '...' : ''}`;
     });
 
