@@ -2213,7 +2213,7 @@ export class AgentDO {
     
     const heartbeats = listHeartbeats(this.db, 10);
     if (heartbeats.length === 0) {
-      return "📭 No heartbeats in the queue. Heartbeats are running - I'll generate new tasks automatically.";
+      return "Heartbeats are enabled and running. The queue is currently empty - I'll generate new autonomous tasks shortly.";
     }
 
     const statusLines = heartbeats.map(h => {
