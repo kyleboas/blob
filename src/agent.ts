@@ -17,6 +17,7 @@ import {
 import { loadUserConfiguration, getRepositoryGoals } from "./kv-loader";
 import type { UserConfiguration } from "./kv-schema";
 import { callLLM, classifyMessage, type LLMResponse } from "./llm";
+import { callWorkersAI, shouldUseWorkersAI } from "./workers-ai";
 import { enforceSafety, isSelfModificationCommand } from "./safety";
 import { SandboxClient, SANDBOX_ENV_FILE, type SandboxBinding } from "./sandbox-client";
 import {
@@ -2464,7 +2465,51 @@ ${auditContext}` }
     // even if the sub-agent crashes the turn is recorded.
     saveMessage(this.db, sessionId, { role: "user", content: task });
     
-    // FAST PATH: Handle chat immediately without loading config or building full system prompt
+    // FAST PATH: Use Workers AI for simple chat (no external API call)
+    if ((messageType === "chat" || isGreeting || isSelfKnowledge) && shouldUseWorkersAI(task)) {
+      const now = new Date();
+      const timeString = now.toLocaleString('en-US', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZoneName: 'short'
+      });
+
+      try {
+        const workersAIResponse = await callWorkersAI({
+          env: this.env as { AI?: unknown },
+          systemPrompt: [
+            "You are Blob, a helpful AI assistant.",
+            "You are running on Cloudflare Workers with low latency.",
+            "You can answer questions about yourself, the time, and general knowledge.",
+            `Current date and time: ${timeString}.`,
+            "Keep responses brief and helpful."
+          ].join(" "),
+          messages: [
+            ...priorMessages
+              .filter((m): m is { role: "user" | "assistant"; content: string } => 
+                typeof m.content === "string" && (m.role === "user" || m.role === "assistant")
+              )
+              .map(m => ({ role: m.role, content: m.content })),
+            { role: "user", content: task }
+          ],
+          maxTokens: 512
+        });
+
+        const responseText = workersAIResponse.text || "Done.";
+        saveMessage(this.db, sessionId, { role: "assistant", content: responseText });
+        await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, responseText);
+        this.forwardToGlobalLogs("chat_reply", `[#${channel}] ${responseText.slice(0, 500)}`);
+        return;
+      } catch {
+        // Fall through to regular chat model if Workers AI fails
+      }
+    }
+
+    // FALLBACK: Regular chat model for complex conversations
     if (messageType === "chat" || isGreeting || isSelfKnowledge) {
       const now = new Date();
       const timeString = now.toLocaleString('en-US', { 

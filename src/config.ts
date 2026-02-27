@@ -13,6 +13,7 @@ export const COMPACTION_TOKEN_THRESHOLD = 20_000;
 export const SESSION_SUMMARY_RECENT_COUNT = 5;
 export const THINKING_MESSAGE_DELAY_MS = 2_000;
 
+// Cloudflare AI Gateway models (external API calls)
 export const MODEL_ROUTER = "@cf/ibm-granite/granite-4.0-h-micro";
 export const MODEL_CHAT = "@cf/zai-org/glm-4.7-flash";
 export const MODEL_SIMPLE = "@cf/qwen/qwen3-30b-a3b-fp8";
@@ -21,6 +22,10 @@ export const MODEL_PLANNER_SIMPLE = MODEL_SIMPLE;
 export const MODEL_PLANNER_COMPLEX = MODEL_COMPLEX;
 export const MODEL_EXECUTION_SIMPLE = "@cf/qwen/qwen3-30b-a3b-fp8";
 export const MODEL_EXECUTION_COMPLEX = "@cf/qwen/qwen3-30b-a3b-fp8";
+
+// Workers AI models (local, fast, no external API call)
+export const WORKERS_AI_CHAT = "@cf/meta/llama-3.1-8b-instruct";
+export const WORKERS_AI_FAST = "@cf/meta/llama-3.1-8b-instruct";
 
 // Backwards-compatible aliases for older two-tier references.
 export const MODEL_ROUTINE = MODEL_SIMPLE;
