@@ -1064,6 +1064,14 @@ export class AgentDO {
   }
 
   private async getDefaultRepoFromConfig(): Promise<{ owner: string; repo: string } | null> {
+    // First check Slack-set preferences (stored in SQLite)
+    const slackOwner = getSetting(this.db, "user:github_username");
+    const slackRepo = getSetting(this.db, "user:primary_repo");
+    if (slackOwner && slackRepo) {
+      return { owner: slackOwner, repo: slackRepo };
+    }
+
+    // Then try Cloudflare KV
     try {
       const config = await loadUserConfiguration(this.env);
       if (config.user?.githubUsername && config.project?.name) {
@@ -1626,6 +1634,12 @@ export class AgentDO {
       return "";
     }
 
+    // Handle Slack commands for configuration
+    const commandResult = await this.handleSlackCommand(task, channel);
+    if (commandResult) {
+      return commandResult;
+    }
+
     // The sub-agent uses its own session only for internal tracking (sandbox,
     // agent events). Session lifecycle and conversation memory are managed by
     // the orchestrator; no previous-session summarisation is needed here.
@@ -1637,6 +1651,67 @@ export class AgentDO {
       taskComplexityHint
     });
     return finalText;
+  }
+
+  private async handleSlackCommand(task: string, channel: string): Promise<string | null> {
+    const lowerTask = task.toLowerCase();
+
+    // Natural language patterns for setting repo
+    // Matches: "my repo is owner/repo", "use owner/repo", "set repo to owner/repo", etc.
+    const repoPatterns = [
+      /(?:my\s+)?repo\s+(?:is|should\s+be)\s+([\w-]+)\/([\w-]+)/i,
+      /(?:use|set)\s+(?:the\s+)?repo\s+(?:to\s+)?([\w-]+)\/([\w-]+)/i,
+      /(?:work\s+with|on)\s+([\w-]+)\/([\w-]+)/i,
+      /(?:default\s+)?repo(?:\s+is)?\s*:?\s*([\w-]+)\/([\w-]+)/i,
+    ];
+
+    for (const pattern of repoPatterns) {
+      const repoMatch = task.match(pattern);
+      if (repoMatch) {
+        const owner = repoMatch[1];
+        const repo = repoMatch[2];
+        setSetting(this.db, "user:github_username", owner);
+        setSetting(this.db, "user:primary_repo", repo);
+        return `✅ Got it! I'll use ${owner}/${repo} as your default repository for future PRs.`;
+      }
+    }
+
+    // Natural language for showing current repo
+    // Matches: "what's my repo", "which repo am I using", "show my default repo", etc.
+    const showPatterns = [
+      /what(?:'s| is)\s+(?:my\s+)?(?:default\s+)?repo/i,
+      /which\s+repo\s+(?:am\s+i\s+using|are\s+we\s+using)/i,
+      /show\s+(?:me\s+)?(?:my\s+)?(?:default\s+)?repo/i,
+      /current\s+repo/i,
+    ];
+
+    for (const pattern of showPatterns) {
+      if (pattern.test(task)) {
+        const owner = getSetting(this.db, "user:github_username") || "not set";
+        const repo = getSetting(this.db, "user:primary_repo") || "not set";
+        if (owner === "not set") {
+          return `You haven't set a default repo yet.\n\nJust tell me: "My repo is owner/repo" or "Use owner/repo"`;
+        }
+        return `Your default repo is: ${owner}/${repo}\n\nTo change it, just say something like: "My repo is owner/repo"`;
+      }
+    }
+
+    // Natural language for clearing repo
+    // Matches: "clear my repo", "forget my repo", "reset my repo", etc.
+    const clearPatterns = [
+      /(?:clear|forget|remove|reset)\s+(?:my\s+)?(?:default\s+)?repo/i,
+      /(?:i\s+)?(?:don't|do not)\s+(?:want\s+to\s+)?use\s+(?:a\s+)?(?:default\s+)?repo/i,
+    ];
+
+    for (const pattern of clearPatterns) {
+      if (pattern.test(task)) {
+        setSetting(this.db, "user:github_username", "");
+        setSetting(this.db, "user:primary_repo", "");
+        return `🗑️ No problem! I've cleared your default repo settings.`;
+      }
+    }
+
+    return null;
   }
 
   private async executeTaskWithPlannerAudit(
