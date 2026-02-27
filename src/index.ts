@@ -486,6 +486,7 @@ function renderLiveLogPage(): string {
 async function fetchGlobalLogsSnapshot(env: Env): Promise<Response> {
   const id = env.AGENT_DO.idFromName(mapChannelToDO(GLOBAL_LOGS_CHANNEL));
   const stub = env.AGENT_DO.get(id);
+  console.log("[LOGS] Fetching from DO:", mapChannelToDO(GLOBAL_LOGS_CHANNEL));
   const response = await Promise.race([
     stub.fetch("https://agent.internal/event", {
       method: "POST",
@@ -498,6 +499,8 @@ async function fetchGlobalLogsSnapshot(env: Env): Promise<Response> {
   ]);
 
   if (!response.ok) {
+    const text = await response.text();
+    console.error("[LOGS] DO returned error:", response.status, text);
     throw new Error("failed to read logs");
   }
 
@@ -768,16 +771,33 @@ export default {
       });
     }
 
+    // Debug endpoint to inject a test log event
+    if (request.method === "POST" && url.pathname === "/logs/test") {
+      try {
+        const id = env.AGENT_DO.idFromName(mapChannelToDO(GLOBAL_LOGS_CHANNEL));
+        const stub = env.AGENT_DO.get(id);
+        await stub.fetch("https://agent.internal/event", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "log_event", eventType: "test", message: "Test log event at " + new Date().toISOString() })
+        });
+        return Response.json({ success: true, message: "Test event injected" });
+      } catch (error) {
+        return Response.json({ success: false, error: String(error) }, { status: 500 });
+      }
+    }
+
     if (request.method === "GET" && (url.pathname === "/logs/data" || url.pathname === "/live-logs/data")) {
       let response: Response;
       try {
         response = await fetchGlobalLogsSnapshot(env);
-      } catch {
-        return Response.json({ error: "failed to read logs" }, { status: 500 });
+      } catch (error) {
+        console.error("[LOGS] Failed to fetch snapshot:", error);
+        return Response.json({ events: [], error: "failed to read logs" }, { status: 200 });
       }
 
       const payload = await response.text();
-      return new Response(payload, { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(payload, { status: 200, headers: { "content-type": "application/json", "cache-control": "no-cache" } });
     }
 
     if (request.method === "GET" && (url.pathname === "/logs/stream" || url.pathname === "/live-logs/stream")) {
