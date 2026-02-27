@@ -725,6 +725,14 @@ export class AgentDO {
             return;
           }
 
+          // Check for Pi-style session commands first
+          const sessionCommand = this.parseSessionCommand(event.text ?? "");
+          if (sessionCommand) {
+            const result = await this.handleSessionCommand(sessionCommand, channel);
+            await this.sendResponse(channel, result);
+            return;
+          }
+
           // Use LLM to classify intent and extract entities
           let classification;
           try {
@@ -3597,5 +3605,115 @@ ${history}` }]
       channel,
       `✅ Staging looks stable. Ready for production merge.`
     );
+  }
+
+  // Pi-style session command parsing
+  private parseSessionCommand(text: string): { command: string; arg: string } | null {
+    const trimmed = text.trim().toLowerCase();
+    
+    // branch <name>
+    const branchMatch = trimmed.match(/^branch\s+(\w+)$/);
+    if (branchMatch) {
+      return { command: "branch", arg: branchMatch[1] };
+    }
+    
+    // rewind <n>
+    const rewindMatch = trimmed.match(/^rewind\s+(\d+)$/);
+    if (rewindMatch) {
+      return { command: "rewind", arg: rewindMatch[1] };
+    }
+    
+    // switch <name>
+    const switchMatch = trimmed.match(/^switch\s+(\w+)$/);
+    if (switchMatch) {
+      return { command: "switch", arg: switchMatch[1] };
+    }
+    
+    // status
+    if (trimmed === "status") {
+      return { command: "status", arg: "" };
+    }
+    
+    return null;
+  }
+
+  // Pi-style session command handling
+  private async handleSessionCommand(
+    cmd: { command: string; arg: string },
+    channel: string
+  ): Promise<string> {
+    const sessionTree = new SessionTree(this.db);
+    const currentSessionId = getCurrentSession(this.db) || generateSessionId();
+    
+    switch (cmd.command) {
+      case "branch": {
+        const branchName = cmd.arg;
+        const newBranch = sessionTree.createBranch(currentSessionId, { title: branchName });
+        setSetting(this.db, "current_session_id", newBranch.id);
+        return `🌿 Created branch "${branchName}" (${newBranch.id}). Now working on new branch.`;
+      }
+      
+      case "rewind": {
+        const messageIndex = parseInt(cmd.arg, 10);
+        const currentNode = sessionTree.getNode(currentSessionId);
+        if (!currentNode) {
+          return "❌ No active session to rewind.";
+        }
+        
+        if (messageIndex < 0 || messageIndex >= currentNode.messages.length) {
+          return `❌ Invalid rewind point. Session has ${currentNode.messages.length} messages.`;
+        }
+        
+        const newBranch = sessionTree.rewind(currentSessionId, messageIndex, { 
+          title: `rewind-to-${messageIndex}` 
+        });
+        setSetting(this.db, "current_session_id", newBranch.id);
+        return `⏪ Rewound to message ${messageIndex}. Created new branch (${newBranch.id}).`;
+      }
+      
+      case "switch": {
+        // Find branch by name in children of current session
+        const children = sessionTree.getChildren(currentSessionId);
+        const targetBranch = children.find(c => 
+          c.metadata.title === cmd.arg || c.id.startsWith(cmd.arg)
+        );
+        
+        if (!targetBranch) {
+          return `❌ Branch "${cmd.arg}" not found. Use "status" to see available branches.`;
+        }
+        
+        setSetting(this.db, "current_session_id", targetBranch.id);
+        return `🔄 Switched to branch "${cmd.arg}" (${targetBranch.id}).`;
+      }
+      
+      case "status": {
+        const current = sessionTree.getNode(currentSessionId);
+        if (!current) {
+          return "📍 No active session.";
+        }
+        
+        const children = sessionTree.getChildren(currentSessionId);
+        const parentInfo = current.parentId ? ` (branched from ${current.parentId})` : "";
+        
+        let response = `📍 Current: ${current.metadata.title || "main"} (${current.id})${parentInfo}\n`;
+        response += `   Messages: ${current.messages.length}\n`;
+        
+        if (children.length > 0) {
+          response += `\n🌿 Branches:\n`;
+          for (const child of children) {
+            response += `   - ${child.metadata.title || "unnamed"} (${child.id.slice(0, 20)}...)`;
+            if (child.messages.length > 0) {
+              response += ` [${child.messages.length} msgs]`;
+            }
+            response += "\n";
+          }
+        }
+        
+        return response;
+      }
+      
+      default:
+        return `❌ Unknown command: ${cmd.command}`;
+    }
   }
 }
