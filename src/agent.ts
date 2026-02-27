@@ -80,6 +80,8 @@ import { classifyIntentWithEntities, extractTextContent, getCacheStats } from ".
 import { CORE_TOOLS, loadExtensions, type ExtensionTool } from "./pi-tools";
 import { SessionTree, generateSessionId, type SessionMessage, type SessionNode } from "./pi-sessions";
 import { registerBuiltinExtensions } from "./pi-extensions";
+import { ExtensionReloader, checkExtensionReload } from "./pi-hot-reload";
+import { TUIRenderer, parseTUICommands, TUI } from "./pi-tui";
 import type { ConversationMessage, Env, SlackEvent } from "./types";
 import type { ToolResult } from "./types";
 
@@ -458,6 +460,7 @@ export class AgentDO {
   private pendingApprovals = new Map<string, PendingApproval>();
   private userConfig: UserConfiguration | null = null;
   private readonly repoContextByCwd = new Map<string, RepoContext>();
+  private extensionReloader: ExtensionReloader | null = null;
 
   constructor(private readonly ctx: DurableObjectStateLike, private readonly env: Env, deps: Partial<AgentDeps> = {}) {
     this.db = ctx.storage.sql;
@@ -467,6 +470,10 @@ export class AgentDO {
     
     // Register built-in lightweight extensions
     registerBuiltinExtensions(this.db);
+    
+    // Start hot reloading for extensions
+    this.extensionReloader = new ExtensionReloader(this.db, this.sandbox);
+    void this.extensionReloader.watchAllExtensions();
 
     // Schedule initial heartbeat alarm if not already set
     this.scheduleInitialHeartbeatAlarm();
@@ -551,7 +558,12 @@ export class AgentDO {
       }
 
       default: {
-        // Try extension tools
+        // Try extension tools with hot reload check
+        // Only check reload for non-built-in tools
+        if (!["read", "write", "edit", "bash"].includes(toolName)) {
+          await checkExtensionReload(this.db, this.sandbox, toolName);
+        }
+        
         const extensions = loadExtensions(this.db);
         const extension = extensions.find(e => e.name === toolName);
         
@@ -563,6 +575,23 @@ export class AgentDO {
               `echo '${inputJson}' | ${extension.scriptPath}`,
               30000
             );
+            
+            // Parse TUI commands from output
+            const { text, components } = parseTUICommands(result.stdout ?? "");
+            
+            // If TUI components found, render them
+            if (components.length > 0) {
+              const renderer = new TUIRenderer();
+              for (const comp of components) {
+                renderer.setComponent(comp);
+              }
+              const tuiOutput = renderer.render();
+              return { 
+                output: tuiOutput + (text ? "\n\n" + text : ""), 
+                exitCode: result.exitCode ?? 0 
+              };
+            }
+            
             return { 
               output: result.stdout ?? "", 
               exitCode: result.exitCode ?? 0 
