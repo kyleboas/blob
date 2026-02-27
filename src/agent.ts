@@ -146,7 +146,8 @@ const BASE_SYSTEM_PROMPT = [
   "The sandbox working directory is /workspace.",
   "Always use absolute paths (e.g. /workspace/repo) rather than bare directory names when referencing cloned repos.",
   "Each sandbox session starts fresh in /workspace — files from previous sessions are not automatically present.",
-  "If a workflow repeats, use create_tool to define a reusable tool and then call it directly in later steps."
+  "If a workflow repeats, use create_tool to define a reusable tool and then call it directly in later steps.",
+  "For GitHub operations, use python github_tools.py (available in /workspace) — it handles authentication automatically. Commands: whoami, push, create-pr, fork, remote-url."
 ].join(" ");
 
 const DEFAULT_KNOWLEDGE_PROMPT_GUARDRAIL = [
