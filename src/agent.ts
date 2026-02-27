@@ -149,7 +149,9 @@ const BASE_SYSTEM_PROMPT = [
   "Always use absolute paths (e.g. /workspace/repo) rather than bare directory names when referencing cloned repos.",
   "Each sandbox session starts fresh in /workspace — files from previous sessions are not automatically present.",
   "If a workflow repeats, use create_tool to define a reusable tool and then call it directly in later steps.",
-  "For GitHub operations, use python github_tools.py (available in /workspace) — it handles authentication automatically. Commands: whoami, push, create-pr, fork, remote-url."
+  "For GitHub operations, use python github_tools.py (available in /workspace) — it handles authentication automatically. Commands: whoami, push, create-pr, fork, remote-url.",
+  "You have access to your own source code at https://github.com/kyleboas/blob — you can clone it, read it, modify it, and create PRs to improve yourself.",
+  "When working on your own code, clone to /workspace/blob and make changes there."
 ].join(" ");
 
 const DEFAULT_KNOWLEDGE_PROMPT_GUARDRAIL = [
