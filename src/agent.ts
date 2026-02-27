@@ -209,7 +209,7 @@ export function parseSessionMemoryUpdate(text: string): SessionMemoryUpdate | nu
   };
 }
 
-function buildSystemPrompt(_knowledge: string, policies: PromptPolicies): string {
+function buildSystemPrompt(_knowledge: string, policies: PromptPolicies, repoGoals?: { goals: string[]; constraints?: string[] } | null): string {
   let prompt = BASE_SYSTEM_PROMPT;
 
   if (_knowledge.trim()) {
@@ -219,6 +219,35 @@ function buildSystemPrompt(_knowledge: string, policies: PromptPolicies): string
       "<knowledge_snapshot>",
       _knowledge,
       "</knowledge_snapshot>"
+    ].join("\n");
+  }
+
+  // Add repository goals to system prompt so chat model knows about them
+  if (repoGoals && repoGoals.goals.length > 0) {
+    prompt += [
+      "",
+      "REPOSITORY GOALS (configured in Cloudflare KV):",
+      ...repoGoals.goals.map(g => `- ${g}`),
+    ].join("\n");
+    
+    if (repoGoals.constraints && repoGoals.constraints.length > 0) {
+      prompt += [
+        "",
+        "CONSTRAINTS:",
+        ...repoGoals.constraints.map(c => `- ${c}`),
+      ].join("\n");
+    }
+    
+    prompt += [
+      "",
+      "When helping the user, steer your suggestions and actions towards these goals.",
+      "You can view goals by saying 'show goals' and set them by saying 'my goals are: ...'"
+    ].join("\n");
+  } else {
+    prompt += [
+      "",
+      "No repository goals are currently configured.",
+      "Ask the user: 'What goals should I work towards?' or they can say 'my goals are: ...'"
     ].join("\n");
   }
 
@@ -898,15 +927,18 @@ export class AgentDO {
     });
     // Use the orchestrator-supplied system prompt when available (the sub-agent's
     // own DB is empty so its summaries/knowledge would be missing).
+    // Load user configuration first to get repository goals
+    const userConfig = await this.getUserConfiguration();
+    const repoGoals = getRepositoryGoals(userConfig, "kyleboas", "blob");
+    
     const systemPromptBase =
       options.systemPrompt ??
       buildSystemPrompt(
         getKnowledge(this.db),
-        this.getPromptPolicies()
+        this.getPromptPolicies(),
+        repoGoals
       );
 
-    // Load user configuration and build guardrails from it
-    const userConfig = await this.getUserConfiguration();
     const executionGuardrails = buildExecutionGuardrails(userConfig);
     const systemPrompt = `${systemPromptBase}\n\n${executionGuardrails}`;
     const dynamicTools = new Map<string, DynamicToolDefinition>();
@@ -2273,7 +2305,9 @@ ${auditContext}` }
     // Build the system prompt here from durable knowledge/settings only.
     // Session summaries are intentionally excluded from the system prompt
     // to reduce provider prompt-injection false positives.
-    const systemPrompt = buildSystemPrompt(getKnowledge(this.db), this.getPromptPolicies());
+    const userConfig = await this.getUserConfiguration();
+    const repoGoals = getRepositoryGoals(userConfig, "kyleboas", "blob");
+    const systemPrompt = buildSystemPrompt(getKnowledge(this.db), this.getPromptPolicies(), repoGoals);
 
     // Snapshot the history *before* appending the new user message so that
     // runAgentLoop on the sub-agent can append it itself (preserving the
