@@ -616,30 +616,79 @@ async function handleBlobWebSocket(request: Request, env: Env): Promise<Response
       if (data.type === "message" && data.text) {
         // Forward to AgentDO
         const doName = `slack-channel:${channel}`;
-        const stub = env.AGENT_DO.get(env.AGENT_DO.idFromName(doName));
         
-        // Send message to AgentDO
-        const response = await stub.fetch("https://agent.internal/event", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            action: "message",
-            event: {
-              type: "message",
-              channel,
-              text: data.text,
-              user: data.user || "web-user",
-              ts: Date.now().toString()
-            },
-            wsChannel: channel // Tell AgentDO this is a WebSocket channel
-          })
-        });
+        try {
+          const stub = env.AGENT_DO.get(env.AGENT_DO.idFromName(doName));
+          
+          // Send message to AgentDO with timeout
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+          
+          const response = await stub.fetch("https://agent.internal/event", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              action: "message",
+              event: {
+                type: "message",
+                channel,
+                text: data.text,
+                user: data.user || "web-user",
+                ts: Date.now().toString()
+              },
+              wsChannel: channel
+            }),
+            signal: controller.signal
+          });
+          
+          clearTimeout(timeoutId);
 
-        if (!response.ok) {
-          server.send(JSON.stringify({
-            type: "error",
-            message: "Failed to process message"
-          }));
+          if (!response.ok) {
+            const errorText = await response.text().catch(() => "Unknown error");
+            throw new Error(`AgentDO returned ${response.status}: ${errorText}`);
+          }
+        } catch (err) {
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          
+          // Self-healing: Check if DO exists, if not create it
+          if (errorMessage.includes("not found") || errorMessage.includes("failed")) {
+            server.send(JSON.stringify({
+              type: "status",
+              message: "Initializing Blob, one moment..."
+            }));
+            
+            // Retry after a short delay
+            setTimeout(async () => {
+              try {
+                const stub = env.AGENT_DO.get(env.AGENT_DO.idFromName(doName));
+                await stub.fetch("https://agent.internal/event", {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({
+                    action: "message",
+                    event: {
+                      type: "message",
+                      channel,
+                      text: data.text,
+                      user: data.user || "web-user",
+                      ts: Date.now().toString()
+                    },
+                    wsChannel: channel
+                  })
+                });
+              } catch (retryErr) {
+                server.send(JSON.stringify({
+                  type: "error",
+                  message: "Blob is having trouble. Please try again in a moment."
+                }));
+              }
+            }, 2000);
+          } else {
+            server.send(JSON.stringify({
+              type: "error",
+              message: `Error: ${errorMessage}`
+            }));
+          }
         }
       } else if (data.type === "ping") {
         server.send(JSON.stringify({ type: "pong" }));

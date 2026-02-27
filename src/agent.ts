@@ -1068,16 +1068,45 @@ export class AgentDO {
   private async sendResponse(channel: string, text: string): Promise<void> {
     // Check if this is a WebSocket channel
     if (channel.startsWith("ws-")) {
-      // Send via WebSocket response endpoint
-      try {
-        await fetch("https://blob-agent.heyboas.workers.dev/chat/response", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ channel, text })
-        });
-      } catch {
-        // Fallback: log to global logs
-        this.forwardToGlobalLogs("ws_response_failed", `[#${channel}] ${text.slice(0, 100)}`);
+      // Send via WebSocket response endpoint with retry
+      let attempts = 0;
+      const maxAttempts = 3;
+      
+      while (attempts < maxAttempts) {
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
+          
+          const response = await fetch("https://blob-agent.heyboas.workers.dev/chat/response", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ channel, text }),
+            signal: controller.signal
+          });
+          
+          clearTimeout(timeoutId);
+          
+          if (response.ok) {
+            return; // Success!
+          }
+          
+          // If WebSocket not found, the client may have disconnected
+          if (response.status === 404) {
+            this.forwardToGlobalLogs("ws_client_disconnected", `[#${channel}] Client disconnected`);
+            return;
+          }
+          
+          throw new Error(`HTTP ${response.status}`);
+        } catch (err) {
+          attempts++;
+          if (attempts >= maxAttempts) {
+            // Final fallback: log to global logs
+            this.forwardToGlobalLogs("ws_response_failed", `[#${channel}] ${text.slice(0, 100)}`);
+            return;
+          }
+          // Wait before retry (exponential backoff)
+          await new Promise(resolve => setTimeout(resolve, 100 * Math.pow(2, attempts)));
+        }
       }
     } else {
       // Send via Slack
