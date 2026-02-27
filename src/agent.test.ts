@@ -1448,8 +1448,8 @@ describe("AgentDO sub-agent system", () => {
 
     const completionBody = String((agentDOFetch.mock.calls.at(-1)?.[1] as RequestInit)?.body ?? "");
     expect(completionBody).toContain('"status":"failed"');
-    expect(completionBody).toContain("max_attempts_reached");
-    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", expect.stringContaining("Planner audit failed"));
+    expect(completionBody).toContain("Self-healing in progress");
+    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", expect.stringContaining("fixing it automatically"));
   });
 
   it("sub_agent_done action marks the sub-agent as completed", async () => {

@@ -2372,18 +2372,36 @@ export class AgentDO {
         const terminationReason = attempt >= PLANNER_AUDIT_MAX_ATTEMPTS
           ? "max_attempts_reached"
           : `planner_disposition_${audit.disposition}`;
+        
+        // Self-healing: Create a fix task instead of just reporting the failure
+        const fixTask = `Fix the issue: ${audit.reason}. Root cause: ${audit.rootCause}. ${audit.followUpTask ?? ""}`;
+        
+        // Log the failure
         const terminalMessage = [
           `Planner audit failed after ${attempt} attempt(s).`,
           `Termination reason: ${terminationReason}.`,
           `Reason: ${audit.reason}`,
           `Root cause: ${audit.rootCause}`,
           `Missing acceptance criteria: ${audit.missingCriteria.join("; ") || "(not provided)"}`,
-          audit.followUpTask ? `Proposed follow-up scope: ${audit.followUpTask}` : "Proposed follow-up scope: (not provided)"
+          `Auto-creating fix task: ${fixTask}`
         ].join("\n");
+        
         logAgentEvent(this.db, "global", "planner_audit_terminated", terminalMessage);
         this.forwardToGlobalLogs("planner_audit_terminated", `[#${channel}] ${terminalMessage}`);
-        await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, `⚠️ ${terminalMessage}`);
-        return { status: "failed", finalText: terminalMessage };
+        
+        // Self-healing: Enqueue a heartbeat to fix the issue
+        const fixHeartbeatId = enqueueHeartbeat(this.db, fixTask, channel);
+        logAgentEvent(this.db, "global", "self_heal_enqueued", `Fix heartbeat #${fixHeartbeatId}: ${fixTask}`);
+        this.forwardToGlobalLogs("self_heal_enqueued", `[#${channel}] Fix heartbeat #${fixHeartbeatId}: ${fixTask}`);
+        
+        // Notify user that self-healing is in progress
+        await this.deps.postSlackMessage(
+          this.env.SLACK_BOT_TOKEN,
+          channel,
+          `I encountered an issue but I'm fixing it automatically. Check 'show my heartbeats' to track progress.`
+        );
+        
+        return { status: "failed", finalText: `Self-healing in progress: ${fixTask}` };
       }
 
       const followUpTask = audit.followUpTask
