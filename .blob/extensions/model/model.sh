@@ -1,19 +1,14 @@
 #!/bin/bash
-# Free tier model picker - Cloudflare Workers AI
-# Just use Llama 70B for everything (it's free!)
+# Cloudflare Workers AI - Neuron-based free tier
 
 echo "Cloudflare Workers AI - FREE TIER"
 echo ""
-echo "Current: @cf/meta/llama-3.3-70b-instruct-fp8 (Llama 3.3 70B)"
+echo "Free limit: 10,000 neurons/day"
 echo ""
-echo "✅ FREE up to 10,000 requests/day"
-echo "✅ 100,000 tokens per request"
-echo "✅ Best model available"
+echo "Models:"
+echo "  Llama 70B: ~150 neurons/request (~60-70 requests/day)"
+echo "  Mistral 7B: ~50 neurons/request (~200 requests/day)"
 echo ""
-echo "Just use this for everything. No need to switch!"
+echo "Current: Llama 70B (best quality)"
 echo ""
-echo "Limits:"
-echo "  - 10k requests/day"
-echo "  - 100k tokens/request"
-echo ""
-echo "If you hit limits, the agent will automatically slow down."
+echo "Tip: Use Mistral 7B for simple tasks to save neurons!"
