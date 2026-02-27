@@ -1,20 +1,25 @@
 {
-  "current": "free",
+  "current": "agent",
   "models": {
-    "free": {
-      "id": "@cf/meta/llama-3.3-70b-instruct-fp8",
-      "description": "Llama 3.3 70B - best quality, uses more neurons",
-      "neurons_per_request": "~150",
-      "free_limit": "10,000 neurons/day",
-      "estimated_requests": "~60-70/day"
+    "fast": {
+      "id": "@cf/zai-org/glm-4.7-flash",
+      "description": "GLM 4.7 Flash - fastest, cheapest for simple tasks",
+      "neurons": "~50",
+      "best_for": "quick responses, simple queries"
     },
-    "efficient": {
-      "id": "@cf/mistral/mistral-7b-instruct-v0.2",
-      "description": "Mistral 7B - faster, uses fewer neurons",
-      "neurons_per_request": "~50", 
-      "free_limit": "10,000 neurons/day",
-      "estimated_requests": "~200/day"
+    "agent": {
+      "id": "@cf/qwen/qwen3-30b-a3b-fp8",
+      "description": "Qwen3 30B - best agent capabilities, function calling (DEFAULT)",
+      "neurons": "~120",
+      "best_for": "coding, tool use, reasoning"
+    },
+    "powerful": {
+      "id": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      "description": "Llama 3.3 70B - most powerful, slower",
+      "neurons": "~150",
+      "best_for": "complex architecture, hard problems"
     }
   },
-  "note": "Cloudflare uses 'Neurons' not requests. 10k neurons/day free. Bigger models = more neurons."
+  "free_tier": "10,000 neurons/day",
+  "note": "Qwen3 30B has best agent/tool capabilities. Use as default."
 }
