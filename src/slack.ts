@@ -92,20 +92,10 @@ async function postToSlack(channel: string, text: string, env: Env): Promise<voi
 
 function stripFormatting(text: string): string {
   return text
-    // Remove code blocks
-    .replace(/```[\s\S]*?```/g, (match) => match.replace(/```/g, '').trim())
-    // Remove inline code
-    .replace(/`([^`]+)`/g, '$1')
-    // Remove bold/italic
-    .replace(/\*\*?([^*]+)\*\*?/g, '$1')
-    // Remove headers
+    // Convert **bold** to *bold* (Slack format)
+    .replace(/\*\*([^*]+)\*\*/g, '*$1*')
+    // Remove # headers (just remove the #)
     .replace(/^#{1,6}\s+/gm, '')
-    // Remove links but keep text [text](url) -> text
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-    // Remove blockquotes
-    .replace(/^>\s?/gm, '')
-    // Remove horizontal rules
-    .replace(/^(---|___|\*\*\*)$/gm, '')
-    // Clean up extra whitespace
+    // Keep: `code`, ```code blocks```, [links](url), > quotes, --- rules
     .trim();
 }
