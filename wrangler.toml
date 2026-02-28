@@ -6,16 +6,12 @@ compatibility_date = "2024-04-03"
 crons = ["*/5 * * * *", "0 0 * * 0"]
 
 [[durable_objects.bindings]]
-name = "REPO_CONFIG"
-class_name = "AgentDO"
-
-[[durable_objects.bindings]]
-name = "MEMORY"
-class_name = "MemoryDO"
+name = "BLOB"
+class_name = "BlobDO"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["AgentDO", "MemoryDO"]
+new_classes = ["BlobDO"]
 
 [observability]
 [observability.logs]
