@@ -4,9 +4,6 @@ import { CONVERSATION_TIMEOUT_MINUTES } from "./config";
 
 const KNOWLEDGE_KEY = "knowledge";
 const SETTING_MODEL_CHAT = "model_chat";
-const SETTING_MODEL_SIMPLE = "model_simple";
-const SETTING_MODEL_ROUTINE = "model_routine";
-const SETTING_MODEL_COMPLEX = "model_complex";
 const SETTING_MODEL_PLANNER_SIMPLE = "model_planner_simple";
 const SETTING_MODEL_PLANNER_COMPLEX = "model_planner_complex";
 const SETTING_MODEL_EXECUTION_SIMPLE = "model_execution_simple";
@@ -582,13 +579,10 @@ export function getModelSettings(
   executionSimpleModel: string;
   executionComplexModel: string;
 } {
-  const legacySimple = getSetting(sql, SETTING_MODEL_SIMPLE) ?? getSetting(sql, SETTING_MODEL_ROUTINE);
-  const legacyComplex = getSetting(sql, SETTING_MODEL_COMPLEX);
-
   return {
     chatModel: getSetting(sql, SETTING_MODEL_CHAT) ?? defaults.chatModel,
-    plannerSimpleModel: getSetting(sql, SETTING_MODEL_PLANNER_SIMPLE) ?? legacySimple ?? defaults.plannerSimpleModel,
-    plannerComplexModel: getSetting(sql, SETTING_MODEL_PLANNER_COMPLEX) ?? legacyComplex ?? defaults.plannerComplexModel,
+    plannerSimpleModel: getSetting(sql, SETTING_MODEL_PLANNER_SIMPLE) ?? defaults.plannerSimpleModel,
+    plannerComplexModel: getSetting(sql, SETTING_MODEL_PLANNER_COMPLEX) ?? defaults.plannerComplexModel,
     executionSimpleModel: getSetting(sql, SETTING_MODEL_EXECUTION_SIMPLE) ?? defaults.executionSimpleModel,
     executionComplexModel: getSetting(sql, SETTING_MODEL_EXECUTION_COMPLEX) ?? defaults.executionComplexModel
   };
@@ -598,30 +592,12 @@ export function setChatModel(sql: SqlStorage, model: string): void {
   setSetting(sql, SETTING_MODEL_CHAT, model);
 }
 
-export function setSimpleModel(sql: SqlStorage, model: string): void {
-  setSetting(sql, SETTING_MODEL_SIMPLE, model);
-  // Keep legacy key synchronized for any existing integrations.
-  setSetting(sql, SETTING_MODEL_ROUTINE, model);
-}
-
-export function setRoutineModel(sql: SqlStorage, model: string): void {
-  setSimpleModel(sql, model);
-}
-
-export function setComplexModel(sql: SqlStorage, model: string): void {
-  setSetting(sql, SETTING_MODEL_COMPLEX, model);
-}
-
 export function setPlannerSimpleModel(sql: SqlStorage, model: string): void {
   setSetting(sql, SETTING_MODEL_PLANNER_SIMPLE, model);
-  // Keep legacy key synchronized for backwards compatibility.
-  setSimpleModel(sql, model);
 }
 
 export function setPlannerComplexModel(sql: SqlStorage, model: string): void {
   setSetting(sql, SETTING_MODEL_PLANNER_COMPLEX, model);
-  // Keep legacy key synchronized for backwards compatibility.
-  setComplexModel(sql, model);
 }
 
 export function setExecutionSimpleModel(sql: SqlStorage, model: string): void {

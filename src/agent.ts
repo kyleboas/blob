@@ -6,10 +6,8 @@ import {
   BACKGROUND_TASK_INTERVAL_MS,
   PLANNER_AUDIT_MAX_ATTEMPTS,
   MODEL_CHAT,
-  MODEL_PLANNER_SIMPLE,
-  MODEL_PLANNER_COMPLEX,
-  MODEL_EXECUTION_SIMPLE,
-  MODEL_EXECUTION_COMPLEX,
+  MODEL_SIMPLE,
+  MODEL_COMPLEX,
   buildExecutionGuardrails
 } from "./config";
 import { loadUserConfiguration, getRepositoryGoals, saveRepositoryGoals } from "./kv-loader";
@@ -40,8 +38,6 @@ import {
   setPlannerComplexModel,
   setExecutionSimpleModel,
   setExecutionComplexModel,
-  setSimpleModel,
-  setComplexModel,
   incrementRateLimit,
   initSchema,
   listHeartbeats,
@@ -306,7 +302,7 @@ type SettingsCommand =
   | { type: "show" }
   | {
       type: "set";
-      target: "router" | "chat" | "planner-simple" | "planner-complex" | "execution-simple" | "execution-complex";
+      target: "chat" | "planner-simple" | "planner-complex" | "execution-simple" | "execution-complex";
       model: string;
     };
 
@@ -1067,10 +1063,10 @@ export class AgentDO {
   private getRuntimeModelSettings(): RuntimeModelSettings {
     return getModelSettings(this.db, {
       chatModel: MODEL_CHAT,
-      plannerSimpleModel: MODEL_PLANNER_SIMPLE,
-      plannerComplexModel: MODEL_PLANNER_COMPLEX,
-      executionSimpleModel: MODEL_EXECUTION_SIMPLE,
-      executionComplexModel: MODEL_EXECUTION_COMPLEX
+      plannerSimpleModel: MODEL_SIMPLE,
+      plannerComplexModel: MODEL_COMPLEX,
+      executionSimpleModel: MODEL_SIMPLE,
+      executionComplexModel: MODEL_SIMPLE
     });
   }
 
@@ -1116,10 +1112,8 @@ export class AgentDO {
       setChatModel(this.db, parsed.model);
     } else if (parsed.target === "planner-simple") {
       setPlannerSimpleModel(this.db, parsed.model);
-      setSimpleModel(this.db, parsed.model);
     } else if (parsed.target === "planner-complex") {
       setPlannerComplexModel(this.db, parsed.model);
-      setComplexModel(this.db, parsed.model);
     } else if (parsed.target === "execution-simple") {
       setExecutionSimpleModel(this.db, parsed.model);
     } else {
