@@ -1,10 +1,23 @@
 import type { Env } from "./types";
 import { DEFAULT_MODEL, getModelCatalogDescription } from "./models";
 
+// Cache for model catalog description (refreshed every 5 minutes)
+let catalogCache: { description: string; timestamp: number } | null = null;
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 interface LLMResponse {
   content: string;
   modelUsed: string;
   modelSwitched: boolean;
+}
+
+async function getCachedCatalogDescription(env: Env): Promise<string> {
+  if (catalogCache && Date.now() - catalogCache.timestamp < CACHE_TTL) {
+    return catalogCache.description;
+  }
+  const description = await getModelCatalogDescription(env);
+  catalogCache = { description, timestamp: Date.now() };
+  return description;
 }
 
 export async function callLLMWithModelSelection(
@@ -12,11 +25,10 @@ export async function callLLMWithModelSelection(
   env: Env,
   opts: { maxTokens?: number } = {}
 ): Promise<LLMResponse> {
-  const systemPrompt = messages.find(m => m.role === "system")?.content ?? "";
   const userMessage = messages.find(m => m.role === "user")?.content ?? "";
   
-  // Get catalog description from DO
-  const catalogDesc = await getModelCatalogDescription(env);
+  // Get catalog description from cache
+  const catalogDesc = await getCachedCatalogDescription(env);
   
   // First call: let the model pick which model to use
   const modelPickerMessages = [
@@ -34,13 +46,12 @@ export async function callLLMWithModelSelection(
     env
   );
 
-  // Validate the selection - check if it's in the catalog
-  const catalog = await getModelCatalogDescription(env);
-  const validModels = catalog.split("\n").map(line => line.split(":")[0].replace("- ", "").trim());
+  // Validate the selection
+  const validModels = catalogDesc.split("\n").map(line => line.split(":")[0].replace("- ", "").trim());
   const modelId = validModels.includes(selectedModelId.trim()) ? selectedModelId.trim() : DEFAULT_MODEL;
   
-  // Extract model info from catalog
-  const modelLine = catalog.split("\n").find(line => line.includes(modelId));
+  // Extract model info from cached catalog
+  const modelLine = catalogDesc.split("\n").find(line => line.includes(modelId));
   const modelName = modelLine ? modelLine.split(":")[1]?.split("-")[0].trim() : modelId;
   const maxTokensMatch = modelLine?.match(/max (\d+) tokens/);
   const maxTokens = maxTokensMatch ? parseInt(maxTokensMatch[1]) : 4096;
