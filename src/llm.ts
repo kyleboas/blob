@@ -5,6 +5,9 @@ export async function callLLM(
   env: Env,
   opts: { maxTokens?: number } = {}
 ): Promise<string> {
+  console.log("AI_GATEWAY_BASE_URL:", env.AI_GATEWAY_BASE_URL ? "set" : "missing");
+  console.log("AI_GATEWAY_TOKEN:", env.AI_GATEWAY_TOKEN ? "set" : "missing");
+  
   if (!env.AI_GATEWAY_BASE_URL || !env.AI_GATEWAY_TOKEN) {
     throw new Error("AI Gateway not configured");
   }
