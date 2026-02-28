@@ -1,6 +1,7 @@
 import type { Env } from "./types";
 import { getRepos, addRepo, getRepoGoals, setRepoGoals } from "./storage";
 import { Agent } from "./agent";
+import { callLLM } from "./llm";
 
 export async function handleSlackEvent(request: Request, env: Env): Promise<Response> {
   const body = await request.json() as {
@@ -11,6 +12,7 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
       text?: string;
       channel?: string;
       user?: string;
+      bot_id?: string;
     };
   };
 
@@ -21,45 +23,29 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
 
   // Handle message events
   if (body.type === "event_callback" && body.event?.type === "message" && body.event.text) {
-    const text = body.event.text.toLowerCase();
+    const text = body.event.text;
     const channel = body.event.channel;
 
-    // Ignore bot messages
-    if (!channel) return new Response("OK");
+    // Ignore bot messages (including our own)
+    if (!channel || body.event.bot_id) return new Response("OK");
 
-    // Handle commands
-    if (text.includes("show repos")) {
-      const repos = await getRepos(env);
-      await postToSlack(channel, `Repos: ${repos.join(", ")}`, env);
-    }
-    else if (text.includes("add repo")) {
-      const match = body.event.text.match(/add repo\s+(\S+)/i);
-      if (match) {
-        await addRepo(env, match[1]);
-        await postToSlack(channel, `Added repo: ${match[1]}`, env);
-      }
-    }
-    else if (text.includes("set goals")) {
-      const match = body.event.text.match(/set goals for\s+(\S+)\s*:\s*(.+)/i);
-      if (match) {
-        const repo = match[1];
-        const goals = match[2].split(";").map(g => g.trim());
-        await setRepoGoals(env, repo, goals);
-        await postToSlack(channel, `Set goals for ${repo}: ${goals.join(", ")}`, env);
-      }
-    }
-    else if (text.includes("run")) {
-      const repos = await getRepos(env);
-      repos.forEach(r => new Agent(r, [], env).run().catch(console.error));
-      await postToSlack(channel, `Running on: ${repos.join(", ")}`, env);
-    }
-    else if (text.includes("help")) {
-      await postToSlack(channel, 
-        "Commands:\n" +
-        "• show repos\n" +
-        "• add repo owner/repo\n" +
-        "• set goals for owner/repo: goal1; goal2\n" +
-        "• run", env);
+    // Get repos for context
+    const repos = await getRepos(env);
+    const reposContext = repos.join(", ");
+
+    // Send to LLM for response
+    const systemPrompt = `You are Blob, an autonomous coding agent. You manage repositories: ${reposContext}. You can add repos, set goals, and run tasks. Be helpful and concise.`;
+    
+    try {
+      const response = await callLLM([
+        { role: "system", content: systemPrompt },
+        { role: "user", content: text }
+      ], env, { maxTokens: 1000 });
+
+      await postToSlack(channel, response, env);
+    } catch (err) {
+      console.error("Error calling LLM:", err);
+      await postToSlack(channel, "Sorry, I encountered an error processing your message.", env);
     }
   }
 
