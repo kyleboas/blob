@@ -1,5 +1,14 @@
 import type { Env } from "./types";
 
+// Cloudflare Containers types (available at runtime)
+declare class Container {
+  defaultPort?: number;
+  sleepAfter?: string;
+  fetch(request: Request): Promise<Response>;
+}
+
+declare function getContainer(binding: Container, id: string): Container;
+
 // Cloudflare Container binding for sandboxed execution
 export class BlobSandbox extends Container {
   defaultPort = 8080;
