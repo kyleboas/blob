@@ -1,6 +1,6 @@
 name = "blob-agent" 
 main = "src/index.ts"
-compatibility_date = "2024-02-08"
+compatibility_date = "2024-04-03"
 
 [triggers]
 crons = ["*/5 * * * *"]
