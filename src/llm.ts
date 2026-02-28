@@ -1,81 +1,48 @@
 import type { Env } from "./types";
-import { MODELS, DEFAULT_MODEL, ESCALATION_CHAIN } from "./models";
+import { MODEL_CATALOG, DEFAULT_MODEL, getModelCatalogDescription } from "./models";
 
 interface LLMResponse {
   content: string;
-  escalated: boolean;
   modelUsed: string;
+  modelSwitched: boolean;
 }
 
-export async function callLLMWithEscalation(
+export async function callLLMWithModelSelection(
   messages: Array<{ role: string; content: string }>,
   env: Env,
-  opts: { maxTokens?: number; startModel?: string } = {}
+  opts: { maxTokens?: number } = {}
 ): Promise<LLMResponse> {
-  const startModelKey = opts.startModel ?? DEFAULT_MODEL;
-  const startModel = MODELS[startModelKey];
-  
-  if (!startModel) {
-    throw new Error(`Unknown model: ${startModelKey}`);
-  }
-
-  // Try with starting model
   const systemPrompt = messages.find(m => m.role === "system")?.content ?? "";
   const userMessage = messages.find(m => m.role === "user")?.content ?? "";
   
-  const augmentedMessages = [
+  // First call: let the model pick which model to use
+  const modelPickerMessages = [
     { 
       role: "system", 
-      content: `${systemPrompt}\n\nIf this task is too complex for you, respond with [[ESCALATE:reason]] and nothing else. Otherwise, respond normally.` 
+      content: `You are a model selector. Available models:\n${getModelCatalogDescription()}\n\nRespond with ONLY the model ID that would be best for this task. Default: ${DEFAULT_MODEL}` 
     },
     { role: "user", content: userMessage }
   ];
 
-  const firstResponse = await callLLMRaw(augmentedMessages, startModel.id, opts.maxTokens ?? startModel.maxTokens, env);
-  
-  // Check if escalation requested
-  const escalateMatch = firstResponse.match(/\[\[ESCALATE:(.+?)\]\]/);
-  
-  if (!escalateMatch) {
-    // No escalation needed
-    return {
-      content: firstResponse,
-      escalated: false,
-      modelUsed: startModel.name
-    };
-  }
+  const selectedModelId = await callLLMRaw(
+    modelPickerMessages, 
+    DEFAULT_MODEL, 
+    100, 
+    env
+  );
 
-  // Escalate to next model in chain
-  const escalateReason = escalateMatch[1];
-  const currentIndex = ESCALATION_CHAIN.indexOf(startModelKey);
-  const nextModelKey = ESCALATION_CHAIN[currentIndex + 1];
+  // Validate the selection
+  const modelId = MODEL_CATALOG[selectedModelId.trim()] ? selectedModelId.trim() : DEFAULT_MODEL;
+  const modelInfo = MODEL_CATALOG[modelId];
   
-  if (!nextModelKey) {
-    // No more models to try
-    return {
-      content: firstResponse.replace(/\[\[ESCALATE:.+?\]\]/, "").trim(),
-      escalated: false,
-      modelUsed: startModel.name
-    };
-  }
-
-  const nextModel = MODELS[nextModelKey];
-  
-  // Retry with more powerful model
-  const retryMessages = [
-    { 
-      role: "system", 
-      content: `${systemPrompt}\n\nThe previous model requested escalation because: ${escalateReason}. You are the specialized model handling this complex task.` 
-    },
-    { role: "user", content: userMessage }
-  ];
-
-  const secondResponse = await callLLMRaw(retryMessages, nextModel.id, opts.maxTokens ?? nextModel.maxTokens, env);
+  // Second call: actually process the request with selected model
+  const maxTokens = opts.maxTokens ?? modelInfo.maxTokens;
+  const response = await callLLMRaw(messages, modelId, maxTokens, env);
 
   return {
-    content: secondResponse,
-    escalated: true,
-    modelUsed: nextModel.name
+    content: response,
+    modelUsed: modelInfo.name,
+    modelSwitched: modelId !== DEFAULT_MODEL
   };
 }
 
@@ -116,12 +83,12 @@ async function callLLMRaw(
   return data.choices[0]?.message?.content ?? "";
 }
 
-// Simple call without escalation (for internal use)
+// Simple call without model selection
 export async function callLLM(
   messages: Array<{ role: string; content: string }>,
   env: Env,
   opts: { maxTokens?: number } = {}
 ): Promise<string> {
-  const result = await callLLMWithEscalation(messages, env, opts);
+  const result = await callLLMWithModelSelection(messages, env, opts);
   return result.content;
 }

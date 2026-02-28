@@ -1,6 +1,6 @@
 import type { Env } from "./types";
 import { getRepos } from "./storage";
-import { callLLMWithEscalation } from "./llm";
+import { callLLMWithModelSelection } from "./llm";
 
 export async function handleSlackEvent(request: Request, env: Env): Promise<Response> {
   const body = await request.json() as {
@@ -32,16 +32,16 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
     const repos = await getRepos(env);
     const reposContext = repos.join(", ");
 
-    // Send to LLM with escalation
+    // Send to LLM with model selection
     const systemPrompt = `You are Blob, an autonomous coding agent. You manage repositories: ${reposContext}. You can add repos, set goals, and run tasks. Be helpful and concise.`;
     
     try {
-      const result = await callLLMWithEscalation([
+      const result = await callLLMWithModelSelection([
         { role: "system", content: systemPrompt },
         { role: "user", content: text }
       ], env, { maxTokens: 2000 });
 
-      const prefix = result.escalated ? `🚀 (escalated to ${result.modelUsed})\n` : "";
+      const prefix = result.modelSwitched ? `🤖 (using ${result.modelUsed})\n` : "";
       await postToSlack(channel, prefix + result.content, env);
     } catch {
       await postToSlack(channel, "Sorry, I encountered an error processing your message.", env);

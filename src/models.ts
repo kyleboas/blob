@@ -1,50 +1,49 @@
 import type { Env } from "./types";
 
-export interface ModelConfig {
-  id: string;
-  name: string;
-  maxTokens: number;
-  description: string;
-}
-
-// Available models via AI Gateway
-export const MODELS: Record<string, ModelConfig> = {
+// Model catalog - populated from AI Gateway configuration
+// These are the models available via your AI Gateway
+export const MODEL_CATALOG: Record<string, { name: string; description: string; maxTokens: number }> = {
   // Free tier - Cloudflare Workers AI
-  "llama-3.3-70b": {
-    id: "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-    name: "Llama 3.3 70B",
-    maxTokens: 4096,
-    description: "Fast, capable model for most tasks. Free tier."
+  "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast": {
+    name: "Llama 3.3 70B Fast",
+    description: "Fast, capable model for most coding tasks. Free tier.",
+    maxTokens: 4096
   },
-  "llama-4-scout": {
-    id: "workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct",
+  "workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct": {
     name: "Llama 4 Scout",
-    maxTokens: 8192,
-    description: "More powerful, multimodal. Free tier."
+    description: "More powerful, multimodal, mixture-of-experts. Free tier.",
+    maxTokens: 8192
+  },
+  "workers-ai/@cf/meta/llama-3.1-8b-instruct": {
+    name: "Llama 3.1 8B",
+    description: "Fast, lightweight. Good for simple tasks. Free tier.",
+    maxTokens: 2048
   },
   
-  // Paid models - via AI Gateway
-  "claude-sonnet": {
-    id: "anthropic/claude-sonnet-4-6",
+  // Paid models - via AI Gateway (add your own)
+  "anthropic/claude-sonnet-4-6": {
     name: "Claude Sonnet 4.6",
-    maxTokens: 8192,
-    description: "Excellent for complex reasoning and coding. Paid."
+    description: "Excellent for complex reasoning and coding. Paid.",
+    maxTokens: 8192
   },
-  "gpt-4": {
-    id: "openai/gpt-4",
+  "openai/gpt-4": {
     name: "GPT-4",
-    maxTokens: 8192,
-    description: "Powerful general-purpose model. Paid."
+    description: "Powerful general-purpose model. Paid.",
+    maxTokens: 8192
+  },
+  "openai/gpt-4o": {
+    name: "GPT-4o",
+    description: "Fast, multimodal, very capable. Paid.",
+    maxTokens: 4096
   }
 };
 
-// Default starting model
-export const DEFAULT_MODEL = "llama-3.3-70b";
+// Default model to start with
+export const DEFAULT_MODEL = "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
-// Models to try in order of capability (for escalation)
-export const ESCALATION_CHAIN = [
-  "llama-3.3-70b",
-  "llama-4-scout", 
-  "claude-sonnet",
-  "gpt-4"
-];
+// Generate model catalog description for system prompt
+export function getModelCatalogDescription(): string {
+  return Object.entries(MODEL_CATALOG)
+    .map(([id, info]) => `- ${id}: ${info.name} - ${info.description} (max ${info.maxTokens} tokens)`)
+    .join("\n");
+}
