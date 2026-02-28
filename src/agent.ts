@@ -3594,83 +3594,50 @@ ${history}` }]
       return;
     }
 
-    const recentHeartbeats = listHeartbeats(this.db, 25);
-    const recentFeedback = listRecentOperatorFeedback(this.db, 5);
-    const feedbackContext = recentFeedback
-      .map((entry) => `- [${entry.channel ?? "unknown"}] ${entry.feedback}`)
-      .join("\n");
-    const completedOrPending = recentHeartbeats
-      .filter((h) => h.status === "completed" || h.status === "running" || h.status === "pending")
-      .map((h) => `- [${h.status}] ${h.task}`)
-      .join("\n");
-
-    // Load repository goals from KV config or local settings
+    // Load repository goals from KV or local settings
     const userConfig = await this.getUserConfiguration();
-    const kvGoals = getRepositoryGoals(userConfig, "kyleboas", "blob");
-
-    // Also check for locally set goals (from Slack) - both in KV and local settings
-    let localGoals: string[] | null = null;
+    let repoGoals = getRepositoryGoals(userConfig, "kyleboas", "blob");
     
-    // Try KV first (where saveRepositoryGoals stores them)
-    if (this.env.USER_CONFIG_KV) {
-      try {
-        const kvData = await this.env.USER_CONFIG_KV.get("user-configuration");
-        if (kvData) {
-          const config = JSON.parse(kvData);
-          const repoConfig = config.repositories?.repositories?.["kyleboas/blob"];
-          if (repoConfig?.goals?.length > 0) {
-            localGoals = repoConfig.goals;
-          }
-        }
-      } catch {
-        // Fall through to local settings
-      }
-    }
-    
-    // Fallback to local settings
-    if (!localGoals) {
+    // Fallback to local settings if no KV goals
+    if (!repoGoals) {
       const localGoalsJson = getSetting(this.db, "repo_goals:kyleboas/blob");
       if (localGoalsJson) {
-        localGoals = JSON.parse(localGoalsJson) as string[];
+        const localGoals = JSON.parse(localGoalsJson) as string[];
+        repoGoals = { goals: localGoals };
       }
     }
-
-    const repoGoals = kvGoals || (localGoals ? { goals: localGoals } : null);
-
-    // If no goals configured, just use generic goals without notifying
-    let goalsContext: string;
-    if (!repoGoals) {
-      goalsContext = "No specific repository goals configured. Using generic self-improvement goals.";
-    } else {
-      goalsContext = `Repository goals for kyleboas/blob:\n${repoGoals.goals.map(g => `- ${g}`).join("\n")}`;
+    
+    if (!repoGoals || repoGoals.goals.length === 0) {
+      return; // No goals = no autonomous work
     }
 
+    const goalsContext = repoGoals.goals.map(g => `- ${g}`).join("\n");
+    const recentHeartbeats = listHeartbeats(this.db, 10);
+    const completedTasks = recentHeartbeats
+      .filter(h => h.status === "completed")
+      .map(h => `- ${h.task}`)
+      .join("\n");
+
+    // Simple task generation from goals
     const generationResponse = await this.deps.llmCall(this.buildLlmInput({
       model: this.getRuntimeModelSettings().chatModel,
       modelRole: "planner",
       systemPrompt: [
         "You are Blob's autonomous planner.",
-        "Propose one autonomous self-improvement heartbeat task.",
-        "Cross-reference recent and completed heartbeat history before proposing work.",
-        "Avoid duplicate or near-duplicate tasks by semantic intent and scope.",
-        "Keep it small, concrete, and actionable.",
-        "STEER ALL TASKS TOWARDS THE REPOSITORY GOALS. The goals are your north star.",
-        "Every proposed task should advance at least one of the configured goals.",
-        "If a task doesn't serve the goals, propose a different task that does.",
-        "If no meaningful task is available, respond with skip."
+        "Pick ONE concrete task from the repository goals.",
+        "Return only the task description. Be specific and actionable.",
+        "If all goals are complete, return 'skip'."
       ].join("\n"),
       messages: [{
         role: "user",
         content: [
-          "Generate exactly one task sentence for Blob's heartbeat queue.",
-          "Return only the task text (or skip).",
-          "STEER TOWARDS THESE GOALS:",
+          "Repository goals:",
           goalsContext,
           "",
-          "Latest operator steering feedback:",
-          feedbackContext || "- (none)",
-          "Recent heartbeat history:",
-          completedOrPending || "- (none)"
+          "Recently completed:",
+          completedTasks || "- (none)",
+          "",
+          "What is ONE specific task to work on next?"
         ].join("\n")
       }]
     }));
@@ -3680,71 +3647,18 @@ ${history}` }]
       return;
     }
 
-    const dedupDecision = await this.applyAutonomousPlannerGuardrail(proposedTask, recentHeartbeats);
-    if (!dedupDecision) {
+    // Simple duplicate check - exact match only
+    const isDuplicate = recentHeartbeats.some(h => 
+      h.task.toLowerCase() === proposedTask.toLowerCase()
+    );
+    if (isDuplicate) {
       return;
     }
 
-    const heartbeatId = enqueueHeartbeat(this.db, dedupDecision, channel);
-    const sourceLabel = configuredChannel ? "setting:autonomous_channel" : "fallback:last_heartbeat_channel";
-    const eventMessage = `Queued autonomous heartbeat #${heartbeatId} (${sourceLabel}): ${dedupDecision}`;
+    const heartbeatId = enqueueHeartbeat(this.db, proposedTask, channel);
+    const eventMessage = `Queued autonomous heartbeat #${heartbeatId}: ${proposedTask}`;
     logAgentEvent(this.db, "global", "heartbeat_queued", eventMessage);
     this.forwardToGlobalLogs("heartbeat_queued", `[#${channel}] ${eventMessage}`);
-    if (recentFeedback.length > 0) {
-      const appliedMessage = `Applied operator feedback while planning heartbeat #${heartbeatId}.`;
-      logAgentEvent(this.db, "global", "operator_feedback_applied", appliedMessage);
-      this.forwardToGlobalLogs("operator_feedback_applied", `[#${channel}] ${appliedMessage}`);
-    }
-  }
-
-  private async applyAutonomousPlannerGuardrail(
-    proposedTask: string,
-    recentHeartbeats: Array<{ task: string; status: "pending" | "running" | "completed" | "failed" }>
-  ): Promise<string | null> {
-    const comparableHistory = recentHeartbeats
-      .filter((h) => h.status === "pending" || h.status === "running" || h.status === "completed")
-      .map((h) => `- [${h.status}] ${h.task}`)
-      .join("\n");
-
-    const guardrailResponse = await this.deps.llmCall(this.buildLlmInput({
-      model: this.getRuntimeModelSettings().plannerSimpleModel,
-      modelRole: "planner",
-      systemPrompt: [
-        "You are a planning guardrail for autonomous heartbeat tasks.",
-        "Compare the proposed task semantically against pending/running/completed tasks.",
-        "Do not use regex-only checks; decide based on intent and scope overlap.",
-        "If it duplicates or near-duplicates existing work, reject it.",
-        "If it is valuable but too similar, rewrite into a distinct next-step task.",
-        "Respond in this exact format:",
-        "DECISION: accept|rewrite|reject",
-        "TASK: <task text or empty when reject>"
-      ].join("\n"),
-      messages: [{
-        role: "user",
-        content: [
-          `Proposed task: ${proposedTask}`,
-          "Recent comparable tasks:",
-          comparableHistory || "- (none)"
-        ].join("\n")
-      }]
-    }));
-
-    const text = extractTextContent(guardrailResponse);
-    const decision = text.match(/DECISION:\s*(accept|rewrite|reject)/i)?.[1]?.toLowerCase();
-    const candidate = text.match(/TASK:\s*([\s\S]*)$/i)?.[1]?.trim() ?? "";
-
-    if (decision === "accept") {
-      return proposedTask;
-    }
-
-    if (decision === "rewrite") {
-      if (!candidate || /^skip\b/i.test(candidate)) {
-        return null;
-      }
-      return candidate;
-    }
-
-    return null;
   }
 
   private async attemptSelfHeal(task: string, errorMessage: string, channel: string): Promise<void> {

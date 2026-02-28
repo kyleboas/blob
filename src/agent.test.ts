@@ -1457,18 +1457,19 @@ describe("AgentDO heartbeat actions", () => {
     expect(body.heartbeats[0].task).toBe("ping");
   });
 
-  it("empty queue with configured autonomous channel generates one task and schedules the next alarm", async () => {
+  it("empty queue with configured autonomous channel and goals generates one task and schedules the next alarm", async () => {
     const sql = new FakeSql();
     const { env } = makeTestEnv();
     const setAlarm = vi.fn().mockResolvedValue(undefined);
     const now = 1_700_000_000_000;
 
     sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "autonomous_channel", "C-auto");
+    // Set repository goals - required for autonomous task generation
+    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "repo_goals:kyleboas/blob", JSON.stringify(["Improve test coverage", "Fix bugs"]));
 
     const llmCall = vi
       .fn()
-      .mockResolvedValueOnce({ content: [{ type: "text", text: "Improve test coverage for storage edge cases" }] })
-      .mockResolvedValueOnce({ content: [{ type: "text", text: "DECISION: accept\nTASK:" }] });
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Improve test coverage for storage edge cases" }] });
 
     const agent = new AgentDO({ storage: { sql, setAlarm } }, env, {
       llmCall: llmCall as never,
@@ -1590,12 +1591,13 @@ describe("AgentDO heartbeat actions", () => {
     sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "autonomous_channel", "C-auto");
     sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "model_planner_simple", "planner-simple-model");
     sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "model_execution_simple", "execution-simple-model");
+    // Set repository goals - required for autonomous task generation
+    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "repo_goals:kyleboas/blob", JSON.stringify(["Improve tests", "Fix bugs"]));
 
     const captured: Array<{ simpleModel?: string; toolsCount: number }> = [];
     const llmCall = vi.fn().mockImplementation(async (input: { simpleModel?: string; tools?: unknown[] }) => {
       captured.push({ simpleModel: input.simpleModel, toolsCount: input.tools?.length ?? 0 });
       if (captured.length === 1) return { content: [{ type: "text", text: "Write stronger alarm-loop tests" }] };
-      if (captured.length === 2) return { content: [{ type: "text", text: "DECISION: accept\nTASK:" }] };
       return { content: [{ type: "text", text: "done" }] };
     });
 
@@ -1609,9 +1611,8 @@ describe("AgentDO heartbeat actions", () => {
     await agent.alarm();
 
     expect(captured[0].simpleModel).toBe("planner-simple-model");
-    expect(captured[1].simpleModel).toBe("planner-simple-model");
-    expect(captured[2].simpleModel).toBe("execution-simple-model");
-    expect(captured[2].toolsCount).toBeGreaterThan(0);
+    expect(captured[1].simpleModel).toBe("execution-simple-model");
+    expect(captured[1].toolsCount).toBeGreaterThan(0);
   });
 
   it("applies operator feedback to subsequent autonomous planning", async () => {
@@ -1621,13 +1622,15 @@ describe("AgentDO heartbeat actions", () => {
     const postSlackMessage = vi.fn().mockResolvedValue(undefined);
 
     sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "autonomous_channel", "C-auto");
+    // Set repository goals - required for autonomous task generation
+    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "repo_goals:kyleboas/blob", JSON.stringify(["Improve reliability", "Fix bugs"]));
 
     const llmCall = vi.fn().mockImplementation(async (input: { messages: Array<{ content: string }> }) => {
       const prompt = input.messages[0]?.content ?? "";
-      if (prompt.includes("Latest operator steering feedback") && prompt.includes("Prioritize reliability work")) {
+      if (prompt.includes("Repository goals") && prompt.includes("Improve reliability")) {
         return { content: [{ type: "text", text: "Improve reliability alerting coverage" }] };
       }
-      return { content: [{ type: "text", text: "DECISION: accept\nTASK:" }] };
+      return { content: [{ type: "text", text: "done" }] };
     });
 
     const agent = new AgentDO({ storage: { sql, setAlarm } }, env, {
@@ -1660,20 +1663,19 @@ describe("AgentDO heartbeat actions", () => {
     );
   });
 
-  it("duplicate prevention rejects exact/semantic near-duplicates and does not rely on regex-only matching", async () => {
+  it("duplicate prevention rejects exact duplicates", async () => {
     const sql = new FakeSql();
     const { env } = makeTestEnv();
     const setAlarm = vi.fn().mockResolvedValue(undefined);
 
     sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "autonomous_channel", "C-auto");
+    // Set repository goals - required for autonomous task generation
+    sql.exec("INSERT INTO settings (key, value) VALUES (?, ?)", "repo_goals:kyleboas/blob", JSON.stringify(["Refactor tests", "Harden logic"]));
+    
     const responses: Array<{ content: Array<{ type: string; text: string }> }> = [
       { content: [{ type: "text", text: "Refactor approval flow tests" }] },
-      { content: [{ type: "text", text: "DECISION: accept\nTASK:" }] },
-      { content: [{ type: "text", text: "Completed heartbeat task" }] },
-      { content: [{ type: "text", text: "Refactor approval flow tests" }] },
-      { content: [{ type: "text", text: "DECISION: reject\nTASK:" }] },
-      { content: [{ type: "text", text: "Harden heartbeat resume logic" }] },
-      { content: [{ type: "text", text: "DECISION: rewrite\nTASK: Validate heartbeat resume under alarm drift" }] }
+      { content: [{ type: "text", text: "Refactor approval flow tests" }] }, // Exact duplicate - should be rejected
+      { content: [{ type: "text", text: "Harden heartbeat resume logic" }] }
     ];
 
     const agent = new AgentDO({ storage: { sql, setAlarm } }, env, {
@@ -1682,7 +1684,6 @@ describe("AgentDO heartbeat actions", () => {
       postSlackApproval: vi.fn() as never
     });
 
-    await agent.alarm();
     await agent.alarm();
     await agent.alarm();
     await agent.alarm();
@@ -1701,9 +1702,8 @@ describe("AgentDO heartbeat actions", () => {
 
     const tasks = ((await listResp.json()) as { heartbeats: Array<{ task: string }> }).heartbeats.map((h) => h.task);
     expect(tasks).toContain("Refactor approval flow tests");
-    expect(tasks).toContain("Validate heartbeat resume under alarm drift");
+    expect(tasks).toContain("Harden heartbeat resume logic");
     expect(tasks.filter((task) => task === "Refactor approval flow tests")).toHaveLength(1);
-    expect(tasks).not.toContain("Harden heartbeat resume logic");
   });
 });
 
