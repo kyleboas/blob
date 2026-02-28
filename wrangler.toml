@@ -10,17 +10,17 @@ name = "BLOB"
 class_name = "BlobDO"
 
 [[containers]]
-class_name = "SandboxContainer"
+class_name = "BlobSandbox"
 image = "./sandbox/Dockerfile"
 max_instances = 3
 
 [[durable_objects.bindings]]
-name = "SANDBOX_CONTAINER"
-class_name = "SandboxContainer"
+name = "BLOB_SANDBOX"
+class_name = "BlobSandbox"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["BlobDO", "SandboxContainer"]
+new_classes = ["BlobDO", "BlobSandbox"]
 
 [observability]
 [observability.logs]

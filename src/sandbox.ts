@@ -1,7 +1,7 @@
 import type { Env } from "./types";
 
 // Cloudflare Container binding for sandboxed execution
-export class SandboxContainer extends Container {
+export class BlobSandbox extends Container {
   defaultPort = 8080;  // Port your sandbox container listens on
   sleepAfter = "5m";   // Stop after 5 min of inactivity
 }
@@ -17,12 +17,12 @@ export async function executeInSandbox(
   env: Env,
   opts: { sessionId?: string; timeout?: number } = {}
 ): Promise<SandboxResult> {
-  if (!env.SANDBOX_CONTAINER) {
-    throw new Error("SANDBOX_CONTAINER binding not found");
+  if (!env.BLOB_SANDBOX) {
+    throw new Error("BLOB_SANDBOX binding not found");
   }
 
   const sessionId = opts.sessionId || "default";
-  const container = getContainer(env.SANDBOX_CONTAINER, sessionId);
+  const container = getContainer(env.BLOB_SANDBOX, sessionId);
 
   const response = await container.fetch("http://container/execute", {
     method: "POST",
@@ -42,12 +42,12 @@ export async function executeInSandbox(
 }
 
 export async function sandboxStatus(env: Env): Promise<{ ready: boolean; message?: string }> {
-  if (!env.SANDBOX_CONTAINER) {
-    return { ready: false, message: "SANDBOX_CONTAINER binding not found" };
+  if (!env.BLOB_SANDBOX) {
+    return { ready: false, message: "BLOB_SANDBOX binding not found" };
   }
 
   try {
-    const container = getContainer(env.SANDBOX_CONTAINER, "status-check");
+    const container = getContainer(env.BLOB_SANDBOX, "status-check");
     const response = await container.fetch("http://container/health");
     
     if (response.ok) {
