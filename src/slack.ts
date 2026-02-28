@@ -1,11 +1,51 @@
 import type { Env } from "./types";
 import { getRepos } from "./storage";
-import { callLLMWithModelSelection } from "./llm";
+import { callLLMWithModelSelection, callLLM } from "./llm";
 import { getSystemPromptWithCapabilities } from "./capabilities";
 import { getCronJobs, addCronJob, deleteCronJob } from "./cron";
 
 // Track in-flight events to prevent race conditions
 const inFlightEvents = new Set<string>();
+
+interface IntentResult {
+  intent: "list_cron" | "add_cron" | "delete_cron" | "chat";
+  schedule?: string;
+  task?: string;
+  search?: string;
+}
+
+async function classifyIntent(text: string, env: Env): Promise<IntentResult> {
+  const prompt = `You are an intent classifier for a Slack bot. Analyze the message and extract the user's intent.
+
+Possible intents:
+- "list_cron": User wants to see their scheduled cron jobs (e.g., "show my jobs", "what tasks do I have", "list my cron jobs")
+- "add_cron": User wants to create a new scheduled task (e.g., "remind me every 5 minutes to check email", "add a job to run tests daily")
+- "delete_cron": User wants to remove a scheduled task (e.g., "delete the email reminder", "remove my test job")
+- "chat": General conversation, not a cron command
+
+For "add_cron", extract:
+- schedule: The time pattern (e.g., "every 5 minutes", "daily at 9am", "hourly")
+- task: What to do (e.g., "check email", "run tests", "backup database")
+
+For "delete_cron", extract:
+- search: Keywords to find the job to delete (e.g., "email", "test", "backup")
+
+Respond with ONLY a JSON object in this format:
+{"intent": "list_cron|add_cron|delete_cron|chat", "schedule": "...", "task": "...", "search": "..."}
+
+Message: "${text}"`;
+
+  try {
+    const response = await callLLM([{ role: "user", content: prompt }], env, { maxTokens: 200 });
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]) as IntentResult;
+    }
+  } catch {
+    // Fallback to chat if parsing fails
+  }
+  return { intent: "chat" };
+}
 
 export async function handleSlackEvent(request: Request, env: Env): Promise<Response> {
   const body = await request.json() as {
@@ -56,18 +96,20 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
 
   // Handle message events
   if (body.type === "event_callback" && body.event?.type === "message" && body.event.text) {
-    const text = body.event.text.toLowerCase();
     const channel = body.event.channel;
     const originalText = body.event.text;
 
     // Ignore bot messages (including our own)
     if (!channel || body.event.bot_id) return new Response("OK");
 
-    // Handle cron commands
-    if (text.includes("show my cron jobs") || text.includes("list my cron jobs")) {
+    // Classify intent using LLM
+    const intent = await classifyIntent(originalText, env);
+
+    // Handle cron commands based on LLM intent
+    if (intent.intent === "list_cron") {
       const jobs = await getCronJobs(env);
       if (jobs.length === 0) {
-        await postToSlack(channel, "No cron jobs configured. Add one with: add cron job 'every 5 minutes' to 'run tests'", env);
+        await postToSlack(channel, "No cron jobs configured. Try: 'remind me every 5 minutes to check email'", env);
       } else {
         const list = jobs.map(j => `• ${j.schedule}: ${j.task}`).join("\n");
         await postToSlack(channel, `Your cron jobs:\n${list}`, env);
@@ -75,41 +117,30 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
       return new Response("OK");
     }
 
-    if (text.includes("add cron job") || text.includes("create cron job")) {
-      // Parse: add cron job 'every 5 minutes' to 'run tests'
-      const match = originalText.match(/(?:add|create)\s+cron\s+job\s+['"](.+?)['"]\s+(?:to\s+)?['"](.+?)['"]/i);
-      if (match) {
-        const schedule = match[1];
-        const task = match[2];
-        const result = await addCronJob(env, schedule, task);
-        if (result) {
-          await postToSlack(channel, `✅ Cron job added: "${schedule}" → "${task}"`, env);
-        } else {
-          await postToSlack(channel, "❌ Failed to add cron job", env);
-        }
+    if (intent.intent === "add_cron" && intent.schedule && intent.task) {
+      const result = await addCronJob(env, intent.schedule, intent.task);
+      if (result) {
+        await postToSlack(channel, `✅ Cron job added: "${intent.schedule}" → "${intent.task}"`, env);
       } else {
-        await postToSlack(channel, "Format: add cron job 'every 5 minutes' to 'run tests'", env);
+        await postToSlack(channel, "❌ Failed to add cron job", env);
       }
       return new Response("OK");
     }
 
-    if (text.includes("delete cron job") || text.includes("remove cron job")) {
+    if (intent.intent === "delete_cron") {
       const jobs = await getCronJobs(env);
       if (jobs.length === 0) {
         await postToSlack(channel, "No cron jobs to delete", env);
-      } else {
-        // For now, delete the most recent one matching the description
-        const match = originalText.match(/(?:delete|remove)\s+cron\s+job\s+(.+)/i);
-        if (match) {
-          const search = match[1].toLowerCase();
-          const job = jobs.find(j => j.task.toLowerCase().includes(search));
-          if (job) {
-            await deleteCronJob(env, job.id);
-            await postToSlack(channel, `✅ Deleted cron job: ${job.task}`, env);
-          } else {
-            await postToSlack(channel, "❌ Cron job not found. Use 'show my cron jobs' to see them.", env);
-          }
+      } else if (intent.search) {
+        const job = jobs.find(j => j.task.toLowerCase().includes(intent.search!.toLowerCase()));
+        if (job) {
+          await deleteCronJob(env, job.id);
+          await postToSlack(channel, `✅ Deleted cron job: ${job.task}`, env);
+        } else {
+          await postToSlack(channel, `❌ No job matching "${intent.search}" found.`, env);
         }
+      } else {
+        await postToSlack(channel, "Which job would you like to delete? Try: 'delete my email reminder job'", env);
       }
       return new Response("OK");
     }
