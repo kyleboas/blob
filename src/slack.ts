@@ -1,6 +1,7 @@
 import type { Env } from "./types";
 import { getRepos } from "./storage";
 import { callLLMWithModelSelection } from "./llm";
+import { getSystemPromptWithCapabilities } from "./capabilities";
 
 // Track processed event IDs to prevent duplicates
 const processedEvents = new Set<string>();
@@ -33,7 +34,7 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
       return new Response("OK"); // Already processed
     }
     processedEvents.add(eventId);
-    
+
     // Clean up old events after timeout
     setTimeout(() => processedEvents.delete(eventId), EVENT_TIMEOUT);
   }
@@ -50,9 +51,10 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
     const repos = await getRepos(env);
     const reposContext = repos.join(", ");
 
-    // Send to LLM with model selection
-    const systemPrompt = `You are Blob, an autonomous coding agent. You manage repositories: ${reposContext}. You can add repos, set goals, and run tasks. Be helpful and concise.`;
-    
+    // Build system prompt with capabilities
+    const basePrompt = `You are Blob, an autonomous coding agent. You manage repositories: ${reposContext}.`;
+    const systemPrompt = getSystemPromptWithCapabilities(basePrompt, env);
+
     try {
       const result = await callLLMWithModelSelection([
         { role: "system", content: systemPrompt },
