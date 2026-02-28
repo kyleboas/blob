@@ -4,6 +4,7 @@ import { MemoryDO } from "./memory-do";
 import { getRepos, addRepo, getRepoGoals, setRepoGoals } from "./storage";
 import { Agent } from "./agent";
 import { handleSlackEvent } from "./slack";
+import { triggerCatalogUpdate } from "./memory";
 
 function json(data: unknown): Response {
   return new Response(JSON.stringify(data), { headers: { "content-type": "application/json" } });
@@ -53,15 +54,17 @@ export default {
     return new Response("Not found", { status: 404 });
   },
 
-  async scheduled(_: ScheduledEvent, env: Env): Promise<void> {
-    // Update model catalog via cron
-    const do_ = env.MEMORY?.idFromName("memory");
-    if (do_) {
-      const stub = env.MEMORY.get(do_);
-      await stub.fetch("http://do/catalog/update", { method: "POST" }).catch(() => {});
+  async scheduled(event: ScheduledEvent, env: Env): Promise<void> {
+    const cron = event.cron;
+    
+    // Weekly cron: Update model catalog
+    if (cron === "0 0 * * 0") {
+      const result = await triggerCatalogUpdate(env);
+      console.log("Catalog update:", result);
+      return;
     }
     
-    // Run agent on repos
+    // Every 5 minutes: Run agent on repos
     const repos = await getRepos(env);
     for (const repo of repos) {
       const goals = await getRepoGoals(env, repo);
