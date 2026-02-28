@@ -2678,7 +2678,16 @@ Use the bash, write, or edit tool to take action right now.`;
       
       const heartbeats = listHeartbeats(this.db, 10);
       if (heartbeats.length === 0) {
-        return "Heartbeats are enabled and running. The queue is currently empty - I'll generate new autonomous tasks shortly.";
+        // Check if goals are set - needed for autonomous task generation
+        const userConfig = await this.getUserConfiguration();
+        const repoGoals = getRepositoryGoals(userConfig, "kyleboas", "blob");
+        const localGoalsJson = getSetting(this.db, "repo_goals:kyleboas/blob");
+        const hasGoals = repoGoals || (localGoalsJson && JSON.parse(localGoalsJson).length > 0);
+        
+        if (!hasGoals) {
+          return "Heartbeats are enabled and running. The queue is empty.\n\nTo enable autonomous task generation, set your goals:\n\"My goals are: improve test coverage, fix bugs, add documentation\"";
+        }
+        return "Heartbeats are enabled and running. The queue is empty - I'll generate new autonomous tasks shortly.";
       }
 
       const statusLines = heartbeats.map(h => {
