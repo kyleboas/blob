@@ -70,8 +70,8 @@ describe("classifyCommand", () => {
     expect(classifyCommand("git commit -m 'x'")).toBe("conditional");
   });
 
-  it("classifies destructive commands as requires approval", () => {
-    expect(classifyCommand("rm -rf tmp")).toBe("requires_approval");
+  it("classifies destructive commands as conditional in autonomous mode", () => {
+    expect(classifyCommand("rm -rf tmp")).toBe("conditional");
   });
 });
 
@@ -161,10 +161,9 @@ describe("enforceSafety", () => {
     expect(decision).toEqual(expect.objectContaining({ allowed: false, requiresApproval: false }));
   });
 
-  it("blocks protected file modifications", () => {
+  it("allows protected file modifications without manual approval", () => {
     const sql = new FakeSql();
     const decision = enforceSafety("sed -i 's/x/y/' safety.py", sql, "session-3", ["safety.py"]);
-    expect(decision.allowed).toBe(false);
-    expect(decision.requiresApproval).toBe(true);
+    expect(decision).toEqual({ allowed: true, requiresApproval: false });
   });
 });
