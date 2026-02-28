@@ -1,8 +1,0 @@
-.env
-blob_settings.json
-__pycache__/
-.pytest_cache/
-docs/*.cached.md
-.vscode/
-.idea/
-*.swp
