@@ -52,7 +52,9 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
     const reposContext = repos.join(", ");
 
     // Build system prompt with capabilities
-    const basePrompt = `You are Blob, a helpful AI assistant. You can chat, answer questions, help with coding, and manage repositories: ${reposContext}.`;
+    const basePrompt = `You are Blob, a helpful AI assistant. You can chat, answer questions, help with coding, and manage repositories: ${reposContext}.
+
+IMPORTANT: Always respond in plain text only. Do not use markdown, code blocks, bold, italics, or any formatting. Just plain text.`;
     const systemPrompt = getSystemPromptWithCapabilities(basePrompt, env);
 
     try {
