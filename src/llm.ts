@@ -1,10 +1,9 @@
 import type { Env } from "./types";
-import { classifyComplexity, selectModel } from "./models";
 
 export async function callLLM(
   messages: Array<{ role: string; content: string }>,
   env: Env,
-  opts: { maxTokens?: number; model?: string } = {}
+  opts: { maxTokens?: number } = {}
 ): Promise<string> {
   if (!env.AI_GATEWAY_BASE_URL || !env.AI_GATEWAY_TOKEN) {
     throw new Error("AI Gateway not configured");
@@ -17,7 +16,7 @@ export async function callLLM(
       "Authorization": `Bearer ${env.AI_GATEWAY_TOKEN}`,
     },
     body: JSON.stringify({
-      model: opts.model ?? "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      model: "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
       messages,
       max_tokens: opts.maxTokens ?? 4096,
     }),
@@ -35,20 +34,6 @@ export async function callLLM(
   }
   
   return data.choices[0]?.message?.content ?? "";
-}
-
-export async function callLLMWithRouting(
-  messages: Array<{ role: string; content: string }>,
-  env: Env,
-  taskDescription: string
-): Promise<string> {
-  const complexity = await classifyComplexity(taskDescription, env);
-  const model = selectModel(complexity);
-  
-  return callLLM(messages, env, { 
-    model: model.id, 
-    maxTokens: model.maxTokens 
-  });
 }
 
 export async function plan(goals: string[], env: Env): Promise<string> {
