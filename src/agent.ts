@@ -3021,26 +3021,18 @@ ${auditContext}` }
     const { sessionId, previousSessionId } = resolveOrCreateSession(this.db, this.deps.now());
     const priorMessages = getHistory(this.db, sessionId);
 
-    // Use LLM-based classification for routing (structured output, not regex)
-    let classification: IntentClassificationWithEntities;
-    try {
-      classification = await this.classifyIntentWithEntities(task);
-    } catch {
-      // Fallback to simple heuristic if LLM fails
-      classification = { 
-        intent: "general_chat", 
-        confidence: 0.5, 
-        entities: {} 
-      };
-    }
-
-    // Determine message type from classification
+    // Determine message type: skip LLM call for obvious greetings
     let messageType: "chat" | "routine" | "complex";
-    if (isGreeting || classification.intent === "general_chat") {
+    if (isGreeting) {
       messageType = "chat";
     } else {
-      // Use complexity from classification, default to complex (user wants thorough solutions)
-      messageType = classification.complexity ?? "complex";
+      let classification: IntentClassificationWithEntities;
+      try {
+        classification = await this.classifyIntentWithEntities(task);
+      } catch {
+        classification = { intent: "general_chat", confidence: 0.5, complexity: "complex", entities: {} };
+      }
+      messageType = classification.intent === "general_chat" ? "chat" : (classification.complexity ?? "complex");
     }
 
     // Handle session summarization in background for chat messages to reduce latency
