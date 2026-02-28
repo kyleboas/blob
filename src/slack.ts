@@ -3,10 +3,6 @@ import { getRepos } from "./storage";
 import { callLLMWithModelSelection } from "./llm";
 import { getSystemPromptWithCapabilities } from "./capabilities";
 
-// Track processed event IDs to prevent duplicates
-const processedEvents = new Set<string>();
-const EVENT_TIMEOUT = 5 * 60 * 1000; // 5 minutes
-
 export async function handleSlackEvent(request: Request, env: Env): Promise<Response> {
   const body = await request.json() as {
     type?: string;
@@ -27,16 +23,18 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
     return new Response(body.challenge);
   }
 
-  // Deduplicate by event_id
+  // Deduplicate using DO
   const eventId = body.event_id || body.event?.ts;
-  if (eventId) {
-    if (processedEvents.has(eventId)) {
+  if (eventId && env.BLOB) {
+    const do_ = env.BLOB.get(env.BLOB.idFromName("blob"));
+    const checkRes = await do_.fetch("http://do/events/check", {
+      method: "POST",
+      body: JSON.stringify({ eventId }),
+    });
+    const { processed } = await checkRes.json() as { processed: boolean };
+    if (processed) {
       return new Response("OK"); // Already processed
     }
-    processedEvents.add(eventId);
-
-    // Clean up old events after timeout
-    setTimeout(() => processedEvents.delete(eventId), EVENT_TIMEOUT);
   }
 
   // Handle message events

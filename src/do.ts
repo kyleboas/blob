@@ -6,6 +6,7 @@ interface BlobState {
   messages: Array<{ role: string; content: string; timestamp: number }>;
   userPreferences: Record<string, string>;
   modelCatalog?: Record<string, { name: string; description: string; maxTokens: number }>;
+  processedEvents?: Array<{ id: string; timestamp: number }>;
 }
 
 const DEFAULT_CATALOG: Record<string, { name: string; description: string; maxTokens: number }> = {
@@ -119,6 +120,29 @@ export class BlobDO {
       this.data.modelCatalog = catalog;
       await this.save();
       return json({ saved: true, count: Object.keys(catalog).length });
+    }
+
+    // Event deduplication endpoint
+    if (url.pathname === "/events/check" && request.method === "POST") {
+      const { eventId } = await request.json() as { eventId: string };
+      const events = this.data.processedEvents || [];
+      const now = Date.now();
+      const fiveMinutes = 5 * 60 * 1000;
+      
+      // Clean old events
+      const validEvents = events.filter(e => now - e.timestamp < fiveMinutes);
+      
+      // Check if already processed
+      if (validEvents.some(e => e.id === eventId)) {
+        return json({ processed: true });
+      }
+      
+      // Add to processed
+      validEvents.push({ id: eventId, timestamp: now });
+      this.data.processedEvents = validEvents;
+      await this.save();
+      
+      return json({ processed: false });
     }
 
     if (url.pathname === "/catalog/update" && request.method === "POST") {
