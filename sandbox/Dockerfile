@@ -4,10 +4,10 @@ RUN apk add --no-cache bash git nodejs npm python3 py3-pip
 
 WORKDIR /workspace
 
-# Simple HTTP server to receive commands
-COPY server.sh /server.sh
-RUN chmod +x /server.sh
+# HTTP server to execute commands
+COPY server.py /server.py
+RUN chmod +x /server.py
 
 EXPOSE 8080
 
-CMD ["/server.sh"]
+CMD ["python3", "/server.py"]
