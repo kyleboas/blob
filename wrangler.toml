@@ -1,4 +1,4 @@
-name = "blob-agent"
+name = "blob-agent" 
 main = "src/index.ts"
 compatibility_date = "2024-02-08"
 
