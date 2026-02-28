@@ -67,7 +67,7 @@ import {
 } from "./tools";
 import { mapChannelToDO, postApprovalRequest, postMessage } from "./slack";
 import { createApprovalRequest, expireTimedOutApprovals, resolveApprovalReaction, type PendingApproval } from "./approval";
-import { classifyIntentWithEntities, extractTextContent, getCacheStats } from "./llm";
+import { classifyIntentWithEntities, extractTextContent, getCacheStats, type IntentClassificationWithEntities } from "./llm";
 import { CORE_TOOLS, loadExtensions, type ExtensionTool } from "./pi-tools";
 import { SessionTree, generateSessionId, type SessionMessage, type SessionNode } from "./pi-sessions";
 import { registerBuiltinExtensions } from "./pi-extensions";
@@ -3006,80 +3006,41 @@ ${auditContext}` }
     if (!channel || !task) {
       return;
     }
-    // Quick path: Check for status queries that need data lookup - route to sub-agent immediately
-    const statusQueryPatterns = [
-      /show\s+(?:my\s+)?(?:heartbeat|goal|task|deploy)/i,
-      /what\s+(?:are\s+)?(?:my\s+)?(?:goal|heartbeat|task)/i,
-      /list\s+(?:my\s+)?(?:heartbeat|goal|task)/i,
-      /(?:heartbeat|goal|task|deploy)\s+status/i,
-    ];
-    const isStatusQuery = statusQueryPatterns.some(p => p.test(task));
 
-    // Fast-path simple greetings to chat without router call
+    // Fast-path: obvious greetings need no LLM classification
     const greetingPatterns = [
       /^(hi|hello|hey|yo|sup|howdy|greetings)(\s|$)/i,
       /^(good\s+(morning|afternoon|evening))/i,
       /^(thanks|thank you|ty)(\s|$)/i,
       /^(ok|okay|got it|understood)(\s|$)/i,
       /^(bye|goodbye|see ya|cya)(\s|$)/i,
-      /^(yes|no|maybe)(\s|$)/i,
-      /^(cool|nice|awesome|great|good)(\s|$)/i,
     ];
     const isGreeting = greetingPatterns.some(p => p.test(task));
 
-    // Fast-path self-knowledge questions to chat (no lookup needed)
-    const selfKnowledgePatterns = [
-      /what\s+(model|ai|llm|agent)\s+(are|running|using|is)/i,
-      /who\s+(are|made|built|created)\s+you/i,
-      /what\s+(can|do)\s+you\s+do/i,
-      /how\s+(do|does)\s+(you|blob)\s+work/i,
-      /what\s+is\s+(your|blob's)\s+(name|purpose|goal)/i,
-      /tell\s+me\s+about\s+(yourself|blob)/i,
-      /what\s+time\s+is\s+it/i,
-      /what's\s+the\s+time/i,
-      /current\s+time/i,
-      /where\s+are\s+you\s+(hosted|running|located)/i,
-      /what\s+(language|tech|stack)\s+(are|do)\s+you\s+use/i,
-    ];
-    const isSelfKnowledge = selfKnowledgePatterns.some(p => p.test(task));
-
-    // Fast-path common web queries that need real-time data
-    const simpleWebQueryPatterns = [
-      /(?:what|which)\s+(?:team\s+)?(?:is\s+)?(?:playing|won|score)/i,
-      /(?:sports?|game|match)\s+(?:score|result|update)/i,
-      /(?:weather|temperature)\s+(?:in|at|for)/i,
-      /(?:stock|crypto|bitcoin|eth)\s+(?:price|value)/i,
-      /(?:current|today'?s?)\s+(?:date|day)/i,
-    ];
-    const isSimpleWebQuery = simpleWebQueryPatterns.some(p => p.test(task));
-
-    // Orchestrator owns session lifecycle and conversation memory.
-    // It resolves (or creates) the current session, handles end-of-session
-    // summarisation, and passes the accumulated history to the ephemeral
-    // sub-agent so the sub-agent starts with full conversation context.
+    // Orchestrator owns session lifecycle and conversation memory
     const { sessionId, previousSessionId } = resolveOrCreateSession(this.db, this.deps.now());
-
-    // Snapshot the history *before* appending the new user message so that
-    // runAgentLoop on the sub-agent can append it itself (preserving the
-    // existing load-then-append pattern).
     const priorMessages = getHistory(this.db, sessionId);
 
-    // No router model - use fast-path patterns to decide routing
-    // Chat model handles simple queries; sub-agents handle tasks
+    // Use LLM-based classification for routing (structured output, not regex)
+    let classification: IntentClassificationWithEntities;
+    try {
+      classification = await this.classifyIntentWithEntities(task);
+    } catch {
+      // Fallback to simple heuristic if LLM fails
+      classification = { 
+        intent: "general_chat", 
+        confidence: 0.5, 
+        entities: {} 
+      };
+    }
+
+    // Determine message type from classification
     let messageType: "chat" | "routine" | "complex";
-    let taskHint: string | undefined;
-    if (isStatusQuery) {
-      messageType = "routine";
-    } else if (isGreeting || isSelfKnowledge) {
+    if (isGreeting || classification.intent === "general_chat") {
       messageType = "chat";
-    } else if (isSimpleWebQuery) {
-      messageType = "routine";
-      taskHint = "Use web_fetch tool to get current data";
     } else {
-      // Simple heuristic: short messages = chat, longer = routine, code-related = complex
-      const isCodeRelated = /\b(code|fix|bug|implement|function|class|refactor|test|debug)\b/i.test(task);
-      const isLongTask = task.length > 200;
-      messageType = isCodeRelated && isLongTask ? "complex" : isLongTask ? "routine" : "chat";
+      // Use complexity from classification, default to routine
+      messageType = classification.complexity ?? "routine";
     }
 
     // Handle session summarization in background for chat messages to reduce latency
@@ -3100,7 +3061,7 @@ ${auditContext}` }
     saveMessage(this.db, sessionId, { role: "user", content: task });
 
     // FAST PATH: Use Workers AI for simple chat (no external API call)
-    if ((messageType === "chat" || isGreeting || isSelfKnowledge) && shouldUseWorkersAI(task)) {
+    if (messageType === "chat" && shouldUseWorkersAI(task)) {
       const now = new Date();
       const timeString = now.toLocaleString('en-US', {
         weekday: 'long',
@@ -3144,7 +3105,7 @@ ${auditContext}` }
     }
 
     // FALLBACK: Regular chat model for complex conversations
-    if (messageType === "chat" || isGreeting || isSelfKnowledge) {
+    if (messageType === "chat") {
       const now = new Date();
       const timeString = now.toLocaleString('en-US', {
         weekday: 'long',
@@ -3297,8 +3258,7 @@ ${auditContext}` }
             priorMessages,
             systemPrompt,
             orchestratorSessionId: sessionId,
-            taskComplexityHint,
-            taskHint
+            taskComplexityHint
           })
         });
       } catch (err) {

@@ -637,6 +637,7 @@ No other text, no markdown, just the JSON.`;
 export interface IntentClassificationWithEntities {
   intent: "time_query" | "memory_name_query" | "memory_location_query" | "weather_query" | "set_name" | "set_location" | "set_repo" | "heartbeat_status" | "pause_heartbeats" | "start_heartbeats" | "deployment_status" | "record_deployment" | "merge_staging" | "show_goals" | "set_goals" | "general_chat";
   confidence: number;
+  complexity?: "routine" | "complex";
   entities: {
     location?: string;
     name?: string;
@@ -706,8 +707,12 @@ Intents:
 - merge_staging: Merging staging to production ("merge staging to production")
 - general_chat: General conversation or unclear intent
 
+Also classify the complexity for execution tasks:
+- routine: Simple queries, status checks, memory lookups, simple commands
+- complex: Code changes, refactoring, bug fixes, multi-step operations, architecture decisions
+
 Respond with ONLY a JSON object:
-{"intent": "intent_name", "confidence": 0.95, "entities": {"location": "London", "name": "", "owner": "", "repo": ""}}
+{"intent": "intent_name", "confidence": 0.95, "complexity": "routine", "entities": {"location": "London", "name": "", "owner": "", "repo": ""}}
 
 Include only relevant entities. Use empty strings for missing entities. No markdown, just JSON.` + getLearningExamples();
 
@@ -731,4 +736,64 @@ Include only relevant entities. Use empty strings for missing entities. No markd
   }
 
   return { intent: "general_chat", confidence: 0, entities: {} };
+}
+
+// Task complexity classification result
+export interface ComplexityClassification {
+  complexity: "routine" | "complex";
+  confidence: number;
+  reasoning?: string;
+}
+
+// Classify task complexity using LLM with structured output
+export async function classifyTaskComplexity(
+  task: string,
+  llmCall: (input: CallLLMInput) => Promise<LLMResponse>
+): Promise<ComplexityClassification> {
+  const systemPrompt = `You are a task complexity classifier for Blob, an AI coding assistant.
+
+Analyze the task and classify it as either "routine" or "complex":
+
+ROUTINE tasks:
+- Simple file reads/writes
+- Running basic commands (ls, cat, grep)
+- Simple text edits
+- Status checks
+- Weather lookups
+- Memory queries
+
+COMPLEX tasks:
+- Code refactoring across multiple files
+- Bug fixes requiring analysis
+- Implementing new features
+- Architecture changes
+- Multi-step operations
+- Tasks requiring reasoning about code structure
+
+Respond with ONLY a JSON object:
+{"complexity": "routine" or "complex", "confidence": 0.95, "reasoning": "brief explanation"}
+
+No markdown, just JSON.`;
+
+  try {
+    const response = await llmCall({
+      systemPrompt,
+      messages: [{ role: "user", content: `Task: ${task}` }],
+      taskComplexityHint: "routine"
+    });
+
+    const content = extractTextContent(response);
+    const jsonMatch = content.match(/\{[^}]+\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]) as ComplexityClassification;
+      if (parsed.complexity && typeof parsed.confidence === "number") {
+        return parsed;
+      }
+    }
+  } catch {
+    // Fall through to default
+  }
+
+  // Default to routine for safety
+  return { complexity: "routine", confidence: 0.5 };
 }
