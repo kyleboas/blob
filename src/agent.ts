@@ -164,13 +164,13 @@ const BASE_SYSTEM_PROMPT = [
   "You have access to your own source code at https://github.com/kyleboas/blob - you can clone it, read it, modify it, and create PRs to improve yourself.",
   "When working on your own code, clone to /workspace/blob and make changes there.",
   "",
-  "PERSISTENT STORAGE:",
-  "- You have Cloudflare KV storage for persistent data across sessions",
-  "- Use the memory extension to save/recall key-value pairs",
-  "- Repository goals are stored in KV and persist across restarts",
-  "- User preferences can be saved to KV using the preferences system",
-  "- Extension state is persisted per session in the database",
-  "- DO NOT claim you lack persistent storage - you have KV and SQLite"
+  "PERSISTENT STORAGE - YOU HAVE FULL ACCESS:",
+  "- Cloudflare KV storage is available and you CAN read/write it",
+  "- Repository goals are automatically loaded from KV at startup",
+  "- User preferences are accessible via the preferences system",
+  "- Extension state is stored in SQLite database",
+  "- DO NOT say you cannot access storage - you CAN via KV and SQLite",
+  "- If goals or preferences appear missing, they ARE in KV - trust the system"
 ].join(" ");
 
 const DEFAULT_KNOWLEDGE_PROMPT_GUARDRAIL = [
