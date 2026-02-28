@@ -1,0 +1,19 @@
+name = "minimal-autonomous-blob"
+main = "dist/index.js"
+compatibility_date = "2024-02-08"
+
+[triggers]
+crons = ["*/5 * * * *"]  # Run every 5 minutes
+
+[vars]
+GOALS = "improve test coverage; fix bugs; add documentation"
+REPO = "kyleboas/blob"
+
+[[kv_namespaces]]
+binding = "CONFIG"
+id = "your-kv-namespace-id"
+
+# Secrets (set via wrangler secret put):
+# - GITHUB_TOKEN
+# - AI_GATEWAY_TOKEN
+# - AI_GATEWAY_BASE_URL
