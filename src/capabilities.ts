@@ -6,44 +6,49 @@ export interface Capability {
 
 export const BLOB_CAPABILITIES: Capability[] = [
   {
+    name: "conversation",
+    description: "General conversation and answering questions",
+    available: true,
+  },
+  {
+    name: "coding",
+    description: "Write, review, and refactor code",
+    available: true,
+  },
+  {
     name: "repos",
-    description: "Manage repositories (add, list, set goals)",
+    description: "Manage code repositories (add, list, set goals)",
     available: true,
   },
   {
     name: "agent",
-    description: "Autonomous agent that runs every 5 minutes on configured repos",
+    description: "Autonomous agent that works on tasks every 5 minutes",
     available: true,
   },
   {
     name: "slack",
-    description: "Respond to messages in Slack",
+    description: "Chat with you in Slack",
     available: true,
   },
   {
     name: "sandbox",
-    description: "Execute bash commands in isolated Cloudflare Container",
-    available: false, // Will be true if BLOB_SANDBOX is configured
+    description: "Execute commands safely in isolated container",
+    available: false,
   },
   {
     name: "model_selection",
-    description: "Automatically select best AI model for task complexity",
-    available: true,
-  },
-  {
-    name: "model_catalog",
-    description: "Weekly auto-update of available AI models from Cloudflare",
+    description: "Intelligently select best AI model for each task",
     available: true,
   },
   {
     name: "memory",
-    description: "Persistent conversation history and user preferences",
+    description: "Remember our conversations and your preferences",
     available: true,
   },
   {
     name: "github",
-    description: "Auto-commit changes to repositories (requires GITHUB_TOKEN)",
-    available: false, // Will be true if GITHUB_TOKEN is set
+    description: "Push code changes to GitHub",
+    available: false,
   },
 ];
 
