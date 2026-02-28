@@ -80,6 +80,16 @@ class FakeSql implements SqlStorage {
       return { toArray: () => [] };
     }
 
+    if (normalized.startsWith("DROP TABLE")) {
+      return { toArray: () => [] };
+    }
+
+    // Report that the 'key' column already exists so migrations are skipped in tests
+    // (FakeSql always starts with a fresh, correct schema).
+    if (normalized.startsWith("PRAGMA table_info(")) {
+      return { toArray: () => [{ name: "key" }] as Row[] };
+    }
+
     if (normalized.startsWith("INSERT INTO conversation_messages")) {
       this.messages.push({
         id: this.nextMessageId++,
