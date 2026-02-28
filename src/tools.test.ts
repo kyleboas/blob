@@ -1,57 +1,41 @@
 import { describe, expect, it } from "vitest";
 import {
+  READ_TOOL,
+  WRITE_TOOL,
+  EDIT_TOOL,
   BASH_TOOL,
-  CREATE_TOOL_TOOL,
-  compileDynamicToolCommand,
-  dynamicToolToAnthropicSchema,
-  formatToolResult,
-  validateDynamicToolDefinition
+  formatToolResult
 } from "./tools";
+
+describe("READ_TOOL", () => {
+  it("exposes required anthropic tool schema fields", () => {
+    expect(READ_TOOL.name).toBe("read");
+    expect(READ_TOOL.input_schema.type).toBe("object");
+    expect(READ_TOOL.input_schema.required).toContain("path");
+  });
+});
+
+describe("WRITE_TOOL", () => {
+  it("exposes required anthropic tool schema fields", () => {
+    expect(WRITE_TOOL.name).toBe("write");
+    expect(WRITE_TOOL.input_schema.type).toBe("object");
+    expect(WRITE_TOOL.input_schema.required).toEqual(["path", "content"]);
+  });
+});
+
+describe("EDIT_TOOL", () => {
+  it("exposes required anthropic tool schema fields", () => {
+    expect(EDIT_TOOL.name).toBe("edit");
+    expect(EDIT_TOOL.input_schema.type).toBe("object");
+    expect(EDIT_TOOL.input_schema.required).toEqual(["path", "old_text", "new_text"]);
+  });
+});
 
 describe("BASH_TOOL", () => {
   it("exposes required anthropic tool schema fields", () => {
     expect(BASH_TOOL.name).toBe("bash");
     expect(BASH_TOOL.input_schema.type).toBe("object");
     expect(BASH_TOOL.input_schema.required).toContain("command");
-  });
-});
-
-describe("CREATE_TOOL_TOOL", () => {
-  it("exposes a schema for creating tools", () => {
-    expect(CREATE_TOOL_TOOL.name).toBe("create_tool");
-    expect(CREATE_TOOL_TOOL.input_schema.required).toEqual(["name", "description", "command_template"]);
-  });
-});
-
-describe("dynamic tools", () => {
-  it("validates and compiles dynamic tool commands", () => {
-    const validated = validateDynamicToolDefinition({
-      name: "List Repo Files",
-      description: "List repository files in a path",
-      command_template: "find {path} -maxdepth 2 -type f",
-      args: ["path"]
-    });
-
-    expect(validated.ok).toBe(true);
-    if (!validated.ok) {
-      return;
-    }
-
-    const anthropicSchema = dynamicToolToAnthropicSchema(validated.definition);
-    expect(anthropicSchema.name).toBe("list_repo_files");
-    expect(anthropicSchema.input_schema.required).toEqual(["path"]);
-
-    const compiled = compileDynamicToolCommand(validated.definition, { path: "/workspace/blob" });
-    expect(compiled).toEqual({ ok: true, command: "find /workspace/blob -maxdepth 2 -type f" });
-  });
-
-  it("rejects reserved names", () => {
-    const validated = validateDynamicToolDefinition({
-      name: "bash",
-      description: "bad",
-      command_template: "echo hi"
-    });
-    expect(validated).toEqual({ ok: false, reason: 'Tool name "bash" is reserved.' });
   });
 });
 

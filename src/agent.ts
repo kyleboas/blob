@@ -5,7 +5,6 @@ import {
   COMPACTION_TOKEN_THRESHOLD,
   BACKGROUND_TASK_INTERVAL_MS,
   PLANNER_AUDIT_MAX_ATTEMPTS,
-  MODEL_ROUTER,
   MODEL_CHAT,
   MODEL_PLANNER_SIMPLE,
   MODEL_PLANNER_COMPLEX,
@@ -15,7 +14,7 @@ import {
 } from "./config";
 import { loadUserConfiguration, getRepositoryGoals, saveRepositoryGoals } from "./kv-loader";
 import type { UserConfiguration } from "./kv-schema";
-import { callLLM, classifyMessage, type LLMResponse } from "./llm";
+import { callLLM, type LLMResponse } from "./llm";
 import { callWorkersAI, shouldUseWorkersAI } from "./workers-ai";
 import { enforceSafety, isSelfModificationCommand } from "./safety";
 import { SandboxClient, SANDBOX_ENV_FILE, type SandboxBinding } from "./sandbox-client";
@@ -36,7 +35,6 @@ import {
   listRecentOperatorFeedback,
   getModelSettings,
   getPromptPolicySettings,
-  setRouterModel,
   setChatModel,
   setPlannerSimpleModel,
   setPlannerComplexModel,
@@ -64,18 +62,11 @@ import {
   type SqlStorage
 } from "./storage";
 import {
+  READ_TOOL,
+  WRITE_TOOL,
+  EDIT_TOOL,
   BASH_TOOL,
-  CREATE_TOOL_TOOL,
-  WEB_FETCH_TOOL,
-  WEATHER_TOOL,
-  SQL_QUERY_TOOL,
-  KV_GET_TOOL,
-  KV_PUT_TOOL,
-  compileDynamicToolCommand,
-  dynamicToolToAnthropicSchema,
-  formatToolResult,
-  type DynamicToolDefinition,
-  validateDynamicToolDefinition
+  formatToolResult
 } from "./tools";
 import { mapChannelToDO, postApprovalRequest, postMessage } from "./slack";
 import { createApprovalRequest, expireTimedOutApprovals, resolveApprovalReaction, type PendingApproval } from "./approval";
@@ -116,6 +107,7 @@ interface AgentDeps {
   postSlackMessage: typeof postMessage;
   postSlackApproval: typeof postApprovalRequest;
   now: () => number;
+  sandbox: { readFile: (path: string) => Promise<string>; writeFile: (path: string, content: string) => Promise<void> };
 }
 
 interface PlannerAuditResult {
@@ -142,7 +134,11 @@ const DEFAULT_DEPS: AgentDeps = {
   llmCall: callLLM,
   postSlackMessage: postMessage,
   postSlackApproval: postApprovalRequest,
-  now: () => Date.now()
+  now: () => Date.now(),
+  sandbox: {
+    readFile: async () => { throw new Error("Sandbox not configured"); },
+    writeFile: async () => { throw new Error("Sandbox not configured"); }
+  }
 };
 
 // Wraps a string in single quotes and escapes any embedded single quotes so it
@@ -299,7 +295,6 @@ function buildSystemPrompt(_knowledge: string, policies: PromptPolicies, repoGoa
 
 
 interface RuntimeModelSettings {
-  routerModel: string;
   chatModel: string;
   plannerSimpleModel: string;
   plannerComplexModel: string;
@@ -351,9 +346,9 @@ function parseSettingsCommand(rawText: string): SettingsCommand | null {
     return { type: "show" };
   }
 
-  const setMatch = text.match(/^set\s+(router|chat|simple|routine|complex|planner-simple|planner-complex|execution-simple|execution-complex|executor-simple|executor-complex)\s+model\s+(?:to\s+)?(.+)$/i)
-    ?? text.match(/^set\s+model\s+(router|chat|simple|routine|complex|planner-simple|planner-complex|execution-simple|execution-complex|executor-simple|executor-complex)\s+(?:to\s+)?(.+)$/i)
-    ?? text.match(/^use\s+(.+)\s+for\s+(router|chat|simple|routine|complex|planner-simple|planner-complex|execution-simple|execution-complex|executor-simple|executor-complex)(?:\s+tasks?)?$/i);
+  const setMatch = text.match(/^set\s+(chat|simple|routine|complex|planner-simple|planner-complex|execution-simple|execution-complex|executor-simple|executor-complex)\s+model\s+(?:to\s+)?(.+)$/i)
+    ?? text.match(/^set\s+model\s+(chat|simple|routine|complex|planner-simple|planner-complex|execution-simple|execution-complex|executor-simple|executor-complex)\s+(?:to\s+)?(.+)$/i)
+    ?? text.match(/^use\s+(.+)\s+for\s+(chat|simple|routine|complex|planner-simple|planner-complex|execution-simple|execution-complex|executor-simple|executor-complex)(?:\s+tasks?)?$/i);
 
   if (!setMatch) return null;
 
@@ -378,11 +373,11 @@ function parseSettingsCommand(rawText: string): SettingsCommand | null {
           ? "execution-complex"
           : rawTarget;
 
-  if (!["router", "chat", "planner-simple", "planner-complex", "execution-simple", "execution-complex"].includes(normalizedTarget)) {
+  if (!["chat", "planner-simple", "planner-complex", "execution-simple", "execution-complex"].includes(normalizedTarget)) {
     return null;
   }
 
-  return { type: "set", target: normalizedTarget as "router" | "chat" | "planner-simple" | "planner-complex" | "execution-simple" | "execution-complex", model };
+  return { type: "set", target: normalizedTarget as "chat" | "planner-simple" | "planner-complex" | "execution-simple" | "execution-complex", model };
 }
 
 
@@ -1071,7 +1066,6 @@ export class AgentDO {
 
   private getRuntimeModelSettings(): RuntimeModelSettings {
     return getModelSettings(this.db, {
-      routerModel: MODEL_ROUTER,
       chatModel: MODEL_CHAT,
       plannerSimpleModel: MODEL_PLANNER_SIMPLE,
       plannerComplexModel: MODEL_PLANNER_COMPLEX,
@@ -1107,21 +1101,18 @@ export class AgentDO {
         channel,
         [
           "Current model settings:",
-          `• router: ${settings.routerModel}`,
           `• chat: ${settings.chatModel}`,
           `• planner-simple: ${settings.plannerSimpleModel}`,
           `• planner-complex: ${settings.plannerComplexModel}`,
           `• execution-simple: ${settings.executionSimpleModel}`,
           `• execution-complex: ${settings.executionComplexModel}`,
-          "You can update by saying: set planner-simple model to <model>, set planner-complex model to <model>, set execution-simple model to <model>, set execution-complex model to <model>, set chat model to <model>, or set router model to <model>."
+          "You can update by saying: set planner-simple model to <model>, set planner-complex model to <model>, set execution-simple model to <model>, set execution-complex model to <model>, or set chat model to <model>."
         ].join("\n")
       );
       return true;
     }
 
-    if (parsed.target === "router") {
-      setRouterModel(this.db, parsed.model);
-    } else if (parsed.target === "chat") {
+    if (parsed.target === "chat") {
       setChatModel(this.db, parsed.model);
     } else if (parsed.target === "planner-simple") {
       setPlannerSimpleModel(this.db, parsed.model);
@@ -1142,7 +1133,6 @@ export class AgentDO {
       [
         `Saved ${parsed.target} model: ${parsed.model}`,
         "Updated model settings:",
-        `• router: ${settings.routerModel}`,
         `• chat: ${settings.chatModel}`,
         `• planner-simple: ${settings.plannerSimpleModel}`,
         `• planner-complex: ${settings.plannerComplexModel}`,
@@ -1165,7 +1155,6 @@ export class AgentDO {
   }): {
     aiGatewayToken?: string;
     aiGatewayBaseUrl?: string;
-    routerModel: string;
     chatModel: string;
     simpleModel: string;
     complexModel: string;
@@ -1182,7 +1171,6 @@ export class AgentDO {
     return {
       aiGatewayToken: this.env.AI_GATEWAY_TOKEN,
       aiGatewayBaseUrl: this.env.AI_GATEWAY_BASE_URL,
-      routerModel: settings.routerModel,
       chatModel: settings.chatModel,
       simpleModel: role === "execution" ? settings.executionSimpleModel : settings.plannerSimpleModel,
       complexModel: role === "execution" ? settings.executionComplexModel : settings.plannerComplexModel,
@@ -1257,10 +1245,9 @@ export class AgentDO {
 
     const executionGuardrails = buildExecutionGuardrails(userConfig);
     const systemPrompt = `${systemPromptBase}\n\n${executionGuardrails}`;
-    const dynamicTools = new Map<string, DynamicToolDefinition>();
 
     // System prompt now includes instruction for LLM to generate status updates
-    const systemPromptWithStatus = `${systemPrompt}\n\nWhen you start working on a task, begin your response with a brief status update in brackets like [Planning my approach...] or [Looking up the weather data...]. This helps the user understand what you're doing in real-time.\n\nWhen asked about weather, use the weather tool with the user's location from memory. If no location is stored, ask the user for their location first.`;
+    const systemPromptWithStatus = `${systemPrompt}\n\nWhen you start working on a task, begin your response with a brief status update in brackets like [Planning my approach...] or [Looking up the weather data...]. This helps the user understand what you're doing in real-time.\n\nWhen asked about weather, use the bash tool with curl to fetch from wttr.in. If no location is stored, ask the user for their location first.`;
 
     let finalText = "";
     let steps = 0;
@@ -1274,7 +1261,7 @@ export class AgentDO {
         () => this.deps.llmCall(this.buildLlmInput({
           systemPrompt: systemPromptWithStatus,
           messages: conversation,
-          tools: this.buildToolList(dynamicTools),
+          tools: this.buildToolList(),
           taskComplexityHint: options.taskComplexityHint,
           modelRole: "execution"
         })),
@@ -1326,7 +1313,7 @@ Use the bash, write, or edit tool to take action right now.`;
             llmResponse = await this.deps.llmCall(this.buildLlmInput({
               systemPrompt: systemPromptWithStatus,
               messages: conversation,
-              tools: this.buildToolList(dynamicTools),
+              tools: this.buildToolList(),
               taskComplexityHint: options.taskComplexityHint,
               modelRole: "execution"
             }));
@@ -1355,7 +1342,6 @@ Use the bash, write, or edit tool to take action right now.`;
 
         const decision = await this.processLlmResponse(llmResponse, channel, sessionId, {
           applySelfModificationRateLimit,
-          dynamicTools,
           conversationContext: typeof conversation[conversation.length - 1]?.content === 'string'
             ? conversation[conversation.length - 1]?.content as string
             : undefined
@@ -1377,7 +1363,7 @@ Use the bash, write, or edit tool to take action right now.`;
           () => this.deps.llmCall(this.buildLlmInput({
             systemPrompt,
             messages: conversation,
-            tools: this.buildToolList(dynamicTools),
+            tools: this.buildToolList(),
             taskComplexityHint: options.taskComplexityHint,
             modelRole: "execution"
           })),
@@ -1956,7 +1942,6 @@ Use the bash, write, or edit tool to take action right now.`;
     sessionId: string,
     options: {
       applySelfModificationRateLimit: boolean;
-      dynamicTools: Map<string, DynamicToolDefinition>;
       conversationContext?: string;
     }
   ): Promise<{ done: boolean; text: string; observations: ToolResult[] }> {
@@ -1985,73 +1970,56 @@ Use the bash, write, or edit tool to take action right now.`;
         continue;
       }
 
-
-      if (toolBlock.name === CREATE_TOOL_TOOL.name) {
-        const validation = validateDynamicToolDefinition(toolBlock.input);
-        const dangerousTemplateReason = validation.ok
-          ? this.getDangerousTemplateReason(validation.definition.commandTemplate)
-          : null;
-        const toolResult = validation.ok
-          ? dangerousTemplateReason
-            ? `Tool creation rejected: ${dangerousTemplateReason}`
-            : (() => {
-              options.dynamicTools.set(validation.definition.name, validation.definition);
-              return `Created tool "${validation.definition.name}" with args: ${validation.definition.args.join(", ") || "(none)"}.`;
-            })()
-          : `Tool creation failed: ${validation.reason}`;
-
-        observations.push(formatToolResult(toolBlock.id, toolResult));
+      // Handle READ tool
+      if (toolBlock.name === READ_TOOL.name) {
+        const filePath = String(toolBlock.input.path ?? "");
+        try {
+          const content = await this.deps.sandbox.readFile(filePath);
+          observations.push(formatToolResult(toolBlock.id, content));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          observations.push(formatToolResult(toolBlock.id, `Error reading file: ${message}`));
+        }
         continue;
       }
 
-      if (toolBlock.name === WEB_FETCH_TOOL.name) {
-        const url = String(toolBlock.input.url ?? "");
-        const maxLength = Number(toolBlock.input.max_length ?? 4000);
-        const fetchResult = await this.handleWebFetch(url, maxLength);
-        observations.push(formatToolResult(toolBlock.id, fetchResult));
+      // Handle WRITE tool
+      if (toolBlock.name === WRITE_TOOL.name) {
+        const filePath = String(toolBlock.input.path ?? "");
+        const content = String(toolBlock.input.content ?? "");
+        try {
+          await this.deps.sandbox.writeFile(filePath, content);
+          observations.push(formatToolResult(toolBlock.id, `File written: ${filePath}`));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          observations.push(formatToolResult(toolBlock.id, `Error writing file: ${message}`));
+        }
         continue;
       }
 
-      if (toolBlock.name === WEATHER_TOOL.name) {
-        const location = String(toolBlock.input.location ?? "");
-        const weatherResult = await this.handleWeather(location);
-        observations.push(formatToolResult(toolBlock.id, weatherResult));
+      // Handle EDIT tool
+      if (toolBlock.name === EDIT_TOOL.name) {
+        const filePath = String(toolBlock.input.path ?? "");
+        const oldText = String(toolBlock.input.old_text ?? "");
+        const newText = String(toolBlock.input.new_text ?? "");
+        try {
+          const currentContent = await this.deps.sandbox.readFile(filePath);
+          if (!currentContent.includes(oldText)) {
+            observations.push(formatToolResult(toolBlock.id, `Error: old_text not found in file`));
+            continue;
+          }
+          const newContent = currentContent.replace(oldText, newText);
+          await this.deps.sandbox.writeFile(filePath, newContent);
+          observations.push(formatToolResult(toolBlock.id, `File edited: ${filePath}`));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          observations.push(formatToolResult(toolBlock.id, `Error editing file: ${message}`));
+        }
         continue;
       }
 
-      if (toolBlock.name === SQL_QUERY_TOOL.name) {
-        const query = String(toolBlock.input.query ?? "");
-        const sqlResult = this.handleSqlQuery(query);
-        observations.push(formatToolResult(toolBlock.id, sqlResult));
-        continue;
-      }
-
-      if (toolBlock.name === KV_GET_TOOL.name) {
-        const key = String(toolBlock.input.key ?? "");
-        const kvResult = await this.handleKvGet(key);
-        observations.push(formatToolResult(toolBlock.id, kvResult));
-        continue;
-      }
-
-      if (toolBlock.name === KV_PUT_TOOL.name) {
-        const key = String(toolBlock.input.key ?? "");
-        const value = String(toolBlock.input.value ?? "");
-        const kvResult = await this.handleKvPut(key, value);
-        observations.push(formatToolResult(toolBlock.id, kvResult));
-        continue;
-      }
-
-      const dynamicTool = options.dynamicTools.get(toolBlock.name);
-      const commandResult = dynamicTool
-        ? compileDynamicToolCommand(dynamicTool, toolBlock.input)
-        : { ok: true as const, command: String(toolBlock.input.command ?? "") };
-
-      if (!commandResult.ok) {
-        observations.push(formatToolResult(toolBlock.id, `Tool execution failed: ${commandResult.reason}`));
-        continue;
-      }
-
-      const rawCommand = commandResult.command.trim();
+      // Handle BASH tool (original logic)
+      const rawCommand = String(toolBlock.input.command ?? "").trim();
       if (!rawCommand) {
         const warning = "Tool execution failed: empty command generated. Please provide a non-empty command.";
         logAgentEvent(this.db, sessionId, "trace_warning", warning);
@@ -2161,8 +2129,8 @@ Use the bash, write, or edit tool to take action right now.`;
     };
   }
 
-  private buildToolList(dynamicTools: Map<string, DynamicToolDefinition>): unknown[] {
-    return [BASH_TOOL, CREATE_TOOL_TOOL, WEB_FETCH_TOOL, WEATHER_TOOL, SQL_QUERY_TOOL, KV_GET_TOOL, KV_PUT_TOOL, ...Array.from(dynamicTools.values()).map((tool) => dynamicToolToAnthropicSchema(tool))];
+  private buildToolList(): unknown[] {
+    return [READ_TOOL, WRITE_TOOL, EDIT_TOOL, BASH_TOOL];
   }
 
   private async handleWebFetch(url: string, maxLength: number): Promise<string> {
@@ -3087,13 +3055,8 @@ ${auditContext}` }
     // existing load-then-append pattern).
     const priorMessages = getHistory(this.db, sessionId);
 
-    // Use the router model to decide whether this is a conversational message
-    // or a task that needs tool execution. Chat messages are handled inline
-    // by the chat model; tasks are siphoned off to a sub-agent running the
-    // appropriate simple or complex model in the background.
-    const settings = this.getRuntimeModelSettings();
-
-    // Fast-path status queries to sub-agent without router call
+    // No router model - use fast-path patterns to decide routing
+    // Chat model handles simple queries; sub-agents handle tasks
     let messageType: "chat" | "routine" | "complex";
     let taskHint: string | undefined;
     if (isStatusQuery) {
@@ -3104,17 +3067,10 @@ ${auditContext}` }
       messageType = "routine";
       taskHint = "Use web_fetch tool to get current data";
     } else {
-      // Build minimal system prompt for routing (no KV fetch needed)
-      const routingSystemPrompt = buildSystemPrompt(getKnowledge(this.db), this.getPromptPolicies(), null);
-      messageType = await classifyMessage({
-        aiGatewayToken: this.env.AI_GATEWAY_TOKEN,
-        aiGatewayBaseUrl: this.env.AI_GATEWAY_BASE_URL,
-        apiKey: this.env.ANTHROPIC_API_KEY,
-        openAiApiKey: this.env.OPENAI_API_KEY,
-        systemPrompt: routingSystemPrompt,
-        messages: [...priorMessages, { role: "user" as const, content: task }],
-        routerModel: settings.routerModel
-      });
+      // Simple heuristic: short messages = chat, longer = routine, code-related = complex
+      const isCodeRelated = /\b(code|fix|bug|implement|function|class|refactor|test|debug)\b/i.test(task);
+      const isLongTask = task.length > 200;
+      messageType = isCodeRelated && isLongTask ? "complex" : isLongTask ? "routine" : "chat";
     }
 
     // Handle session summarization in background for chat messages to reduce latency

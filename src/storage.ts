@@ -3,7 +3,6 @@ import type { SandboxClient } from "./sandbox-client";
 import { CONVERSATION_TIMEOUT_MINUTES } from "./config";
 
 const KNOWLEDGE_KEY = "knowledge";
-const SETTING_MODEL_ROUTER = "model_router";
 const SETTING_MODEL_CHAT = "model_chat";
 const SETTING_MODEL_SIMPLE = "model_simple";
 const SETTING_MODEL_ROUTINE = "model_routine";
@@ -570,7 +569,6 @@ export function setSessionMemorySystemPrompt(sql: SqlStorage, prompt: string): v
 export function getModelSettings(
   sql: SqlStorage,
   defaults: {
-    routerModel: string;
     chatModel: string;
     plannerSimpleModel: string;
     plannerComplexModel: string;
@@ -578,7 +576,6 @@ export function getModelSettings(
     executionComplexModel: string;
   }
 ): {
-  routerModel: string;
   chatModel: string;
   plannerSimpleModel: string;
   plannerComplexModel: string;
@@ -589,17 +586,12 @@ export function getModelSettings(
   const legacyComplex = getSetting(sql, SETTING_MODEL_COMPLEX);
 
   return {
-    routerModel: getSetting(sql, SETTING_MODEL_ROUTER) ?? defaults.routerModel,
     chatModel: getSetting(sql, SETTING_MODEL_CHAT) ?? defaults.chatModel,
     plannerSimpleModel: getSetting(sql, SETTING_MODEL_PLANNER_SIMPLE) ?? legacySimple ?? defaults.plannerSimpleModel,
     plannerComplexModel: getSetting(sql, SETTING_MODEL_PLANNER_COMPLEX) ?? legacyComplex ?? defaults.plannerComplexModel,
     executionSimpleModel: getSetting(sql, SETTING_MODEL_EXECUTION_SIMPLE) ?? defaults.executionSimpleModel,
     executionComplexModel: getSetting(sql, SETTING_MODEL_EXECUTION_COMPLEX) ?? defaults.executionComplexModel
   };
-}
-
-export function setRouterModel(sql: SqlStorage, model: string): void {
-  setSetting(sql, SETTING_MODEL_ROUTER, model);
 }
 
 export function setChatModel(sql: SqlStorage, model: string): void {

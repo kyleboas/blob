@@ -16,7 +16,7 @@ export const THINKING_MESSAGE_DELAY_MS = 2_000;
 // Cloudflare AI Gateway models (external API calls)
 // Note: GLM 4.7 Flash and Qwen 30B are FREE on Cloudflare
 // Only Claude Sonnet 4.6 is paid - use sparingly for complex tasks
-export const MODEL_ROUTER = "@cf/ibm-granite/granite-4.0-h-micro";
+// No router model - routing is done via fast-path heuristics
 export const MODEL_CHAT = "@cf/zai-org/glm-4.7-flash";
 export const MODEL_SIMPLE = "@cf/qwen/qwen3-30b-a3b-fp8";
 export const MODEL_COMPLEX = "claude-sonnet-4-6";

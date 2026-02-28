@@ -1,5 +1,4 @@
 import { mapChannelToDO, parseSlackEvent, verifySlackSignature } from "./slack";
-import { classifyMessage } from "./llm";
 import type { Env, SlackEvent } from "./types";
 
 export { AgentDO } from "./agent";
@@ -53,17 +52,10 @@ async function runDiagnostics(env: Env, traceId: string): Promise<{ trace_id: st
   }));
 
   checks.push(await runDiagCheck("llm_config", async () => {
-    const classification = await classifyMessage({
-      systemPrompt: "diag",
-      messages: [{ role: "user", content: "ping" }],
-      routerModel: "openai/gpt-4.1-mini",
-      apiKey: env.ANTHROPIC_API_KEY,
-      openAiApiKey: env.OPENAI_API_KEY,
-      aiGatewayBaseUrl: env.AI_GATEWAY_BASE_URL,
-      aiGatewayToken: env.AI_GATEWAY_TOKEN
-    });
-    if (!["chat", "routine", "complex"].includes(classification)) {
-      throw new Error("Unexpected LLM classification result");
+    // Router removed - using fast-path heuristics instead
+    // Just verify LLM config is available
+    if (!env.AI_GATEWAY_TOKEN && !env.ANTHROPIC_API_KEY) {
+      throw new Error("No LLM API credentials configured");
     }
   }));
 

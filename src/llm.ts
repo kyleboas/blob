@@ -6,7 +6,6 @@ import {
   LLM_MAX_TOKENS_SIMPLE,
   LLM_MAX_TOKENS_COMPLEX,
   LLM_REQUEST_TIMEOUT_MS,
-  MODEL_ROUTER,
   MODEL_CHAT,
   MODEL_SIMPLE,
   MODEL_COMPLEX
@@ -41,13 +40,13 @@ export function resetCacheStats(): void {
 // Update cache stats from LLM response
 function updateCacheStats(response: Record<string, any>): void {
   cacheStats.totalCalls++;
-  
+
   // Check for Anthropic cache metrics
   const usage = response.usage as Record<string, any> | undefined;
   if (usage) {
     const cacheCreation = usage.cache_creation_input_tokens as number | undefined;
     const cacheRead = usage.cache_read_input_tokens as number | undefined;
-    
+
     if (cacheRead && cacheRead > 0) {
       cacheStats.cacheHits++;
       cacheStats.tokensSaved += cacheRead;
@@ -71,7 +70,6 @@ export interface CallLLMInput {
   messages: AnthropicMessage[];
   tools?: unknown[];
   taskComplexityHint?: "routine" | "complex";
-  routerModel?: string;
   chatModel?: string;
   simpleModel?: string;
   complexModel?: string;
@@ -306,93 +304,23 @@ export function selectModel(
   return simpleModel;
 }
 
-async function decideTaskComplexityWithModel(input: {
-  fetchImpl: typeof fetch;
-  apiKey?: string;
-  openAiApiKey?: string;
-  aiGatewayToken?: string;
-  aiGatewayBaseUrl?: string;
-  systemPrompt: string;
-  messages: AnthropicMessage[];
-  routerModel: string;
-}): Promise<"routine" | "complex"> {
-  const viaGateway = Boolean(input.aiGatewayBaseUrl);
-  const useOpenAICompat = viaGateway || isOpenAIModel(input.routerModel);
+// Simple heuristic for task complexity - no router model needed
+function decideTaskComplexity(messages: AnthropicMessage[]): "routine" | "complex" {
+  const lastMessage = messages[messages.length - 1];
+  const content = typeof lastMessage?.content === "string"
+    ? lastMessage.content
+    : Array.isArray(lastMessage?.content)
+      ? lastMessage.content.map((c) => {
+          const block = c as {type?: string; text?: string};
+          return block.type === "text" ? block.text : "";
+        }).join(" ")
+      : "";
 
-  const endpoint = viaGateway
-    ? toCompatChatCompletionsUrl(input.aiGatewayBaseUrl!)
-    : (useOpenAICompat ? "https://api.openai.com/v1/chat/completions" : "https://api.anthropic.com/v1/messages");
+  // Complex if: code-related keywords AND long message
+  const isCodeRelated = /\b(code|fix|bug|implement|function|class|refactor|test|debug|architecture|design|optimize)\b/i.test(content);
+  const isLongTask = content.length > 300;
 
-  const headers: Record<string, string> = { "content-type": "application/json" };
-
-  if (useOpenAICompat) {
-    if (viaGateway) {
-      if (!input.aiGatewayToken) {
-        return "routine";
-      }
-
-      headers["cf-aig-authorization"] = asBearer(input.aiGatewayToken);
-      const providerToken = (input.openAiApiKey || input.apiKey || "").trim();
-      if (providerToken) {
-        headers.authorization = asBearer(providerToken);
-      }
-    } else {
-      if (!input.openAiApiKey) {
-        return "routine";
-      }
-      headers.authorization = `Bearer ${input.openAiApiKey}`;
-    }
-  } else {
-    if (!input.apiKey) {
-      return "routine";
-    }
-
-    headers["x-api-key"] = input.apiKey;
-    headers["anthropic-version"] = "2023-06-01";
-  }
-
-  const routingPrompt = [
-    "Classify the task complexity for model routing.",
-    "Respond with JSON only using this schema: {\"complexity\":\"routine\"|\"complex\"}.",
-    "Choose complex only for deep multi-step reasoning, large refactors, or architecture-level decisions."
-  ].join(" ");
-
-  const lastUserMessage = [...input.messages].reverse().find((m) => m.role === "user");
-  const routingPayload = typeof lastUserMessage?.content === "string"
-    ? lastUserMessage.content
-    : JSON.stringify(lastUserMessage?.content ?? "");
-
-  const body = useOpenAICompat
-    ? JSON.stringify({
-        model: viaGateway ? toGatewayModel(input.routerModel) : input.routerModel,
-        messages: [
-          { role: "system", content: routingPrompt },
-          { role: "user", content: routingPayload }
-        ],
-        max_tokens: 16,
-        temperature: 0
-      })
-    : JSON.stringify({
-        model: input.routerModel,
-        max_tokens: 16,
-        system: routingPrompt,
-        messages: [{ role: "user", content: routingPayload }]
-      });
-
-  try {
-    const response = await input.fetchImpl(endpoint, { method: "POST", headers, body });
-    if (!response.ok) {
-      return "routine";
-    }
-
-    const payload = await response.json() as Record<string, any>;
-    const decisionText = useOpenAICompat
-      ? String(payload.choices?.[0]?.message?.content ?? "")
-      : String((payload.content ?? []).map((block: { text?: string }) => block.text ?? "").join(" "));
-    return parseComplexityDecision(decisionText);
-  } catch {
-    return "routine";
-  }
+  return isCodeRelated && isLongTask ? "complex" : "routine";
 }
 
 function parseComplexityDecision(decisionText: string): "routine" | "complex" {
@@ -428,114 +356,12 @@ function parseMessageType(decisionText: string): "chat" | "routine" | "complex" 
 }
 
 
-/**
- * Uses the router model to classify an incoming message as "chat" (conversational,
- * no task execution needed), "routine" (straightforward coding/automation task), or
- * "complex" (deep multi-step reasoning, large refactor, architecture-level work).
- *
- * Falls back to "routine" on any error so the caller always gets a task routed
- * to a capable model rather than silently dropped.
- */
-export async function classifyMessage(input: {
-  fetchImpl?: typeof fetch;
-  apiKey?: string;
-  openAiApiKey?: string;
-  aiGatewayToken?: string;
-  aiGatewayBaseUrl?: string;
-  systemPrompt: string;
-  messages: AnthropicMessage[];
-  routerModel: string;
-}): Promise<"chat" | "routine" | "complex"> {
-  const fetchImpl = input.fetchImpl ?? fetch;
-  const viaGateway = Boolean(input.aiGatewayBaseUrl);
-  const useOpenAICompat = viaGateway || isOpenAIModel(input.routerModel);
-
-  const endpoint = viaGateway
-    ? toCompatChatCompletionsUrl(input.aiGatewayBaseUrl!)
-    : (useOpenAICompat ? "https://api.openai.com/v1/chat/completions" : "https://api.anthropic.com/v1/messages");
-
-  const headers: Record<string, string> = { "content-type": "application/json" };
-
-  if (useOpenAICompat) {
-    if (viaGateway) {
-      if (!input.aiGatewayToken) {
-        return "routine";
-      }
-      headers["cf-aig-authorization"] = asBearer(input.aiGatewayToken);
-      const providerToken = (input.openAiApiKey || input.apiKey || "").trim();
-      if (providerToken) {
-        headers.authorization = asBearer(providerToken);
-      }
-    } else {
-      if (!input.openAiApiKey) {
-        return "routine";
-      }
-      headers.authorization = `Bearer ${input.openAiApiKey}`;
-    }
-  } else {
-    if (!input.apiKey) {
-      return "routine";
-    }
-    headers["x-api-key"] = input.apiKey;
-    headers["anthropic-version"] = "2023-06-01";
-  }
-
-  const routingPrompt = [
-    "Classify the message type for model routing.",
-    'Respond with JSON only using this schema: {"type":"chat"|"routine"|"complex"}.',
-    'Use "chat" ONLY when the user is purely conversational (greetings, small talk, opinions) and is NOT asking Blob to perform work or provide information from its systems.',
-    'Use "routine" for:',
-    '  - Actionable execution requests (create PR, run tests, deploy)',
-    '  - Status queries ("show my heartbeats", "what are my goals", "deployment status")',
-    '  - Capability checks ("can you create a pull request", "test if you can")',
-    '  - ANY request that requires checking Blob\'s internal state or databases',
-    'Use "complex" for architecture-level decisions, deep multi-step planning, or large refactors.'
-  ].join(" ");
-
-  const lastUserMessage = [...input.messages].reverse().find((m) => m.role === "user");
-  const routingPayload = typeof lastUserMessage?.content === "string"
-    ? lastUserMessage.content
-    : JSON.stringify(lastUserMessage?.content ?? "");
-
-
-  const body = useOpenAICompat
-    ? JSON.stringify({
-        model: viaGateway ? toGatewayModel(input.routerModel) : input.routerModel,
-        messages: [
-          { role: "system", content: routingPrompt },
-          { role: "user", content: routingPayload }
-        ],
-        max_tokens: 16,
-        temperature: 0
-      })
-    : JSON.stringify({
-        model: input.routerModel,
-        max_tokens: 16,
-        system: routingPrompt,
-        messages: [{ role: "user", content: routingPayload }]
-      });
-
-  try {
-    const response = await fetchImpl(endpoint, { method: "POST", headers, body });
-    if (!response.ok) {
-      return "routine";
-    }
-    const payload = await response.json() as Record<string, any>;
-    const decisionText = useOpenAICompat
-      ? String(payload.choices?.[0]?.message?.content ?? "")
-      : String((payload.content ?? []).map((block: { text?: string }) => block.text ?? "").join(" "));
-    return parseMessageType(decisionText);
-  } catch {
-    return "routine";
-  }
-}
-
 function getModelSpecificMaxTokens(model: string, hint?: "chat" | "routine" | "complex"): number {
   // Use hint if provided, otherwise infer from model name
   if (hint === "chat") return LLM_MAX_TOKENS_CHAT;
   if (hint === "complex") return LLM_MAX_TOKENS_COMPLEX;
   if (hint === "routine") return LLM_MAX_TOKENS_SIMPLE;
-  
+
   // Infer from model name
   if (model.includes("claude")) return LLM_MAX_TOKENS_COMPLEX;
   if (model.includes("glm") || model.includes("chat")) return LLM_MAX_TOKENS_CHAT;
@@ -545,14 +371,13 @@ function getModelSpecificMaxTokens(model: string, hint?: "chat" | "routine" | "c
 export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
   const fetchImpl = input.fetchImpl ?? fetch;
   const sleepImpl = input.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const routerModel = input.routerModel ?? input.routineModel ?? MODEL_ROUTER;
   const chatModel = input.chatModel ?? MODEL_CHAT;
   const simpleModel = input.simpleModel ?? input.routineModel ?? MODEL_SIMPLE;
   const complexModel = input.complexModel ?? MODEL_COMPLEX;
 
   let model = input.model;
   let modelHint: "chat" | "routine" | "complex" | undefined;
-  
+
   if (!model) {
     const isChatTurn = !input.tools?.length && !input.taskComplexityHint;
     if (isChatTurn) {
@@ -562,21 +387,12 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
       const taskComplexityHint = input.taskComplexityHint
         ?? (simpleModel === complexModel
           ? "routine"
-          : await decideTaskComplexityWithModel({
-              fetchImpl,
-              apiKey: input.apiKey,
-              openAiApiKey: input.openAiApiKey,
-              aiGatewayToken: input.aiGatewayToken,
-              aiGatewayBaseUrl: input.aiGatewayBaseUrl,
-              systemPrompt: input.systemPrompt,
-              messages: input.messages,
-              routerModel
-            }));
+          : decideTaskComplexity(input.messages));
       model = selectModel(input.systemPrompt, input.messages, taskComplexityHint, simpleModel, complexModel);
       modelHint = taskComplexityHint === "complex" ? "complex" : "routine";
     }
   }
-  
+
   // Use model-specific max tokens, with override if provided
   const maxTokens = input.maxTokens ?? getModelSpecificMaxTokens(model, modelHint);
 
@@ -678,10 +494,10 @@ export async function callLLM(input: CallLLMInput): Promise<LLMResponse> {
 
     if (response.ok) {
       const payload = (await response.json()) as Record<string, any>;
-      
+
       // Update cache stats for tracking
       updateCacheStats(payload);
-      
+
       if (useOpenAICompat) {
         // Cloudflare Workers AI tool-calling bug: the gateway occasionally returns
         // finish_reason="stop" with content=null and no tool_calls when the model
@@ -781,7 +597,7 @@ export async function classifyIntent(
 Classify the user's message into one of these intents:
 - heartbeat_status: Questions about heartbeat status ("are heartbeats on", "show heartbeats", "heartbeat working")
 - pause_heartbeats: Request to pause/stop heartbeats
-- start_heartbeats: Request to start/resume heartbeats  
+- start_heartbeats: Request to start/resume heartbeats
 - deployment_status: Questions about deployment status
 - record_deployment: User saying they just deployed
 - merge_staging: Request to merge staging to production

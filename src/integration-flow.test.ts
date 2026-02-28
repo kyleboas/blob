@@ -230,6 +230,7 @@ describe("integration flow", () => {
       SLACK_SIGNING_SECRET: "secret",
       DIAG_TOKEN: "diag-secret",
       OPENAI_API_KEY: "key",
+      AI_GATEWAY_TOKEN: "gateway-token",
       GITHUB_TOKEN: "token"
     } as unknown as Env;
 

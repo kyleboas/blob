@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { callLLM, classifyMessage, selectModel } from "./llm";
+import { callLLM, selectModel } from "./llm";
 import { MODEL_CHAT, MODEL_COMPLEX, MODEL_ROUTINE } from "./config";
 
 describe("selectModel", () => {
@@ -345,7 +345,7 @@ describe("callLLM", () => {
     expect(body.model).toBe(`workers-ai/${MODEL_CHAT}`);
   });
 
-  it("asks the router model to choose complexity when tools are present and model is not provided", async () => {
+  it("uses heuristic to choose complexity when tools are present and model is not provided", async () => {
     const mockFetch = vi
       .fn()
       .mockResolvedValueOnce({
@@ -370,21 +370,16 @@ describe("callLLM", () => {
       aiGatewayBaseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway",
       aiGatewayToken: "gateway-token",
       openAiApiKey: "openai-key",
-      routerModel: "@cf/ibm-granite/granite-4.0-h-micro",
       simpleModel: "@cf/qwen/qwen2.5-coder-32b-instruct",
       complexModel: "anthropic/claude-sonnet-4-6",
       tools: [{ name: "bash", description: "run", input_schema: { type: "object", properties: {} } }],
       systemPrompt: "be helpful",
-      messages: [{ role: "user", content: "plan a migration" }],
+      messages: [{ role: "user", content: "plan a migration - need to refactor the entire codebase architecture and implement new features. This is a complex task that requires deep multi-step reasoning, analyzing the current code structure, designing new architecture patterns, and carefully implementing changes across multiple files. We need to consider backward compatibility, test coverage, and deployment strategy." }],
       fetchImpl: mockFetch
     });
 
-    expect(mockFetch).toHaveBeenCalledTimes(2);
-    const routingBody = JSON.parse(String(mockFetch.mock.calls[0][1]?.body));
-    expect(routingBody.model).toBe("workers-ai/@cf/ibm-granite/granite-4.0-h-micro");
-    expect(routingBody.messages[0].content).toContain("Respond with JSON only");
-
-    const generationBody = JSON.parse(String(mockFetch.mock.calls[1][1]?.body));
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const generationBody = JSON.parse(String(mockFetch.mock.calls[0][1]?.body));
     expect(generationBody.model).toBe("anthropic/claude-sonnet-4-6");
   });
 
@@ -487,47 +482,5 @@ describe("callLLM", () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
-});
-
-describe("classifyMessage", () => {
-  it("routes actionable capability checks as routine via router model", async () => {
-    const fetchSpy = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
-        choices: [{ message: { content: '{"type":"routine"}' } }]
-      })
-    }));
-
-    const result = await classifyMessage({
-      fetchImpl: fetchSpy as unknown as typeof fetch,
-      openAiApiKey: "test-token",
-      systemPrompt: "system",
-      messages: [{ role: "user", content: "Test to see if you can create a pull request to the blob repo" }],
-      routerModel: "gpt-4o-mini"
-    });
-
-    expect(result).toBe("routine");
-    expect(fetchSpy).toHaveBeenCalledOnce();
-  });
-
-  it("still routes conversational questions as chat via router model", async () => {
-    const fetchSpy = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
-        choices: [{ message: { content: '{"type":"chat"}' } }]
-      })
-    }));
-
-    const result = await classifyMessage({
-      fetchImpl: fetchSpy as unknown as typeof fetch,
-      openAiApiKey: "test-token",
-      systemPrompt: "system",
-      messages: [{ role: "user", content: "How are you today?" }],
-      routerModel: "gpt-4o-mini"
-    });
-
-    expect(result).toBe("chat");
-    expect(fetchSpy).toHaveBeenCalledOnce();
-  });
 });
 
