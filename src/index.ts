@@ -54,6 +54,14 @@ export default {
   },
 
   async scheduled(_: ScheduledEvent, env: Env): Promise<void> {
+    // Update model catalog via cron
+    const do_ = env.MEMORY?.idFromName("memory");
+    if (do_) {
+      const stub = env.MEMORY.get(do_);
+      await stub.fetch("http://do/catalog/update", { method: "POST" }).catch(() => {});
+    }
+    
+    // Run agent on repos
     const repos = await getRepos(env);
     for (const repo of repos) {
       const goals = await getRepoGoals(env, repo);

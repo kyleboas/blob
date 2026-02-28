@@ -1,5 +1,5 @@
 import type { Env } from "./types";
-import { MODEL_CATALOG, DEFAULT_MODEL, getModelCatalogDescription } from "./models";
+import { DEFAULT_MODEL, getModelCatalogDescription } from "./models";
 
 interface LLMResponse {
   content: string;
@@ -15,11 +15,14 @@ export async function callLLMWithModelSelection(
   const systemPrompt = messages.find(m => m.role === "system")?.content ?? "";
   const userMessage = messages.find(m => m.role === "user")?.content ?? "";
   
+  // Get catalog description from DO
+  const catalogDesc = await getModelCatalogDescription(env);
+  
   // First call: let the model pick which model to use
   const modelPickerMessages = [
     { 
       role: "system", 
-      content: `You are a model selector. Available models:\n${getModelCatalogDescription()}\n\nRespond with ONLY the model ID that would be best for this task. Default: ${DEFAULT_MODEL}` 
+      content: `You are a model selector. Available models:\n${catalogDesc}\n\nRespond with ONLY the model ID that would be best for this task. Default: ${DEFAULT_MODEL}` 
     },
     { role: "user", content: userMessage }
   ];
@@ -31,17 +34,23 @@ export async function callLLMWithModelSelection(
     env
   );
 
-  // Validate the selection
-  const modelId = MODEL_CATALOG[selectedModelId.trim()] ? selectedModelId.trim() : DEFAULT_MODEL;
-  const modelInfo = MODEL_CATALOG[modelId];
+  // Validate the selection - check if it's in the catalog
+  const catalog = await getModelCatalogDescription(env);
+  const validModels = catalog.split("\n").map(line => line.split(":")[0].replace("- ", "").trim());
+  const modelId = validModels.includes(selectedModelId.trim()) ? selectedModelId.trim() : DEFAULT_MODEL;
+  
+  // Extract model info from catalog
+  const modelLine = catalog.split("\n").find(line => line.includes(modelId));
+  const modelName = modelLine ? modelLine.split(":")[1]?.split("-")[0].trim() : modelId;
+  const maxTokensMatch = modelLine?.match(/max (\d+) tokens/);
+  const maxTokens = maxTokensMatch ? parseInt(maxTokensMatch[1]) : 4096;
   
   // Second call: actually process the request with selected model
-  const maxTokens = opts.maxTokens ?? modelInfo.maxTokens;
-  const response = await callLLMRaw(messages, modelId, maxTokens, env);
+  const response = await callLLMRaw(messages, modelId, opts.maxTokens ?? maxTokens, env);
 
   return {
     content: response,
-    modelUsed: modelInfo.name,
+    modelUsed: modelName,
     modelSwitched: modelId !== DEFAULT_MODEL
   };
 }

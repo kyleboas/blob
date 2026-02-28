@@ -4,14 +4,34 @@ interface Memory {
   messages: Array<{ role: string; content: string; timestamp: number }>;
   userPreferences: Record<string, string>;
   context: Record<string, unknown>;
+  modelCatalog?: Record<string, { name: string; description: string; maxTokens: number }>;
 }
+
+const DEFAULT_CATALOG: Record<string, { name: string; description: string; maxTokens: number }> = {
+  "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast": {
+    name: "Llama 3.3 70B Fast",
+    description: "Fast, capable model for most coding tasks. Free tier.",
+    maxTokens: 4096
+  },
+  "workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct": {
+    name: "Llama 4 Scout",
+    description: "More powerful, multimodal. Free tier.",
+    maxTokens: 8192
+  },
+  "anthropic/claude-sonnet-4-6": {
+    name: "Claude Sonnet 4.6",
+    description: "Excellent for complex reasoning. Paid.",
+    maxTokens: 8192
+  }
+};
 
 export class MemoryDO {
   private state: DurableObjectState;
   private memory: Memory = {
     messages: [],
     userPreferences: {},
-    context: {}
+    context: {},
+    modelCatalog: DEFAULT_CATALOG
   };
   private initialized = false;
 
@@ -24,7 +44,7 @@ export class MemoryDO {
     
     const stored = await this.state.storage.get<Memory>("memory");
     if (stored) {
-      this.memory = stored;
+      this.memory = { ...this.memory, ...stored };
     }
     
     this.initialized = true;
@@ -48,7 +68,6 @@ export class MemoryDO {
     if (url.pathname === "/messages" && request.method === "POST") {
       const { role, content } = await request.json() as { role: string; content: string };
       this.memory.messages.push({ role, content, timestamp: Date.now() });
-      // Keep only last 100 messages
       if (this.memory.messages.length > 100) {
         this.memory.messages = this.memory.messages.slice(-100);
       }
@@ -68,7 +87,36 @@ export class MemoryDO {
       return json({ saved: true });
     }
     
+    if (url.pathname === "/catalog" && request.method === "GET") {
+      return json({ catalog: this.memory.modelCatalog || DEFAULT_CATALOG });
+    }
+    
+    if (url.pathname === "/catalog" && request.method === "POST") {
+      const { catalog } = await request.json() as { catalog: Record<string, { name: string; description: string; maxTokens: number }> };
+      this.memory.modelCatalog = catalog;
+      await this.state.storage.put("memory", this.memory);
+      return json({ saved: true, count: Object.keys(catalog).length });
+    }
+    
+    if (url.pathname === "/catalog/update" && request.method === "POST") {
+      // Cron job endpoint to update catalog
+      const updated = await this.fetchModelsFromGateway();
+      if (updated) {
+        this.memory.modelCatalog = updated;
+        await this.state.storage.put("memory", this.memory);
+        return json({ updated: true, count: Object.keys(updated).length });
+      }
+      return json({ updated: false, reason: "Could not fetch models" });
+    }
+    
     return new Response("Not found", { status: 404 });
+  }
+  
+  private async fetchModelsFromGateway(): Promise<Record<string, { name: string; description: string; maxTokens: number }> | null> {
+    // Note: Cloudflare AI Gateway doesn't have a public list models API
+    // This is a placeholder for when/if it becomes available
+    // For now, we return the default catalog
+    return DEFAULT_CATALOG;
   }
 }
 
