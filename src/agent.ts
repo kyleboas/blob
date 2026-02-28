@@ -1356,7 +1356,9 @@ export class AgentDO {
     }
 
     // Send final response (only if we haven't sent a status or if it's different)
-    const cleanFinalText = this.stripToolMarkupForSlack(finalText);
+    const cleanFinalText = this.stripConfirmationLanguageForSlack(
+      this.stripToolMarkupForSlack(finalText)
+    );
     await this.sendResponse(channel, cleanFinalText);
     logAgentEvent(this.db, sessionId, "completed", finalText);
     this.forwardToGlobalLogs("completed", `[#${channel}] ${finalText.slice(0, 300)}`);
@@ -3244,6 +3246,14 @@ ${auditContext}` }
       .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "")
       .replace(/<tool_result>[\s\S]*?<\/tool_result>/gi, "")
       .trim();
+  }
+
+  // Remove generic confirmation preambles so final responses start with
+  // substantive content instead of repetitive acknowledgements.
+  private stripConfirmationLanguageForSlack(text: string): string {
+    const confirmationPrefix = /^(?:\s*)(?:okay|ok|sure|certainly|absolutely|of course|got it|sounds good)[!,.\-:\s]+/i;
+    const stripped = text.replace(confirmationPrefix, "").trim();
+    return stripped || text.trim();
   }
 
   private async endSandboxSession(sessionId: string): Promise<void> {
