@@ -182,7 +182,16 @@ const BASE_SYSTEM_PROMPT = [
   "- If you want to say 'let me know if you want me to...' - STOP. Do it now.",
   "- NEVER end with questions like 'what would you like me to do next?' - just wait.",
   "- Use tools to take action, not words to ask permission",
-  "- The user wants you to act, not to ask"
+  "- The user wants you to act, not to ask",
+  "",
+  "KEEP RESPONSES CONCISE:",
+  "- Slack messages should be brief (under 2000 chars)",
+  "- Use bullet points, not long paragraphs",
+  "- Show key findings only, not exhaustive lists",
+  "- Skip headers like '**Priority Findings**' - just give the content",
+  "- One line per issue: 'Security: 3 bandit issues in data_loader.py'",
+  "- Don't show full command blocks unless asked",
+  "- Report what you DID, not what you PLAN to do"
 ].join(" ");
 
 const DEFAULT_KNOWLEDGE_PROMPT_GUARDRAIL = [
