@@ -9,9 +9,13 @@ crons = ["*/5 * * * *"]
 name = "REPO_CONFIG"
 class_name = "AgentDO"
 
+[[durable_objects.bindings]]
+name = "MEMORY"
+class_name = "MemoryDO"
+
 [[migrations]]
 tag = "v1"
-new_classes = ["AgentDO"]
+new_classes = ["AgentDO", "MemoryDO"]
 
 [observability]
 [observability.logs]
