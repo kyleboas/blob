@@ -10,9 +10,10 @@ class_name = "AgentDO"
 tag = "v1"
 new_classes = ["AgentDO"]
 
-# Container binding (simple Fetcher approach)
+# Container binding
 [[containers]]
-name = "SANDBOX"
+binding = "SANDBOX"
+name = "sandbox"
 image = "./sandbox/Dockerfile"
 max_instances = 3
 
