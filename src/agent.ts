@@ -170,7 +170,14 @@ const BASE_SYSTEM_PROMPT = [
   "- User preferences are accessible via the preferences system",
   "- Extension state is stored in SQLite database",
   "- DO NOT say you cannot access storage - you CAN via KV and SQLite",
-  "- If goals or preferences appear missing, they ARE in KV - trust the system"
+  "- If goals or preferences appear missing, they ARE in KV - trust the system",
+  "",
+  "BE PROACTIVE - DO NOT ASK FOR CONFIRMATION:",
+  "- Just DO the task, don't ask 'would you like me to...'",
+  "- After completing something, move on to the next step",
+  "- Don't ask 'should I test this' - just test it if needed",
+  "- Don't ask 'proceed with another request' - wait for user input",
+  "- Act first, report results, then stop and wait"
 ].join(" ");
 
 const DEFAULT_KNOWLEDGE_PROMPT_GUARDRAIL = [
