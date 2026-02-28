@@ -73,3 +73,6 @@ export default {
 };
 
 export { BlobDO };
+
+// Backward compatibility - AgentDO was renamed to BlobDO
+export { BlobDO as AgentDO };
