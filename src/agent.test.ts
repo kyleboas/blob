@@ -878,8 +878,9 @@ describe("AgentDO runAgentLoop", () => {
 
     await agent.runAgentLoop("check files", "C1", "thread-status");
 
-    // Should extract status from brackets and send it
-    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "🔄 Analyzing the codebase...");
+    // Status updates disabled to reduce noise
+    // expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "🔄 Analyzing the codebase...");
+    expect(postSlackMessage).not.toHaveBeenCalledWith("token", "C1", "🔄 Analyzing the codebase...");
     vi.useRealTimers();
   });
 
@@ -932,7 +933,7 @@ describe("AgentDO runAgentLoop", () => {
     );
   });
 
-  it("posts a milestone update when tests pass", async () => {
+  it("does not post milestone updates when tests pass (disabled to reduce noise)", async () => {
     const sql = new FakeSql();
     const { env, sandbox } = makeTestEnv();
     sandbox.exec.mockResolvedValue({ stdout: "5 passed", stderr: "", exitCode: 0 });
@@ -950,7 +951,8 @@ describe("AgentDO runAgentLoop", () => {
 
     await agent.runAgentLoop("run tests", "C1", "thread-tests");
 
-    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Tests passed");
+    // Milestone updates disabled to reduce noise
+    expect(postSlackMessage).not.toHaveBeenCalledWith("token", "C1", "Tests passed");
   });
 
 
@@ -1016,7 +1018,7 @@ describe("AgentDO runAgentLoop", () => {
     );
   });
 
-  it("posts a milestone update when a git commit succeeds", async () => {
+  it("does not post milestone updates when a git commit succeeds (disabled to reduce noise)", async () => {
     const sql = new FakeSql();
     const { env, sandbox } = makeTestEnv();
     sandbox.exec.mockResolvedValue({ stdout: "1 file changed", stderr: "", exitCode: 0 });
@@ -1036,7 +1038,8 @@ describe("AgentDO runAgentLoop", () => {
 
     await agent.runAgentLoop("commit changes", "C1", "thread-commit");
 
-    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Committed: add feature");
+    // Milestone updates disabled to reduce noise
+    expect(postSlackMessage).not.toHaveBeenCalledWith("token", "C1", "Committed: add feature");
   });
 
   it("can create and use a dynamic tool in the same loop", async () => {

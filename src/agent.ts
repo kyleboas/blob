@@ -1290,7 +1290,8 @@ export class AgentDO {
       if (firstTextBlock) {
         const statusMatch = firstTextBlock.text.match(/^\[([^\]]+)\]/);
         if (statusMatch) {
-          await this.sendResponse(channel, `🔄 ${statusMatch[1]}`);
+          // Status updates disabled to reduce noise
+          // await this.sendResponse(channel, `🔄 ${statusMatch[1]}`);
           statusSent = true;
         }
       }
@@ -2145,7 +2146,8 @@ Use the bash, write, or edit tool to take action right now.`;
 
       const milestone = detectMilestone(command, result.exitCode, result.output);
       if (milestone) {
-        await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, milestone.message);
+        // Milestone updates disabled to reduce noise
+        // await this.deps.postSlackMessage(this.env.SLACK_BOT_TOKEN, channel, milestone.message);
       }
 
       const toolOutput = this.sanitizeSecrets(result.output);
