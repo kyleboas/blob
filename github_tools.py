@@ -144,6 +144,20 @@ def authenticated_remote_url(owner: str, repo: str) -> str:
     return f"https://{token}@github.com/{owner}/{repo}.git"
 
 
+def list_pull_requests(owner: str, repo: str, state: str = "open") -> list:
+    """List pull requests for a repository.
+
+    Args:
+        owner: Repository owner (user or org).
+        repo: Repository name.
+        state: PR state — ``open``, ``closed``, or ``all``.
+
+    Returns:
+        List of PR objects with ``number``, ``title``, ``html_url``, and ``head``/``base`` branch.
+    """
+    return _api_request("GET", f"/repos/{owner}/{repo}/pulls?state={state}&per_page=10")
+
+
 def push_branch(owner: str, repo: str, branch: str) -> str:
     """Push a local branch to GitHub using token-embedded authentication.
 
@@ -206,6 +220,15 @@ def main() -> None:
     url_parser.add_argument("--owner", required=True)
     url_parser.add_argument("--repo", required=True)
 
+    # pr-list
+    pr_list_parser = subparsers.add_parser("pr-list", help="List open pull requests")
+    pr_list_parser.add_argument("--owner", required=True)
+    pr_list_parser.add_argument("--repo", required=True)
+    pr_list_parser.add_argument(
+        "--state", default="open", choices=["open", "closed", "all"],
+        help="PR state filter (default: open)",
+    )
+
     # push
     push_parser = subparsers.add_parser(
         "push",
@@ -232,6 +255,15 @@ def main() -> None:
             draft=args.draft,
         )
         print(json.dumps({"url": pr["html_url"], "number": pr["number"]}, indent=2))
+
+    elif args.command == "pr-list":
+        prs = list_pull_requests(owner=args.owner, repo=args.repo, state=args.state)
+        summary = [
+            {"number": pr["number"], "title": pr["title"], "url": pr["html_url"],
+             "head": pr["head"]["ref"], "base": pr["base"]["ref"]}
+            for pr in prs
+        ]
+        print(json.dumps(summary, indent=2))
 
     elif args.command == "fork":
         fork = fork_repo(args.owner, args.repo)

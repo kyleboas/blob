@@ -1,11 +1,13 @@
 #!/bin/bash
-# Example: GitHub CLI Tool Built by Agent
-# This shows how Blob builds its own tools
+# Example: GitHub Tool Built by Agent
+# Uses github_tools.py instead of gh CLI (which is blocked by safety rules).
+# See: github_tools.py for the full API reference.
 
 set -e
 
 # Parse arguments
 COMMAND=""
+OWNER=""
 REPO=""
 TITLE=""
 BRANCH=""
@@ -13,52 +15,57 @@ BRANCH=""
 while [[ $# -gt 0 ]]; do
   case $1 in
     --command) COMMAND="$2"; shift 2 ;;
-    --repo) REPO="$2"; shift 2 ;;
-    --title) TITLE="$2"; shift 2 ;;
-    --branch) BRANCH="$2"; shift 2 ;;
+    --owner)   OWNER="$2";   shift 2 ;;
+    --repo)    REPO="$2";    shift 2 ;;
+    --title)   TITLE="$2";   shift 2 ;;
+    --branch)  BRANCH="$2";  shift 2 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
 
-# Ensure gh CLI is available
-if ! command -v gh &> /dev/null; then
-  echo "Error: gh CLI not found. Install with: bash -c 'curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && apt update && apt install gh -y'"
+# Resolve github_tools.py relative to this script's location (3 levels up from
+# .blob/extensions/github/ → repo root)
+GITHUB_TOOLS="$(cd "$(dirname "$0")/../../.." && pwd)/github_tools.py"
+
+if [[ ! -f "$GITHUB_TOOLS" ]]; then
+  echo "Error: github_tools.py not found at $GITHUB_TOOLS"
   exit 1
 fi
 
 # Execute command
 case $COMMAND in
   pr_create)
-    if [[ -z "$TITLE" || -z "$BRANCH" ]]; then
-      echo "Error: --title and --branch required"
+    if [[ -z "$TITLE" || -z "$BRANCH" || -z "$OWNER" || -z "$REPO" ]]; then
+      echo "Error: --title, --branch, --owner, and --repo are required"
       exit 1
     fi
-    gh pr create --title "$TITLE" --head "$BRANCH" --body "Created by Blob"
+    python "$GITHUB_TOOLS" create-pr \
+      --owner "$OWNER" --repo "$REPO" \
+      --title "$TITLE" --head "$BRANCH" \
+      --body "Created by Blob"
     ;;
-  
+
   pr_list)
-    gh pr list --limit 10
-    ;;
-  
-  pr_merge)
-    if [[ -z "$BRANCH" ]]; then
-      echo "Error: --branch required"
+    if [[ -z "$OWNER" || -z "$REPO" ]]; then
+      echo "Error: --owner and --repo are required"
       exit 1
     fi
-    gh pr merge "$BRANCH" --squash
+    python "$GITHUB_TOOLS" pr-list --owner "$OWNER" --repo "$REPO"
     ;;
-  
+
   repo_clone)
-    if [[ -z "$REPO" ]]; then
-      echo "Error: --repo required"
+    if [[ -z "$OWNER" || -z "$REPO" ]]; then
+      echo "Error: --owner and --repo are required"
       exit 1
     fi
-    gh repo clone "$REPO"
+    # Use token-embedded URL so no interactive prompt is needed.
+    REMOTE_URL="$(python "$GITHUB_TOOLS" remote-url --owner "$OWNER" --repo "$REPO")"
+    git clone "$REMOTE_URL"
     ;;
-  
+
   *)
     echo "Unknown command: $COMMAND"
-    echo "Available: pr_create, pr_list, pr_merge, repo_clone"
+    echo "Available: pr_create, pr_list, repo_clone"
     exit 1
     ;;
 esac
