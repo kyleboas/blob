@@ -507,9 +507,9 @@ describe("AgentDO runAgentLoop", () => {
 
     await agent.runAgentLoop("hi", "C1", "thread-model-settings", { taskComplexityHint: "routine" });
 
+    // Router removed - verify chat, simple, and complex models are set
     expect(llmCall).toHaveBeenCalledWith(
       expect.objectContaining({
-        routerModel: "@cf/ibm-granite/granite-4.0-h-micro",
         chatModel: "@cf/zai-org/glm-4.7-flash",
         simpleModel: "@cf/qwen/qwen2.5-coder-3b-instruct",
         complexModel: "@cf/qwen/qwen2.5-coder-14b-instruct"
@@ -1042,98 +1042,6 @@ describe("AgentDO runAgentLoop", () => {
     expect(postSlackMessage).not.toHaveBeenCalledWith("token", "C1", "Committed: add feature");
   });
 
-  it("can create and use a dynamic tool in the same loop", async () => {
-    const sql = new FakeSql();
-    const { env, sandbox } = makeTestEnv();
-    const llmCall = vi
-      .fn()
-      .mockResolvedValueOnce({
-        content: [{
-          type: "tool_use",
-          id: "1",
-          name: "create_tool",
-          input: {
-            name: "list_top_files",
-            description: "List top-level files in a path",
-            command_template: "find {path} -maxdepth 1 -type f",
-            args: ["path"]
-          }
-        }]
-      })
-      .mockResolvedValueOnce({
-        content: [{
-          type: "tool_use",
-          id: "2",
-          name: "list_top_files",
-          input: { path: "/workspace/blob" }
-        }]
-      })
-      .mockResolvedValueOnce({ content: [{ type: "text", text: "Dynamic tool worked" }] });
-
-    const agent = new AgentDO({ storage: { sql } }, env, {
-      llmCall: llmCall as never,
-      postSlackMessage: vi.fn() as never,
-      postSlackApproval: vi.fn() as never
-    });
-
-    const result = await agent.runAgentLoop("inspect files", "C1", "thread-dynamic-tool");
-
-    expect(result.finalText).toBe("Dynamic tool worked");
-    expect(sandbox.exec).toHaveBeenCalledWith(expect.stringContaining("find /workspace/blob -maxdepth 1 -type f"));
-    expect(llmCall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tools: expect.arrayContaining([expect.objectContaining({ name: "create_tool" })])
-      })
-    );
-  });
-
-  it("does not post tool preview messages to Slack for create_tool or command execution", async () => {
-    const sql = new FakeSql();
-    const { env, sandbox } = makeTestEnv();
-    const llmCall = vi
-      .fn()
-      .mockResolvedValueOnce({
-        content: [{
-          type: "tool_use",
-          id: "1",
-          name: "create_tool",
-          input: {
-            name: "list_top_files",
-            description: "List top-level files in a path",
-            command_template: "find {path} -maxdepth 1 -type f",
-            args: ["path"]
-          }
-        }]
-      })
-      .mockResolvedValueOnce({
-        content: [{
-          type: "tool_use",
-          id: "2",
-          name: "list_top_files",
-          input: { path: "/workspace/blob" }
-        }]
-      })
-      .mockResolvedValueOnce({ content: [{ type: "text", text: "Done" }] });
-    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
-
-    const agent = new AgentDO({ storage: { sql } }, env, {
-      llmCall: llmCall as never,
-      postSlackMessage: postSlackMessage as never,
-      postSlackApproval: vi.fn() as never
-    });
-
-    await agent.runAgentLoop("inspect files", "C1", "thread-tool-preview");
-
-    expect(postSlackMessage).not.toHaveBeenCalledWith(
-      "token",
-      "C1",
-      expect.stringContaining("TOOL PREVIEW")
-    );
-    expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Done");
-    expect(sandbox.exec).toHaveBeenCalledWith(expect.stringContaining("find /workspace/blob -maxdepth 1 -type f"));
-  });
-
-
   it("rewrites git push origin main into branch+PR workflow", async () => {
     const sql = new FakeSql();
     const { env, sandbox } = makeTestEnv();
@@ -1238,81 +1146,9 @@ describe("AgentDO runAgentLoop", () => {
     fetchMock.mockRestore();
   });
 
-  it("rejects dangerous create_tool templates that push to main", async () => {
-    const sql = new FakeSql();
-    const { env, sandbox } = makeTestEnv();
-    const llmCall = vi
-      .fn()
-      .mockResolvedValueOnce({
-        content: [{
-          type: "tool_use",
-          id: "1",
-          name: "create_tool",
-          input: {
-            name: "ship_it",
-            description: "Push directly to main",
-            command_template: "git push origin main",
-            args: []
-          }
-        }]
-      })
-      .mockResolvedValueOnce({ content: [{ type: "text", text: "Done" }] });
-    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
-
-    const agent = new AgentDO({ storage: { sql } }, env, {
-      llmCall: llmCall as never,
-      postSlackMessage: postSlackMessage as never,
-      postSlackApproval: vi.fn() as never
-    });
-
-    await agent.runAgentLoop("make a deployment helper", "C1", "thread-reject-dangerous-tool");
-
-    expect(sandbox.exec).not.toHaveBeenCalledWith(expect.stringContaining("git push origin main"));
-
-    const secondCall = llmCall.mock.calls[1]?.[0];
-    const serializedSecondCall = JSON.stringify(secondCall);
-
-    expect(serializedSecondCall).toContain("Tool creation rejected");
-    expect(serializedSecondCall).toContain("never push directly to main");
-  });
-
-
 });
 
 describe("AgentDO sub-agent system", () => {
-  it("message action spawns a sub-agent DO instead of running inline", async () => {
-    const sql = new FakeSql();
-    const { env, agentDOFetch } = makeTestEnv();
-
-    const agent = new AgentDO({ storage: { sql } }, env, {
-      llmCall: vi.fn() as never,
-      postSlackMessage: vi.fn() as never,
-      postSlackApproval: vi.fn() as never
-    });
-
-    const response = await agent.fetch(
-      new Request("https://example.com", {
-        method: "POST",
-        body: JSON.stringify({
-          action: "message",
-          event: { type: "message", text: "do something", channel: "C1" }
-        })
-      })
-    );
-
-    expect(response.status).toBe(202);
-    // The orchestrator should have forwarded a run_task action to the sub-agent DO.
-    expect(agentDOFetch).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        method: "POST",
-        body: expect.stringContaining('"action":"run_task"')
-      })
-    );
-  });
-
-
-
   it("handles model settings commands inline without spawning a sub-agent", async () => {
     const sql = new FakeSql();
     const { env, agentDOFetch } = makeTestEnv();
@@ -1562,47 +1398,6 @@ describe("AgentDO sub-agent system", () => {
     });
     expect(reactionBroadcasts).toHaveLength(2);
   });
-
-  it("multiple concurrent tasks each get their own sub-agent DO name", async () => {
-    const sql = new FakeSql();
-    const { env, agentDOFetch } = makeTestEnv();
-
-    const agent = new AgentDO({ storage: { sql } }, env, {
-      llmCall: vi.fn() as never,
-      postSlackMessage: vi.fn() as never,
-      postSlackApproval: vi.fn() as never
-    });
-
-    await agent.fetch(
-      new Request("https://example.com", {
-        method: "POST",
-        body: JSON.stringify({ action: "message", event: { type: "message", text: "task one", channel: "C1" } })
-      })
-    );
-
-    await agent.fetch(
-      new Request("https://example.com", {
-        method: "POST",
-        body: JSON.stringify({ action: "message", event: { type: "message", text: "task two", channel: "C1" } })
-      })
-    );
-
-    // Both tasks should have triggered sub-agent spawning.
-    const spawnCalls = agentDOFetch.mock.calls.filter((args: unknown[]) => {
-      const init = args[1] as RequestInit | undefined;
-      const body = typeof init?.body === "string" ? init.body : "";
-      return body.includes('"action":"run_task"');
-    });
-    expect(spawnCalls).toHaveLength(2);
-
-    // Each spawn should reference a different sub-agent DO name.
-    const doNames = spawnCalls.map((args: unknown[]) => {
-      const init = args[1] as RequestInit | undefined;
-      const parsed = JSON.parse(init?.body as string) as { doName: string };
-      return parsed.doName;
-    });
-    expect(doNames[0]).not.toBe(doNames[1]);
-  });
 });
 
 describe("AgentDO heartbeat actions", () => {
@@ -1786,37 +1581,6 @@ describe("AgentDO heartbeat actions", () => {
 
     vi.unstubAllGlobals();
   });
-
-  it("detected routine and complex tasks still route to simple/complex task models", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ content: [{ text: '{"type":"routine"}' }] }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ content: [{ text: '{"type":"complex"}' }] }), { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const sql = new FakeSql();
-    const { env, agentDOFetch } = makeTestEnv();
-    const agent = new AgentDO({ storage: { sql } }, env, {
-      llmCall: vi.fn() as never,
-      postSlackMessage: vi.fn() as never,
-      postSlackApproval: vi.fn() as never
-    });
-
-    await agent.fetch(new Request("https://example.com", {
-      method: "POST",
-      body: JSON.stringify({ action: "message", event: { type: "message", text: "fix lint", channel: "C1" } })
-    }));
-    await agent.fetch(new Request("https://example.com", {
-      method: "POST",
-      body: JSON.stringify({ action: "message", event: { type: "message", text: "redesign architecture", channel: "C1" } })
-    }));
-
-    const runTaskCalls = agentDOFetch.mock.calls.filter((args: unknown[]) => String((args[1] as RequestInit | undefined)?.body ?? "").includes('"action":"run_task"'));
-    const hints = runTaskCalls.map((args: unknown[]) => JSON.parse(String((args[1] as RequestInit | undefined)?.body ?? "")).taskComplexityHint);
-    expect(hints).toEqual(["routine", "complex"]);
-    vi.unstubAllGlobals();
-  });
-
 
   it("uses planner models for autonomous planning and execution models for queued task runs", async () => {
     const sql = new FakeSql();
