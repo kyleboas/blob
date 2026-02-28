@@ -4,12 +4,32 @@ export class AgentDO {
   private state: DurableObjectState;
   private repos: string[] = ["kyleboas/blob"];
   private goals: Map<string, string[]> = new Map();
+  private initialized = false;
 
   constructor(state: DurableObjectState) {
     this.state = state;
   }
 
+  private async init(): Promise<void> {
+    if (this.initialized) return;
+    
+    const storedRepos = await this.state.storage.get<string[]>("repos");
+    if (storedRepos) {
+      this.repos = storedRepos;
+    }
+    
+    const keys = await this.state.storage.list({ prefix: "goals:" });
+    for (const [key, value] of keys) {
+      const repo = key.replace("goals:", "");
+      this.goals.set(repo, value as string[]);
+    }
+    
+    this.initialized = true;
+  }
+
   async fetch(request: Request): Promise<Response> {
+    await this.init();
+    
     const url = new URL(request.url);
     
     if (url.pathname === "/repos" && request.method === "GET") {
