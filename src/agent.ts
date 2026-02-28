@@ -3475,24 +3475,10 @@ ${history}` }]
 
     const repoGoals = kvGoals || (localGoals ? { goals: localGoals } : null);
 
-    // If no goals configured, notify user but still continue with generic goals
+    // If no goals configured, just use generic goals without notifying
     let goalsContext: string;
     if (!repoGoals) {
       goalsContext = "No specific repository goals configured. Using generic self-improvement goals.";
-
-      // Only notify once per week about missing goals (less annoying)
-      const lastNotified = getSetting(this.db, "goals_notification_sent");
-      const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-      if (!lastNotified || lastNotified < oneWeekAgo) {
-        await this.deps.postSlackMessage(
-          this.env.SLACK_BOT_TOKEN,
-          channel,
-          "🎯 I don't have specific goals configured for kyleboas/blob yet.\n\n" +
-          "What should I work towards? Tell me: 'My goals are: Keep code lightweight, maintain security, improve features'\n\n" +
-          "Until then, I'll use generic self-improvement goals."
-        );
-        setSetting(this.db, "goals_notification_sent", new Date().toISOString().slice(0, 10));
-      }
     } else {
       goalsContext = `Repository goals for kyleboas/blob:\n${repoGoals.goals.map(g => `- ${g}`).join("\n")}`;
     }
