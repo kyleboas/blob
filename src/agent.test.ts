@@ -367,6 +367,35 @@ describe("AgentDO runAgentLoop", () => {
     expect(postSlackMessage).toHaveBeenCalledWith("token", "C1", "Done");
   });
 
+  it("strips generic confirmation language from final Slack text", async () => {
+    const sql = new FakeSql();
+    const { env } = makeTestEnv();
+    const llmCall = vi.fn().mockResolvedValue({
+      content: [
+        {
+          type: "text",
+          text: "Sure! Finished updating the workflow and tests pass."
+        }
+      ]
+    });
+    const postSlackMessage = vi.fn().mockResolvedValue(undefined);
+
+    const agent = new AgentDO({ storage: { sql } }, env, {
+      llmCall: llmCall as never,
+      postSlackMessage: postSlackMessage as never,
+      postSlackApproval: vi.fn() as never
+    });
+
+    const result = await agent.runAgentLoop("status", "C1", "thread-strip-confirmation");
+
+    expect(result.finalText).toBe("Sure! Finished updating the workflow and tests pass.");
+    expect(postSlackMessage).toHaveBeenCalledWith(
+      "token",
+      "C1",
+      "Finished updating the workflow and tests pass."
+    );
+  });
+
   it("does not inject session summaries into the system prompt", async () => {
     const sql = new FakeSql();
     sql.exec(
