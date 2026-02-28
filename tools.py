@@ -2,6 +2,45 @@
 
 from __future__ import annotations
 
+READ_TOOL = {
+    "name": "read",
+    "description": "Read a file from the sandbox. Returns file contents as text. Use absolute paths.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Absolute path to the file to read"},
+        },
+        "required": ["path"],
+    },
+}
+
+WRITE_TOOL = {
+    "name": "write",
+    "description": "Write content to a file in the sandbox. Creates the file if it doesn't exist, overwrites if it does. Use absolute paths.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Absolute path to the file to write"},
+            "content": {"type": "string", "description": "Content to write to the file"},
+        },
+        "required": ["path", "content"],
+    },
+}
+
+EDIT_TOOL = {
+    "name": "edit",
+    "description": "Edit a file by replacing exact text. The old_text must match exactly (including whitespace).",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Absolute path to the file to edit"},
+            "old_text": {"type": "string", "description": "Exact text to find and replace"},
+            "new_text": {"type": "string", "description": "New text to replace the old text with"},
+        },
+        "required": ["path", "old_text", "new_text"],
+    },
+}
+
 BASH_TOOL = {
     "name": "bash",
     "description": "Execute a bash command inside the configured sandbox.",
@@ -14,36 +53,7 @@ BASH_TOOL = {
     },
 }
 
-MAKE_PR_TOOL = {
-    "name": "make_pr",
-    "description": "Create a GitHub pull request from the current branch.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "title": {"type": "string"},
-            "body": {"type": "string"},
-            "repo": {"type": "string", "description": "owner/repo. Optional if origin points to GitHub."},
-            "base": {"type": "string", "description": "Base branch. Defaults to origin default branch or main."},
-            "head": {"type": "string", "description": "Head branch. Defaults to current branch."},
-            "draft": {"type": "boolean"},
-        },
-        "required": ["title", "body"],
-    },
-}
-
-PUSH_BRANCH_TOOL = {
-    "name": "push_branch",
-    "description": "Push a local branch to a GitHub remote so self-fixes can be shared.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "remote": {"type": "string", "description": "Git remote name. Defaults to origin."},
-            "branch": {"type": "string", "description": "Local branch to push. Defaults to current branch."},
-            "set_upstream": {"type": "boolean", "description": "Whether to set upstream tracking. Defaults to true."},
-        },
-        "required": [],
-    },
-}
+CORE_TOOLS = [READ_TOOL, WRITE_TOOL, EDIT_TOOL, BASH_TOOL]
 
 
 def format_tool_result(tool_use_id: str, output: str) -> dict[str, object]:

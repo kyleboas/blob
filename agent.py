@@ -29,7 +29,7 @@ from safety import (
     log_activity,
 )
 from sandbox import SandboxExecutor
-from tools import BASH_TOOL, MAKE_PR_TOOL, PUSH_BRANCH_TOOL, format_tool_result
+from tools import READ_TOOL, WRITE_TOOL, EDIT_TOOL, BASH_TOOL, format_tool_result
 
 
 class _HTMLToTextParser(HTMLParser):
@@ -172,196 +172,6 @@ class Agent:
             },
         )
 
-    def _get_authenticated_push_url(self, remote: str = "origin") -> str | None:
-        """Return a GitHub HTTPS remote URL with the token embedded, or None if unavailable.
-
-        Using a token-embedded URL lets ``git push`` authenticate without an
-        interactive credential prompt, which is necessary in non-TTY sandbox
-        environments where git cannot read a username/password.
-        """
-        token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or ""
-        if not token:
-            return None
-        get_url = subprocess.run(
-            ["git", "remote", "get-url", remote],
-            cwd=config.WORKSPACE_ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if get_url.returncode != 0:
-            return None
-        repo = _parse_github_repo(get_url.stdout)
-        if not repo:
-            return None
-        return f"https://{token}@github.com/{repo}.git"
-
-    def _resolve_repo_from_remote(self, remote: str = "origin") -> str | None:
-        remote_result = subprocess.run(
-            ["git", "remote", "get-url", remote],
-            cwd=config.WORKSPACE_ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if remote_result.returncode != 0:
-            return None
-        return _parse_github_repo(remote_result.stdout)
-
-    def _push_branch_to_remote(self, tool_input: dict[str, object]) -> str:
-        remote = str(tool_input.get("remote", "origin")).strip() or "origin"
-
-        branch = str(tool_input.get("branch", "")).strip()
-        if not branch:
-            branch_cmd = subprocess.run(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                cwd=config.WORKSPACE_ROOT,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            if branch_cmd.returncode != 0:
-                return "error: unable to determine current branch"
-            branch = branch_cmd.stdout.strip()
-
-        if branch == "HEAD":
-            return "error: detached HEAD is not supported; checkout a branch first"
-
-        repo = self._resolve_repo_from_remote(remote)
-        if not repo:
-            return f"error: {remote} remote is not a GitHub repository"
-        owner, repo_name = repo.split("/", 1)
-
-        push_command = [
-            "python",
-            "github_tools.py",
-            "push",
-            "--owner",
-            owner,
-            "--repo",
-            repo_name,
-            "--branch",
-            branch,
-        ]
-
-        push = subprocess.run(
-            push_command,
-            cwd=config.WORKSPACE_ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if push.returncode != 0:
-            return f"error: failed to push branch\n{push.stderr.strip()}"
-
-        return f"ok: pushed {branch} to {owner}/{repo_name}"
-
-    def _create_github_pr(self, tool_input: dict[str, object]) -> str:
-        token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
-        if not token:
-            return "error: missing GITHUB_TOKEN (or GH_TOKEN) in environment"
-
-        title = str(tool_input.get("title", "")).strip()
-        body = str(tool_input.get("body", "")).strip()
-        if not title:
-            return "error: pull request title is required"
-
-        repo = str(tool_input.get("repo", "")).strip() or (self._resolve_repo_from_remote("origin") or "")
-        if not repo:
-            return "error: origin remote is not a GitHub repository; provide repo as owner/name"
-        owner, repo_name = repo.split("/", 1)
-
-        head = str(tool_input.get("head", "")).strip()
-        if not head:
-            branch_cmd = subprocess.run(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                cwd=config.WORKSPACE_ROOT,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            if branch_cmd.returncode != 0:
-                return "error: unable to determine current branch"
-            head = branch_cmd.stdout.strip()
-        if head == "HEAD":
-            return "error: detached HEAD is not supported; checkout a branch first"
-
-        base = str(tool_input.get("base", "")).strip()
-        if not base:
-            default_base = subprocess.run(
-                ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
-                cwd=config.WORKSPACE_ROOT,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            if default_base.returncode == 0 and default_base.stdout.strip().startswith("refs/remotes/origin/"):
-                base = default_base.stdout.strip().removeprefix("refs/remotes/origin/")
-            else:
-                base = "main"
-
-        push = subprocess.run(
-            [
-                "python",
-                "github_tools.py",
-                "push",
-                "--owner",
-                owner,
-                "--repo",
-                repo_name,
-                "--branch",
-                head,
-            ],
-            cwd=config.WORKSPACE_ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if push.returncode != 0:
-            return f"error: failed to push branch\n{push.stderr.strip() or push.stdout.strip()}"
-
-        head_ref = head if ":" in head else f"{owner}:{head}"
-
-        create_pr_command = [
-            "python",
-            "github_tools.py",
-            "create-pr",
-            "--owner",
-            owner,
-            "--repo",
-            repo_name,
-            "--title",
-            title,
-            "--body",
-            body,
-            "--head",
-            head_ref,
-            "--base",
-            base,
-        ]
-        if bool(tool_input.get("draft", False)):
-            create_pr_command.append("--draft")
-
-        create_pr = subprocess.run(
-            create_pr_command,
-            cwd=config.WORKSPACE_ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if create_pr.returncode != 0:
-            return f"error: failed to create pull request\n{create_pr.stderr.strip() or create_pr.stdout.strip()}"
-
-        try:
-            response = json.loads(create_pr.stdout)
-        except json.JSONDecodeError:
-            return f"error: unexpected GitHub response\n{create_pr.stdout.strip()}"
-        pr_url = response.get("html_url", "") or response.get("url", "")
-        pr_number = response.get("number", "")
-        if not pr_url:
-            return f"error: GitHub response missing html_url\n{create_pr.stdout.strip()}"
-        return f"ok: opened PR #{pr_number} {pr_url}"
-
     def run_task(self, task: str, extra_context: str = "") -> str:
         log_activity("task_start", {"task": task[:400], "has_extra_context": bool(extra_context)})
         messages = list(self._base_messages)
@@ -397,7 +207,7 @@ class Agent:
                 model=model,
                 system=self._system_prompt,
                 messages=messages,
-                tools=[BASH_TOOL, MAKE_PR_TOOL, PUSH_BRANCH_TOOL],
+                tools=[READ_TOOL, WRITE_TOOL, EDIT_TOOL, BASH_TOOL],
             )
             self._record_llm_usage(task, model, response.usage.input_tokens, response.usage.output_tokens)
             messages.append({"role": "assistant", "content": response.content})
@@ -417,24 +227,42 @@ class Agent:
                 target_files = _extract_target_files(command)
                 is_modification = _is_modification_command(command, target_files)
 
-                if tool_name == "push_branch":
-                    tier = "conditional"
-                    allowed = self.approval_gate.request_approval("push branch to github", tier)
-                    if not allowed:
-                        result_text = "Blocked: approval denied or timed out."
-                    else:
-                        result_text = self._push_branch_to_remote(tool_use.get("input", {}))
+                if tool_name == "read":
+                    path = str(tool_use.get("input", {}).get("path", "")).strip()
+                    try:
+                        result_text = Path(path).read_text(encoding="utf-8")
+                    except Exception as exc:
+                        result_text = f"error: {exc}"
                     log_activity("tool_result", {"tool": tool_name, "result": result_text[:500]})
                     tool_results.append(format_tool_result(tool_use_id=tool_use["id"], output=result_text))
                     continue
 
-                if tool_name == "make_pr":
-                    tier = "conditional"
-                    allowed = self.approval_gate.request_approval("create github pull request", tier)
-                    if not allowed:
-                        result_text = "Blocked: approval denied or timed out."
-                    else:
-                        result_text = self._create_github_pr(tool_use.get("input", {}))
+                if tool_name == "write":
+                    path = str(tool_use.get("input", {}).get("path", "")).strip()
+                    content = str(tool_use.get("input", {}).get("content", ""))
+                    try:
+                        Path(path).parent.mkdir(parents=True, exist_ok=True)
+                        Path(path).write_text(content, encoding="utf-8")
+                        result_text = f"ok: wrote {path}"
+                    except Exception as exc:
+                        result_text = f"error: {exc}"
+                    log_activity("tool_result", {"tool": tool_name, "result": result_text[:500]})
+                    tool_results.append(format_tool_result(tool_use_id=tool_use["id"], output=result_text))
+                    continue
+
+                if tool_name == "edit":
+                    path = str(tool_use.get("input", {}).get("path", "")).strip()
+                    old_text = str(tool_use.get("input", {}).get("old_text", ""))
+                    new_text = str(tool_use.get("input", {}).get("new_text", ""))
+                    try:
+                        file_content = Path(path).read_text(encoding="utf-8")
+                        if old_text not in file_content:
+                            result_text = "error: old_text not found in file"
+                        else:
+                            Path(path).write_text(file_content.replace(old_text, new_text, 1), encoding="utf-8")
+                            result_text = f"ok: edited {path}"
+                    except Exception as exc:
+                        result_text = f"error: {exc}"
                     log_activity("tool_result", {"tool": tool_name, "result": result_text[:500]})
                     tool_results.append(format_tool_result(tool_use_id=tool_use["id"], output=result_text))
                     continue
