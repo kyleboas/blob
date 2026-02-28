@@ -13,6 +13,39 @@ import type { Env, AgentConfig } from "./types";
 import { callLLM, generatePlan, executeWithTools } from "./llm";
 import { tools } from "./tools";
 
+/**
+ * Get goals from KV storage or fallback to env vars.
+ */
+async function getGoals(env: Env): Promise<string[]> {
+  if (env.CONFIG) {
+    const stored = await env.CONFIG.get("goals");
+    if (stored) {
+      return stored.split(";").map(g => g.trim()).filter(Boolean);
+    }
+  }
+  return env.GOALS?.split(";").map(g => g.trim()).filter(Boolean) ?? ["improve codebase"];
+}
+
+/**
+ * Save goals to KV storage.
+ */
+async function setGoals(env: Env, goals: string[]): Promise<void> {
+  if (env.CONFIG) {
+    await env.CONFIG.put("goals", goals.join("; "));
+  }
+}
+
+/**
+ * Get repo from KV storage or fallback to env vars.
+ */
+async function getRepo(env: Env): Promise<string> {
+  if (env.CONFIG) {
+    const stored = await env.CONFIG.get("repo");
+    if (stored) return stored;
+  }
+  return env.REPO ?? "kyleboas/blob";
+}
+
 export class AutonomousAgent {
   private config: AgentConfig;
   private env: Env;
@@ -146,9 +179,26 @@ export default {
       return new Response("OK");
     }
     
+    // Get current goals
+    if (url.pathname === "/goals" && request.method === "GET") {
+      const goals = await getGoals(env);
+      return new Response(JSON.stringify({ goals }), {
+        headers: { "content-type": "application/json" }
+      });
+    }
+    
+    // Update goals
+    if (url.pathname === "/goals" && request.method === "POST") {
+      const body = await request.json() as { goals: string[] };
+      await setGoals(env, body.goals);
+      return new Response(JSON.stringify({ status: "saved", goals: body.goals }), {
+        headers: { "content-type": "application/json" }
+      });
+    }
+    
     if (url.pathname === "/run" && request.method === "POST") {
-      const goals = env.GOALS?.split(";").map(g => g.trim()) ?? ["improve codebase"];
-      const repo = env.REPO ?? "kyleboas/blob";
+      const goals = await getGoals(env);
+      const repo = await getRepo(env);
       
       const agent = new AutonomousAgent({ goals, repo, maxSteps: 25 }, env);
       
@@ -164,8 +214,8 @@ export default {
   },
   
   async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
-    const goals = env.GOALS?.split(";").map(g => g.trim()) ?? ["improve codebase"];
-    const repo = env.REPO ?? "kyleboas/blob";
+    const goals = await getGoals(env);
+    const repo = await getRepo(env);
     
     const agent = new AutonomousAgent({ goals, repo, maxSteps: 25 }, env);
     await agent.run();

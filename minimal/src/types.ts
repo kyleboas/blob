@@ -5,8 +5,9 @@
 export interface Env {
   // Cloudflare bindings
   AI?: unknown;
+  CONFIG?: KVNamespace;
   
-  // Configuration
+  // Configuration (fallback defaults)
   GOALS?: string;
   REPO?: string;
   GITHUB_TOKEN?: string;
