@@ -5,6 +5,7 @@ interface Memory {
   userPreferences: Record<string, string>;
   context: Record<string, unknown>;
   modelCatalog?: Record<string, { name: string; description: string; maxTokens: number }>;
+  lastCatalogUpdate?: number;
 }
 
 const DEFAULT_CATALOG: Record<string, { name: string; description: string; maxTokens: number }> = {
@@ -99,7 +100,18 @@ export class MemoryDO {
     }
     
     if (url.pathname === "/catalog/update" && request.method === "POST") {
-      // Cron job endpoint to update catalog
+      // Only update if it's been 7 days since last update
+      const ONE_WEEK = 7 * 24 * 60 * 60 * 1000;
+      const lastUpdate = this.memory.lastCatalogUpdate || 0;
+      
+      if (Date.now() - lastUpdate < ONE_WEEK) {
+        return json({ 
+          updated: false, 
+          reason: "Catalog updated recently", 
+          nextUpdate: new Date(lastUpdate + ONE_WEEK).toISOString()
+        });
+      }
+      
       const body = await request.json().catch(() => ({})) as { 
         cfToken?: string; 
         accountId?: string;
@@ -107,6 +119,7 @@ export class MemoryDO {
       const updated = await this.fetchModelsFromGateway(body.cfToken, body.accountId);
       if (updated) {
         this.memory.modelCatalog = updated;
+        this.memory.lastCatalogUpdate = Date.now();
         await this.state.storage.put("memory", this.memory);
         return json({ updated: true, count: Object.keys(updated).length });
       }
