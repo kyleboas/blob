@@ -9,7 +9,7 @@ crons = ["*/5 * * * *", "0 0 * * 0"]
 name = "BLOB"
 class_name = "BlobDO"
 
-[[containers]]
+[containers]
 class_name = "BlobSandbox"
 image = "./sandbox/Dockerfile"
 max_instances = 3
