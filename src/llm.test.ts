@@ -1,16 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { callLLM, selectModel } from "./llm";
-import { MODEL_CHAT, MODEL_COMPLEX, MODEL_ROUTINE } from "./config";
+import { MODEL_CHAT, MODEL_COMPLEX, MODEL_SIMPLE } from "./config";
 
 describe("selectModel", () => {
   it("defaults to routine model", () => {
     const model = selectModel("You are a helpful assistant", [{ role: "user", content: "say hi" }]);
-    expect(model).toBe(MODEL_ROUTINE);
+    expect(model).toBe(MODEL_SIMPLE);
   });
 
   it("stays on routine model when no complexity hint is provided", () => {
     const model = selectModel("Perform complex reasoning for architecture migration", []);
-    expect(model).toBe(MODEL_ROUTINE);
+    expect(model).toBe(MODEL_SIMPLE);
   });
 
   it("escalates to complex model when hint is complex", () => {
@@ -47,7 +47,7 @@ describe("callLLM", () => {
       ok: true,
       json: async () => ({
         id: "msg_1",
-        model: MODEL_ROUTINE,
+        model: MODEL_SIMPLE,
         content: [{ type: "text", text: "ok" }],
         stop_reason: "end_turn",
         usage: { input_tokens: 10, output_tokens: 5 }
@@ -210,7 +210,7 @@ describe("callLLM", () => {
     const rateLimitResponse = { ok: false, status: 429, text: async () => "rate limit" };
     const successResponse = {
       ok: true,
-      json: async () => ({ id: "msg_3", model: MODEL_ROUTINE, content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 5 } })
+      json: async () => ({ id: "msg_3", model: MODEL_SIMPLE, content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 5 } })
     };
     const mockFetch = vi.fn().mockResolvedValueOnce(rateLimitResponse).mockResolvedValueOnce(successResponse);
     const mockSleep = vi.fn().mockResolvedValue(undefined);
@@ -232,7 +232,7 @@ describe("callLLM", () => {
     const upstreamErrorResponse = { ok: false, status: 500, text: async () => "internal server error" };
     const successResponse = {
       ok: true,
-      json: async () => ({ id: "msg_4", model: MODEL_ROUTINE, content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 5 } })
+      json: async () => ({ id: "msg_4", model: MODEL_SIMPLE, content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 5 } })
     };
     const mockFetch = vi.fn().mockResolvedValueOnce(upstreamErrorResponse).mockResolvedValueOnce(successResponse);
     const mockSleep = vi.fn().mockResolvedValue(undefined);
@@ -257,7 +257,7 @@ describe("callLLM", () => {
     timeoutError.name = "AbortError";
     const successResponse = {
       ok: true,
-      json: async () => ({ id: "msg_5", model: MODEL_ROUTINE, content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 5 } })
+      json: async () => ({ id: "msg_5", model: MODEL_SIMPLE, content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 5 } })
     };
     const mockFetch = vi.fn().mockRejectedValueOnce(timeoutError).mockResolvedValueOnce(successResponse);
     const mockSleep = vi.fn().mockResolvedValue(undefined);
@@ -279,7 +279,7 @@ describe("callLLM", () => {
   it("passes an abort signal to fetch", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ id: "msg_6", model: MODEL_ROUTINE, content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 5 } })
+      json: async () => ({ id: "msg_6", model: MODEL_SIMPLE, content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 5 } })
     });
 
     await callLLM({
