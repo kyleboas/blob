@@ -6,4 +6,6 @@ export interface Env {
   SLACK_BOT_TOKEN?: string;
   CLOUDFLARE_API_TOKEN?: string;
   ACCOUNT_ID?: string;
+  SANDBOX_CONTAINER_URL?: string;
+  SANDBOX_TOKEN?: string;
 }
