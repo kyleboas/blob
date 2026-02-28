@@ -3163,9 +3163,9 @@ ${auditContext}` }
         "You can access and modify your own source code at https://github.com/kyleboas/blob.",
         "When users ask about heartbeats, tell them about the heartbeat system and that they can check status by saying 'show my heartbeats'.",
         "IMPORTANT: Your role is conversational responses ONLY. You do NOT execute code or modify files directly.",
-        "The router model (@cf/ibm-granite/granite-4.0-h-micro) decides whether to route to you for chat, or spawn a sub-agent for execution.",
-        "When execution is needed, the router delegates to simple or complex sub-agents - you don't choose, the router does.",
-        "You are the conversational interface - the router is the coordinator that decides who handles what.",
+        "Fast-path pattern matching decides whether to route to you for chat, or spawn a sub-agent for execution.",
+        "When execution is needed, sub-agents are spawned - you don't choose, the orchestrator does.",
+        "You are the conversational interface - the orchestrator decides who handles what.",
         `Current date and time: ${timeString}. When asked about the time, respond with this information directly.`
       ].join(" ");
       const conversation = [...priorMessages, { role: "user" as const, content: task }];
