@@ -1,42 +1,34 @@
-# Minimal Autonomous Blob
+# Blob - Autonomous Coding Agent
 
-A fully autonomous coding agent using the PI philosophy.
+Fully autonomous agent that works on GitHub repositories.
 
-## Architecture
+## Setup
 
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Heartbeat │────▶│   Planner   │────▶│  Executor   │
-│   (5 min)   │     │  (LLM)      │     │  (LLM +     │
-└─────────────┘     └─────────────┘     │   Tools)    │
-                                        └─────────────┘
-```
+```bash
+wrangler kv:namespace create CONFIG
+# Copy the ID into wrangler.toml
 
-## Components
+wrangler secret put GITHUB_TOKEN
+wrangler secret put AI_GATEWAY_TOKEN  
+wrangler secret put AI_GATEWAY_BASE_URL
 
-1. **Planner** - Decides what to work on based on repository goals
-2. **Executor** - Executes tasks using tools (read, write, edit, bash)
-3. **Heartbeat** - Runs every 5 minutes to self-improve
-
-## Tools (4 core)
-
-- `read` - Read files
-- `write` - Write files  
-- `edit` - Edit files
-- `bash` - Run shell commands
-
-## Configuration
-
-Set in `wrangler.toml` or via environment:
-
-```
-GOALS="improve test coverage; fix bugs; add documentation"
-REPO="kyleboas/blob"
+wrangler deploy
 ```
 
-## No Human in the Loop
+## API
 
-- No approval gates
-- No confirmation prompts
-- Auto-commit and push on success
-- Self-healing on failure
+```bash
+# List repos
+curl https://blob.your-account.workers.dev/repos
+
+# Add repo
+curl -X POST https://blob.your-account.workers.dev/repos -d '{"repo":"owner/repo"}'
+
+# Set goals
+curl -X POST https://blob.your-account.workers.dev/repos/owner/repo/goals -d '{"goals":["fix bugs"]}'
+
+# Run now
+curl -X POST https://blob.your-account.workers.dev/run
+```
+
+Runs automatically every 5 minutes.

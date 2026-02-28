@@ -1,15 +1,10 @@
-name = "blob-autonomous"
-main = "dist/index.js"
+name = "blob"
+main = "src/index.ts"
 compatibility_date = "2024-02-08"
 
 [triggers]
-crons = ["*/5 * * * *"]  # Run every 5 minutes
+crons = ["*/5 * * * *"]
 
 [[kv_namespaces]]
 binding = "CONFIG"
 id = "your-kv-namespace-id"
-
-# Secrets (set via wrangler secret put):
-# - GITHUB_TOKEN (needs repo access for public and private repos)
-# - AI_GATEWAY_TOKEN
-# - AI_GATEWAY_BASE_URL

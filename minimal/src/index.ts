@@ -1,39 +1,30 @@
 /**
- * Multi-repo autonomous agent.
+ * Minimal Autonomous Blob - Single File Version
  * 
- * Philosophy:
+ * Fully autonomous coding agent that:
  * - Works on multiple repositories
- * - Per-repository goals stored in KV
- * - Fully autonomous - no human in the loop
- * - Self-healing on errors
+ * - Stores per-repo goals in Cloudflare KV
+ * - Runs every 5 minutes via cron
+ * - No human in the loop
  */
 
-import type { Env, AgentConfig, RepoConfig } from "./types";
-import { callLLM, generatePlan, executeWithTools } from "./llm";
-import { tools } from "./tools";
-
-// Default repositories to work on
-const DEFAULT_REPOS = ["kyleboas/blob"];
-
-/**
- * Get list of all repositories being managed.
- */
-async function getRepos(env: Env): Promise<string[]> {
-  if (!env.CONFIG) return DEFAULT_REPOS;
-  
-  const reposList = await env.CONFIG.get("repos");
-  if (reposList) {
-    return reposList.split(",").map(r => r.trim()).filter(Boolean);
-  }
-  return DEFAULT_REPOS;
+// Types
+interface Env {
+  CONFIG?: KVNamespace;
+  GITHUB_TOKEN?: string;
+  AI_GATEWAY_TOKEN?: string;
+  AI_GATEWAY_BASE_URL?: string;
 }
 
-/**
- * Add a repository to the managed list.
- */
+// KV Helpers
+async function getRepos(env: Env): Promise<string[]> {
+  if (!env.CONFIG) return ["kyleboas/blob"];
+  const stored = await env.CONFIG.get("repos");
+  return stored ? stored.split(",").map(r => r.trim()) : ["kyleboas/blob"];
+}
+
 async function addRepo(env: Env, repo: string): Promise<void> {
   if (!env.CONFIG) return;
-  
   const repos = await getRepos(env);
   if (!repos.includes(repo)) {
     repos.push(repo);
@@ -41,263 +32,123 @@ async function addRepo(env: Env, repo: string): Promise<void> {
   }
 }
 
-/**
- * Get goals for a specific repository.
- */
 async function getRepoGoals(env: Env, repo: string): Promise<string[]> {
   if (!env.CONFIG) return ["improve codebase"];
-  
-  const key = `goals:${repo}`;
-  const stored = await env.CONFIG.get(key);
-  
-  if (stored) {
-    return stored.split(";").map(g => g.trim()).filter(Boolean);
-  }
-  
-  // Default goals for new repos
-  return ["improve code quality", "fix bugs", "add documentation"];
+  const stored = await env.CONFIG.get(`goals:${repo}`);
+  return stored ? stored.split(";").map(g => g.trim()) : ["improve codebase"];
 }
 
-/**
- * Set goals for a specific repository.
- */
 async function setRepoGoals(env: Env, repo: string, goals: string[]): Promise<void> {
-  if (!env.CONFIG) return;
-  
-  const key = `goals:${repo}`;
-  await env.CONFIG.put(key, goals.join("; "));
+  if (env.CONFIG) {
+    await env.CONFIG.put(`goals:${repo}`, goals.join("; "));
+  }
 }
 
-/**
- * Get all repository configs.
- */
-async function getAllRepoConfigs(env: Env): Promise<Array<{ repo: string; goals: string[] }>> {
-  const repos = await getRepos(env);
-  const configs = [];
-  
-  for (const repo of repos) {
-    const goals = await getRepoGoals(env, repo);
-    configs.push({ repo, goals });
-  }
-  
-  return configs;
+// LLM
+async function callLLM(
+  messages: Array<{ role: string; content: string }>,
+  env: Env,
+  opts: { maxTokens?: number } = {}
+): Promise<string> {
+  const response = await fetch(`${env.AI_GATEWAY_BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "cf-aig-authorization": `Bearer ${env.AI_GATEWAY_TOKEN}`,
+    },
+    body: JSON.stringify({
+      model: "@cf/meta/llama-3.3-70b-instruct-fp8",
+      messages,
+      max_tokens: opts.maxTokens ?? 4096,
+    }),
+  });
+  const data = await response.json() as { choices: Array<{ message: { content: string } }> };
+  return data.choices[0]?.message?.content ?? "";
 }
 
-export class AutonomousAgent {
-  private config: AgentConfig;
-  private env: Env;
-  private toolResults: string[];
+async function plan(goals: string[], env: Env): Promise<string> {
+  const prompt = `You are an autonomous coding agent.\n\nRepository goals:\n${goals.map(g => `- ${g}`).join("\n")}\n\nWhat is ONE specific task to work on next? Respond with only the task description.`;
+  return (await callLLM([{ role: "user", content: prompt }], env)).trim();
+}
 
-  constructor(config: AgentConfig, env: Env) {
-    this.config = config;
-    this.env = env;
-    this.toolResults = [];
-  }
+// Agent
+class Agent {
+  constructor(private repo: string, private goals: string[], private env: Env) {}
 
-  /**
-   * Run one autonomous iteration: plan → execute → commit
-   */
-  async run(): Promise<{ task: string; result: string; repo: string } | { error: string; repo: string }> {
-    this.toolResults = [];
-    
+  async run(): Promise<void> {
     try {
-      // 1. Plan what to work on
-      const task = await this.plan();
-      console.log(`[PLAN][${this.config.repo}] ${task}`);
+      const task = await plan(this.goals, this.env);
+      console.log(`[${this.repo}] Task: ${task}`);
       
-      // 2. Execute the task
-      const result = await this.execute(task);
-      console.log(`[EXEC][${this.config.repo}] ${result}`);
+      // Execute task (simplified - just log for now)
+      console.log(`[${this.repo}] Executing...`);
       
-      // 3. Auto-commit on success
-      await this.commit(task, result);
-      
-      return { task, result, repo: this.config.repo };
-    } catch (error) {
-      const errorMsg = String(error);
-      console.error(`[ERROR][${this.config.repo}] ${errorMsg}`);
-      
-      // 4. Self-heal on failure
-      const healed = await this.selfHeal(errorMsg);
-      if (healed) {
-        return { task: "self-heal", result: "Recovered from error", repo: this.config.repo };
-      }
-      
-      return { error: errorMsg, repo: this.config.repo };
+      // Auto-commit
+      await this.commit(task);
+    } catch (err) {
+      console.error(`[${this.repo}] Error: ${err}`);
     }
   }
 
-  /**
-   * Plan what to work on based on goals.
-   */
-  private async plan(): Promise<string> {
-    return generatePlan(this.config.goals, this.env);
-  }
-
-  /**
-   * Execute a task using tools in a loop.
-   */
-  private async execute(task: string): Promise<string> {
-    const ctx = { env: this.env, repoPath: `/tmp/${this.config.repo}` };
-    
-    for (let step = 0; step < this.config.maxSteps; step++) {
-      // Get next action from LLM
-      const decision = await executeWithTools(task, this.toolResults, this.env);
-      
-      // Check if done
-      if (typeof decision === "string") {
-        return decision;
-      }
-      
-      if ("done" in decision && decision.done) {
-        const doneDecision = decision as { done: boolean; summary?: string };
-        return doneDecision.summary ?? "Task completed";
-      }
-      
-      // Execute tool
-      const { tool, args } = decision as unknown as { tool: string; args: Record<string, unknown> };
-      
-      if (!(tool in tools)) {
-        this.toolResults.push(`Error: Unknown tool "${tool}"`);
-        continue;
-      }
-      
-      try {
-        const result = await tools[tool](args, ctx);
-        this.toolResults.push(`[${tool}] ${result}`);
-      } catch (error) {
-        this.toolResults.push(`[${tool}] Error: ${error}`);
-      }
-    }
-    
-    return `Reached max steps (${this.config.maxSteps}). Last actions:\n${this.toolResults.join("\n")}`;
-  }
-
-  /**
-   * Self-heal by creating a fix task.
-   */
-  private async selfHeal(error: string): Promise<boolean> {
-    try {
-      const fixTask = `Fix this error and complete the task: ${error}`;
-      await this.execute(fixTask);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Auto-commit changes.
-   */
-  private async commit(task: string, _result: string): Promise<void> {
+  private async commit(task: string): Promise<void> {
     if (!this.env.GITHUB_TOKEN) {
-      console.log(`[COMMIT][${this.config.repo}] Skipped (no GITHUB_TOKEN)`);
+      console.log(`[${this.repo}] No GITHUB_TOKEN, skipping commit`);
       return;
     }
-    
-    // Create branch, commit, push, create PR
-    const branchName = `auto/${Date.now()}`;
-    console.log(`[COMMIT][${this.config.repo}] Would create branch ${branchName} for: ${task}`);
-    
-    // In real implementation:
-    // 1. git checkout -b branchName
-    // 2. git add .
-    // 3. git commit -m "${task}"
-    // 4. git push origin branchName
-    // 5. gh pr create --title "${task}" --body "Autonomous change"
+    console.log(`[${this.repo}] Would commit: ${task}`);
+    // TODO: Implement actual git operations
   }
 }
 
+// Worker
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     
-    if (url.pathname === "/health") {
-      return new Response("OK");
-    }
+    if (url.pathname === "/health") return new Response("OK");
     
-    // List all repos and their goals
     if (url.pathname === "/repos" && request.method === "GET") {
-      const configs = await getAllRepoConfigs(env);
-      return new Response(JSON.stringify({ repos: configs }), {
-        headers: { "content-type": "application/json" }
-      });
+      const repos = await getRepos(env);
+      const configs = await Promise.all(repos.map(async (r) => ({ repo: r, goals: await getRepoGoals(env, r) })));
+      return json(configs);
     }
     
-    // Add a new repository
     if (url.pathname === "/repos" && request.method === "POST") {
-      const body = await request.json() as { repo: string };
-      await addRepo(env, body.repo);
-      return new Response(JSON.stringify({ status: "added", repo: body.repo }), {
-        headers: { "content-type": "application/json" }
-      });
+      const { repo } = await request.json() as { repo: string };
+      await addRepo(env, repo);
+      return json({ added: repo });
     }
     
-    // Get goals for a specific repo
-    if (url.pathname.startsWith("/repos/") && url.pathname.endsWith("/goals") && request.method === "GET") {
-      const repo = url.pathname.replace("/repos/", "").replace("/goals", "");
-      const goals = await getRepoGoals(env, repo);
-      return new Response(JSON.stringify({ repo, goals }), {
-        headers: { "content-type": "application/json" }
-      });
+    if (url.pathname.match(/^\/repos\/[^\/]+\/goals$/) && request.method === "GET") {
+      const repo = url.pathname.split("/")[2];
+      return json({ repo, goals: await getRepoGoals(env, repo) });
     }
     
-    // Set goals for a specific repo
-    if (url.pathname.startsWith("/repos/") && url.pathname.endsWith("/goals") && request.method === "POST") {
-      const repo = url.pathname.replace("/repos/", "").replace("/goals", "");
-      const body = await request.json() as { goals: string[] };
-      await setRepoGoals(env, repo, body.goals);
-      return new Response(JSON.stringify({ status: "saved", repo, goals: body.goals }), {
-        headers: { "content-type": "application/json" }
-      });
+    if (url.pathname.match(/^\/repos\/[^\/]+\/goals$/) && request.method === "POST") {
+      const repo = url.pathname.split("/")[2];
+      const { goals } = await request.json() as { goals: string[] };
+      await setRepoGoals(env, repo, goals);
+      return json({ saved: repo, goals });
     }
     
-    // Run on all repos
     if (url.pathname === "/run" && request.method === "POST") {
       const repos = await getRepos(env);
-      
-      // Run on each repo in parallel
-      const promises = repos.map(async (repo) => {
-        const goals = await getRepoGoals(env, repo);
-        const agent = new AutonomousAgent({ goals, repo, maxSteps: 25 }, env);
-        return agent.run();
-      });
-      
-      // Don't await - run in background
-      Promise.all(promises).catch(console.error);
-      
-      return new Response(JSON.stringify({ status: "started", repos }), {
-        headers: { "content-type": "application/json" }
-      });
-    }
-    
-    // Run on specific repo
-    if (url.pathname === "/run" && request.method === "POST") {
-      const body = await request.json() as { repo?: string };
-      const repo = body?.repo ?? "kyleboas/blob";
-      const goals = await getRepoGoals(env, repo);
-      
-      const agent = new AutonomousAgent({ goals, repo, maxSteps: 25 }, env);
-      
-      // Run in background
-      agent.run().catch(console.error);
-      
-      return new Response(JSON.stringify({ status: "started", repo }), {
-        headers: { "content-type": "application/json" }
-      });
+      repos.forEach(r => new Agent(r, [], env).run().catch(console.error));
+      return json({ started: repos });
     }
     
     return new Response("Not found", { status: 404 });
   },
   
-  async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
+  async scheduled(_: ScheduledEvent, env: Env): Promise<void> {
     const repos = await getRepos(env);
-    
-    // Run on each repo sequentially to avoid rate limits
     for (const repo of repos) {
       const goals = await getRepoGoals(env, repo);
-      const agent = new AutonomousAgent({ goals, repo, maxSteps: 25 }, env);
-      await agent.run();
+      await new Agent(repo, goals, env).run();
     }
   }
 };
+
+function json(data: unknown): Response {
+  return new Response(JSON.stringify(data), { headers: { "content-type": "application/json" } });
+}
