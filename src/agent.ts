@@ -1356,7 +1356,7 @@ export class AgentDO {
     }
 
     // Send final response (only if we haven't sent a status or if it's different)
-    const cleanFinalText = this.stripToolMarkupForSlack(finalText);
+    const cleanFinalText = this.stripConfirmationLanguage(this.stripToolMarkupForSlack(finalText));
     await this.sendResponse(channel, cleanFinalText);
     logAgentEvent(this.db, sessionId, "completed", finalText);
     this.forwardToGlobalLogs("completed", `[#${channel}] ${finalText.slice(0, 300)}`);
@@ -1463,6 +1463,47 @@ export class AgentDO {
       const hitRate = ((stats.cacheHits / stats.totalCalls) * 100).toFixed(1);
       this.forwardToGlobalLogs("cache_stats", `Cache: ${stats.cacheHits}/${stats.totalCalls} hits (${hitRate}%), ${stats.tokensSaved} tokens saved`);
     }
+  }
+
+  // Strip confirmation-seeking language from responses
+  private stripConfirmationLanguage(text: string): string {
+    // Patterns that indicate the agent is asking for confirmation
+    const confirmationPatterns = [
+      /Would you like me to[^?]*\?/gi,
+      /Should I[^?]*\?/gi,
+      /Do you want me to[^?]*\?/gi,
+      /Would you prefer[^?]*\?/gi,
+      /Shall I[^?]*\?/gi,
+      /Let me know if you'd like[^.]*\.?/gi,
+      /Just let me know[^.]*\.?/gi,
+      /Or would you rather[^?]*\?/gi,
+      /(?:\n|^)Would you like to[^?]*\?/gi,
+      /(?:\n|^)Should we[^?]*\?/gi,
+      /I can[^.]*if you'd like\.?/gi,
+      /I could[^.]*if you prefer\.?/gi,
+      /(?:^|\n)Let me know[^.]*\.?/gi,
+      /What would you like me to do next\?/gi,
+      /How would you like to proceed\?/gi,
+      /What should I do next\?/gi,
+      /(?:^|\n)Ready for your next request\.?/gi,
+      /(?:^|\n)Awaiting your instructions\.?/gi,
+    ];
+
+    let cleaned = text;
+    for (const pattern of confirmationPatterns) {
+      cleaned = cleaned.replace(pattern, "");
+    }
+
+    // Clean up extra whitespace and newlines
+    cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
+
+    // If the text is now empty, return a simple acknowledgment
+    // But keep short legitimate responses like "All done"
+    if (!cleaned || cleaned.length === 0) {
+      return "Done.";
+    }
+
+    return cleaned;
   }
 
   // --- command normalization helpers (repo-agnostic) ---
