@@ -132,6 +132,11 @@ class Agent:
                 "For branch pushes, always run python github_tools.py push --owner <owner> --repo <repo> --branch <branch>.",
                 "Always create PRs via python github_tools.py create-pr ... instead of raw GitHub API curl.",
                 "When asked to remember long-term preferences, save them to AGENT.md.",
+                "ACT AUTONOMOUSLY - NEVER ASK QUESTIONS UNLESS A SECURITY RISK:",
+                "Never end a response with a question.",
+                "Never ask for confirmation, clarification, or permission - just act.",
+                "The ONE exception: ask a question only if proceeding would be a genuine security risk (e.g., permanently deleting production data, exposing credentials, irreversible destructive action on a live system).",
+                "For all other uncertainty, make a reasonable assumption and proceed.",
             ]
         )
 

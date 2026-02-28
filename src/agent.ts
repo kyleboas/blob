@@ -167,14 +167,14 @@ const BASE_SYSTEM_PROMPT = [
   "- You CAN see, query, and edit persistent storage directly - use sql_query and kv_get/kv_put tools",
   "- Never say you cannot access or see persistent storage - you have dedicated tools for it",
   "",
-  "BE PROACTIVE - NEVER ASK FOR CONFIRMATION:",
-  "- When you think 'should I ask before doing this?' - DON'T. Just do it.",
-  "- If you want to say 'would you like me to test this?' - STOP. Just run the test.",
-  "- If you want to say 'shall I proceed?' - STOP. Proceed silently.",
-  "- If you want to say 'let me know if you want me to...' - STOP. Do it now.",
-  "- NEVER end with questions like 'what would you like me to do next?' - just wait.",
-  "- Use tools to take action, not words to ask permission",
-  "- The user wants you to act, not to ask",
+  "ACT AUTONOMOUSLY - NEVER ASK QUESTIONS UNLESS A SECURITY RISK:",
+  "- Never end a response with a question. Never.",
+  "- Never ask for confirmation, clarification, or permission before acting - just do it.",
+  "- Make reasonable assumptions and proceed. The user set goals so you can act on them.",
+  "- The ONE exception: ask a question only if proceeding would be a genuine security risk",
+  "  (e.g., permanently deleting production data, exposing credentials/secrets, an irreversible destructive action on a live system).",
+  "- For everything else - uncertainty, ambiguity, next steps - make a decision and act.",
+  "- Use tools to take action, not words to ask permission.",
   "",
   "KEEP RESPONSES CONCISE:",
   "- Slack messages should be brief (under 2000 chars)",
@@ -1524,7 +1524,30 @@ Use the bash, write, or edit tool to take action right now.`;
     return this.repoContextByCwd.get(cwd) ?? null;
   }
 
+  // Returns true if the text contains a security-risk question that should be allowed through.
+  private isSecurityRiskQuestion(text: string): boolean {
+    const securityRiskPatterns = [
+      /security risk/i,
+      /security concern/i,
+      /dangerous/i,
+      /destructive/i,
+      /irreversible/i,
+      /permanently delete/i,
+      /data loss/i,
+      /production data/i,
+      /credentials/i,
+      /expose.*secret/i,
+      /cannot be undone/i,
+      /can't be undone/i,
+    ];
+    return securityRiskPatterns.some(pattern => pattern.test(text));
+  }
+
   private isAskingForConfirmation(text: string): boolean {
+    // Security risk questions are the only allowed questions - let them through.
+    if (this.isSecurityRiskQuestion(text)) {
+      return false;
+    }
     const confirmationPatterns = [
       /would you like me to/i,
       /should i/i,
@@ -1543,6 +1566,8 @@ Use the bash, write, or edit tool to take action right now.`;
       /what should i do next/i,
       /ready for your next request/i,
       /awaiting your instructions/i,
+      // Catch-all: response ends with any question mark
+      /\?\s*$/,
     ];
     return confirmationPatterns.some(pattern => pattern.test(text));
   }
@@ -3363,9 +3388,14 @@ ${auditContext}` }
     return stripped || text.trim();
   }
 
-  // Strip confirmation-seeking language from responses
+  // Strip confirmation-seeking language and non-security questions from responses.
   private stripConfirmationLanguage(text: string): string {
-    // Patterns that indicate the agent is asking for confirmation
+    // Security risk questions are the only allowed questions - preserve the full text.
+    if (this.isSecurityRiskQuestion(text)) {
+      return text;
+    }
+
+    // Inline patterns to strip regardless of position
     const confirmationPatterns = [
       /Would you like me to[^?]*\?/gi,
       /Should I[^?]*\?/gi,
@@ -3392,11 +3422,13 @@ ${auditContext}` }
       cleaned = cleaned.replace(pattern, "");
     }
 
+    // Strip any trailing sentence that ends with "?" (catch-all for non-security questions).
+    // Split off the last sentence and check if it's a question.
+    cleaned = cleaned.replace(/[^.!]*\?\s*$/, "").trim();
+
     // Clean up extra whitespace and newlines
     cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
 
-    // If the text is now empty, return a simple acknowledgment
-    // But keep short legitimate responses like "All done"
     if (!cleaned || cleaned.length === 0) {
       return "Done.";
     }
