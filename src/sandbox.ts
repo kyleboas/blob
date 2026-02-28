@@ -1,9 +1,73 @@
 import type { Env } from "./types";
 
-export async function executeInSandbox(): Promise<never> {
-  throw new Error("Sandbox disabled (Containers-on-Workers not enabled/bound for this Worker).");
+interface SandboxResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
 }
 
-export async function sandboxStatus(_env: Env): Promise<{ ready: boolean; message: string }> {
-  return { ready: false, message: "Sandbox disabled" };
+// Validate command before execution
+function validateCommand(command: string): { valid: boolean; error?: string } {
+  // Block dangerous commands
+  const dangerous = [
+    /rm\s+-rf\s+\//,
+    /:\(\)\{\s*:\|:\s*&\s*\}.*:\)/, // Fork bomb
+  ];
+  
+  for (const pattern of dangerous) {
+    if (pattern.test(command)) {
+      return { valid: false, error: `Dangerous command blocked: ${command}` };
+    }
+  }
+  
+  return { valid: true };
+}
+
+export async function executeInSandbox(
+  command: string,
+  env: Env,
+  opts: { timeout?: number; signal?: AbortSignal } = {}
+): Promise<SandboxResult> {
+  // Validate command
+  const validation = validateCommand(command);
+  if (!validation.valid) {
+    throw new Error(validation.error);
+  }
+
+  if (!env.SANDBOX) {
+    throw new Error("SANDBOX binding not found");
+  }
+
+  const timeout = opts.timeout || 30000;
+
+  const response = await env.SANDBOX.fetch("http://localhost:8080/execute", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ command, timeout }),
+    signal: opts.signal,
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Sandbox error: ${response.status} ${error}`);
+  }
+
+  return await response.json() as SandboxResult;
+}
+
+export async function sandboxStatus(env: Env): Promise<{ ready: boolean; message?: string }> {
+  if (!env.SANDBOX) {
+    return { ready: false, message: "SANDBOX binding not found" };
+  }
+
+  try {
+    const response = await env.SANDBOX.fetch("http://localhost:8080/health");
+    
+    if (response.ok) {
+      return { ready: true };
+    }
+    return { ready: false, message: `Health check failed: ${response.status}` };
+  } catch (err) {
+    return { ready: false, message: `Connection failed: ${err}` };
+  }
 }

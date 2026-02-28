@@ -10,6 +10,12 @@ class_name = "AgentDO"
 tag = "v1"
 new_classes = ["AgentDO"]
 
+# Container binding (simple Fetcher approach)
+[[containers]]
+name = "SANDBOX"
+image = "./sandbox/Dockerfile"
+max_instances = 3
+
 [observability]
 [observability.logs]
 enabled = true
