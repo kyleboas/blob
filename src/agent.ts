@@ -5,6 +5,7 @@ import {
   COMPACTION_TOKEN_THRESHOLD,
   BACKGROUND_TASK_INTERVAL_MS,
   PLANNER_AUDIT_MAX_ATTEMPTS,
+  SECURITY_AUDIT_INTERVAL_HEARTBEATS,
   MODEL_CHAT,
   MODEL_SIMPLE,
   MODEL_COMPLEX,
@@ -167,14 +168,14 @@ const BASE_SYSTEM_PROMPT = [
   "- You CAN see, query, and edit persistent storage directly - use sql_query and kv_get/kv_put tools",
   "- Never say you cannot access or see persistent storage - you have dedicated tools for it",
   "",
-  "BE PROACTIVE - NEVER ASK FOR CONFIRMATION:",
-  "- When you think 'should I ask before doing this?' - DON'T. Just do it.",
-  "- If you want to say 'would you like me to test this?' - STOP. Just run the test.",
-  "- If you want to say 'shall I proceed?' - STOP. Proceed silently.",
-  "- If you want to say 'let me know if you want me to...' - STOP. Do it now.",
-  "- NEVER end with questions like 'what would you like me to do next?' - just wait.",
-  "- Use tools to take action, not words to ask permission",
-  "- The user wants you to act, not to ask",
+  "ACT AUTONOMOUSLY - NEVER ASK QUESTIONS UNLESS A SECURITY RISK:",
+  "- Never end a response with a question. Never.",
+  "- Never ask for confirmation, clarification, or permission before acting - just do it.",
+  "- Make reasonable assumptions and proceed. The user set goals so you can act on them.",
+  "- The ONE exception: ask a question only if proceeding would be a genuine security risk",
+  "  (e.g., permanently deleting production data, exposing credentials/secrets, an irreversible destructive action on a live system).",
+  "- For everything else - uncertainty, ambiguity, next steps - make a decision and act.",
+  "- Use tools to take action, not words to ask permission.",
   "",
   "KEEP RESPONSES CONCISE:",
   "- Slack messages should be brief (under 2000 chars)",
@@ -1247,6 +1248,7 @@ export class AgentDO {
     let steps = 0;
     let sandboxStarted = false;
     let statusSent = false;
+    let finalTextIsSecurityRisk = false;
 
     try {
       const firstResponse = await this.traceOperation(
@@ -1292,18 +1294,25 @@ export class AgentDO {
             .join("\n")
             .trim() || "Done.";
           
-          // Check if the response is asking for confirmation instead of taking action
-          if (this.isAskingForConfirmation(finalText)) {
-            // Re-prompt the LLM to take action instead of asking
+          // If the response ends with a question, let the LLM decide if it's a
+          // genuine security risk (allowed) or a routine confirmation (re-prompt).
+          if (/\?/.test(finalText)) {
+            const isSecurityRisk = await this.classifySecurityRiskQuestion(finalText);
+            if (isSecurityRisk) {
+              finalTextIsSecurityRisk = true;
+              break; // Security risk question — surface it to the user as-is.
+            }
+
+            // Routine confirmation question — re-prompt the agent to just act.
             const proactivePrompt = `You were about to ask: "${finalText}"
 
 INSTEAD OF ASKING, JUST DO IT. Take the action directly using the appropriate tool.
 If you were going to ask about testing, run the test. If about implementing, implement it.
 Use the bash, write, or edit tool to take action right now.`;
-            
+
             conversation.push({ role: "user", content: proactivePrompt });
             saveMessage(this.db, sessionId, { role: "user", content: proactivePrompt });
-            
+
             llmResponse = await this.deps.llmCall(this.buildLlmInput({
               systemPrompt: systemPromptWithStatus,
               messages: conversation,
@@ -1311,16 +1320,15 @@ Use the bash, write, or edit tool to take action right now.`;
               taskComplexityHint: options.taskComplexityHint,
               modelRole: "execution"
             }));
-            
-            // Safety check - if the response is invalid, break to avoid infinite loop
+
             if (!llmResponse || !llmResponse.content) {
               finalText = "Error: Invalid response from proactive re-prompt";
               break;
             }
-            
+
             continue; // Process the new response with tool calls
           }
-          
+
           break;
         }
 
@@ -1386,10 +1394,12 @@ Use the bash, write, or edit tool to take action right now.`;
       finalText = `Stopped after reaching max steps (${MAX_STEPS}).`;
     }
 
-    // Send final response (only if we haven't sent a status or if it's different)
-    const cleanFinalText = this.stripConfirmationLanguage(
-      this.stripConfirmationLanguageForSlack(this.stripToolMarkupForSlack(finalText))
-    );
+    // Security risk questions are surfaced verbatim; everything else is cleaned.
+    const cleanFinalText = finalTextIsSecurityRisk
+      ? finalText
+      : this.stripConfirmationLanguage(
+          this.stripConfirmationLanguageForSlack(this.stripToolMarkupForSlack(finalText))
+        );
     await this.sendResponse(channel, cleanFinalText);
     logAgentEvent(this.db, sessionId, "completed", finalText);
     this.forwardToGlobalLogs("completed", `[#${channel}] ${finalText.slice(0, 300)}`);
@@ -1524,27 +1534,23 @@ Use the bash, write, or edit tool to take action right now.`;
     return this.repoContextByCwd.get(cwd) ?? null;
   }
 
-  private isAskingForConfirmation(text: string): boolean {
-    const confirmationPatterns = [
-      /would you like me to/i,
-      /should i/i,
-      /do you want me to/i,
-      /would you prefer/i,
-      /shall i/i,
-      /let me know if you'd like/i,
-      /just let me know/i,
-      /or would you rather/i,
-      /would you like to/i,
-      /should we/i,
-      /i can.*if you'd like/i,
-      /i could.*if you prefer/i,
-      /what would you like me to do next/i,
-      /how would you like to proceed/i,
-      /what should i do next/i,
-      /ready for your next request/i,
-      /awaiting your instructions/i,
-    ];
-    return confirmationPatterns.some(pattern => pattern.test(text));
+  // Asks the LLM to decide if a question is a genuine security risk (data loss,
+  // credential exposure, irreversible destructive action) that warrants pausing
+  // for user input. Returns true only for real security concerns.
+  private async classifySecurityRiskQuestion(text: string): Promise<boolean> {
+    const response = await this.deps.llmCall(this.buildLlmInput({
+      model: this.getRuntimeModelSettings().chatModel,
+      modelRole: "planner",
+      systemPrompt: [
+        "You are a security risk classifier.",
+        "Decide whether the text contains a question about a GENUINE security risk:",
+        "permanent data deletion, credential/secret exposure, or an irreversible destructive action on a live system.",
+        "Reply with exactly one word: security_risk OR not_security_risk.",
+        "Do not add any other text."
+      ].join(" "),
+      messages: [{ role: "user", content: text }]
+    }));
+    return extractTextContent(response).trim().toLowerCase().includes("security_risk");
   }
 
   private async maybeCaptureRepoContext(cwd: string | null): Promise<RepoContext | null> {
@@ -3363,9 +3369,11 @@ ${auditContext}` }
     return stripped || text.trim();
   }
 
-  // Strip confirmation-seeking language from responses
+  // Strip confirmation-seeking language and non-security questions from responses.
+  // Security risk questions are handled upstream (finalTextIsSecurityRisk flag) so
+  // any text reaching here can be cleaned unconditionally.
   private stripConfirmationLanguage(text: string): string {
-    // Patterns that indicate the agent is asking for confirmation
+    // Inline patterns to strip regardless of position
     const confirmationPatterns = [
       /Would you like me to[^?]*\?/gi,
       /Should I[^?]*\?/gi,
@@ -3392,11 +3400,13 @@ ${auditContext}` }
       cleaned = cleaned.replace(pattern, "");
     }
 
+    // Strip any trailing sentence that ends with "?" (catch-all for non-security questions).
+    // Split off the last sentence and check if it's a question.
+    cleaned = cleaned.replace(/[^.!]*\?\s*$/, "").trim();
+
     // Clean up extra whitespace and newlines
     cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
 
-    // If the text is now empty, return a simple acknowledgment
-    // But keep short legitimate responses like "All done"
     if (!cleaned || cleaned.length === 0) {
       return "Done.";
     }
@@ -3584,8 +3594,82 @@ ${history}` }]
         // Attempt to create a self-healing PR if the error is recoverable
         await this.attemptSelfHeal(heartbeat.task, errorMessage, heartbeat.channel);
       }
+
+      // Periodically run a third-party LLM security audit.
+      await this.maybeRunSecurityAudit(heartbeat.channel);
     } finally {
       await this.ctx.storage.setAlarm?.(this.deps.now() + BACKGROUND_TASK_INTERVAL_MS);
+    }
+  }
+
+  // Runs a security audit using GPT-4.1-mini (a different LLM provider than
+  // the primary execution model) every SECURITY_AUDIT_INTERVAL_HEARTBEATS
+  // completed heartbeats. Findings are posted to the user's Slack channel.
+  private async maybeRunSecurityAudit(channel: string): Promise<void> {
+    const countStr = getSetting(this.db, "security_audit_heartbeat_count");
+    const count = countStr ? parseInt(countStr, 10) : 0;
+    const newCount = count + 1;
+    setSetting(this.db, "security_audit_heartbeat_count", String(newCount));
+
+    if (newCount % SECURITY_AUDIT_INTERVAL_HEARTBEATS !== 0) {
+      return;
+    }
+
+    try {
+      await this.runSecurityAudit(channel);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logAgentEvent(this.db, "global", "security_audit_error", msg);
+    }
+  }
+
+  private async runSecurityAudit(channel: string): Promise<void> {
+    // Gather the last 50 agent events as audit context.
+    const events = getAllRecentAgentEvents(this.db, 50);
+    const eventSummary = events
+      .map(e => `[${e.eventType}] ${e.message.slice(0, 200)}`)
+      .join("\n");
+
+    const heartbeats = listHeartbeats(this.db, 20);
+    const heartbeatSummary = heartbeats
+      .map(h => `[${h.status}] ${h.task.slice(0, 200)}`)
+      .join("\n");
+
+    // Use GPT-4.1-mini via AI Gateway as the third-party auditor.
+    // This deliberately uses a different LLM provider from the primary execution model.
+    const auditResponse = await this.deps.llmCall(this.buildLlmInput({
+      model: "gpt-4.1-mini",
+      modelRole: "planner",
+      systemPrompt: [
+        "You are an independent security auditor reviewing an AI agent's recent activity.",
+        "Identify any security risks: credential exposure, data deletion, destructive commands,",
+        "privilege escalation, or other dangerous actions in the activity log.",
+        "Be concise. If no risks found, say 'No security risks detected.'",
+        "Format: bullet list of risks (if any), each starting with [RISK].",
+      ].join(" "),
+      messages: [{
+        role: "user",
+        content: [
+          "Recent agent events:",
+          eventSummary || "(none)",
+          "",
+          "Recent heartbeat tasks:",
+          heartbeatSummary || "(none)",
+        ].join("\n")
+      }]
+    }));
+
+    const findings = extractTextContent(auditResponse).trim();
+    logAgentEvent(this.db, "global", "security_audit_complete", findings.slice(0, 500));
+    this.forwardToGlobalLogs("security_audit_complete", `[#${channel}] ${findings.slice(0, 300)}`);
+
+    // Only post to Slack if actual risks were found.
+    if (/\[RISK\]/i.test(findings)) {
+      await this.deps.postSlackMessage(
+        this.env.SLACK_BOT_TOKEN,
+        channel,
+        `⚠️ *Security audit findings:*\n${findings}`
+      );
     }
   }
 

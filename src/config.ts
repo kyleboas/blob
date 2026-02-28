@@ -39,6 +39,8 @@ export const TOOL_RETRY_MAX = 2;
 export const TOOL_RETRY_BACKOFF_BASE_MS = 1_500;
 export const BACKGROUND_TASK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes between background task checks
 export const PLANNER_AUDIT_MAX_ATTEMPTS = 3;
+// Run a third-party LLM security audit every N heartbeats.
+export const SECURITY_AUDIT_INTERVAL_HEARTBEATS = 10;
 
 export const LLM_OVERLOAD_RETRY_MAX = 4;
 export const LLM_OVERLOAD_RETRY_BASE_MS = 5_000;
