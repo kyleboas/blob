@@ -3,7 +3,7 @@ main = "src/index.ts"
 compatibility_date = "2025-12-01"
 
 [triggers]
-crons = ["*/5 * * * *", "0 0 * * 0"]
+crons = ["*/5 * * * *", "0 0 * * SUN"]
 
 [[durable_objects.bindings]]
 name = "BLOB"
