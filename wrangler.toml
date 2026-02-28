@@ -9,9 +9,23 @@ crons = ["*/5 * * * *", "0 0 * * 0"]
 name = "BLOB"
 class_name = "BlobDO"
 
+[[containers]]
+class_name = "SandboxContainer"
+image = "./sandbox/Dockerfile"
+max_instances = 3
+
+[[durable_objects.bindings]]
+name = "SANDBOX_CONTAINER"
+class_name = "SandboxContainer"
+
 [[migrations]]
 tag = "v1"
-new_classes = ["BlobDO"]
+new_classes = ["BlobDO", "SandboxContainer"]
+
+[observability]
+[observability.logs]
+enabled = true
+invocation_logs = true
 
 [observability]
 [observability.logs]
