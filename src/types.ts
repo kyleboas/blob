@@ -1,6 +1,6 @@
 export interface Env {
   BLOB?: DurableObjectNamespace;
-  BLOB_SANDBOX?: Container;
+  BLOB_SANDBOX?: any;
   GITHUB_TOKEN?: string;
   AI_GATEWAY_TOKEN?: string;
   AI_GATEWAY_BASE_URL?: string;
