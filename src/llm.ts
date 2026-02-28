@@ -12,7 +12,7 @@ export async function callLLM(
     throw new Error("AI Gateway not configured");
   }
 
-  const response = await fetch(`${env.AI_GATEWAY_BASE_URL}`, {
+  const response = await fetch(`${env.AI_GATEWAY_BASE_URL}/compat/chat/completions`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
