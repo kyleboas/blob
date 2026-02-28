@@ -1,18 +1,9 @@
 import type { Env } from "./types";
 
-// Cloudflare Container class - provided by runtime when binding is configured
-declare global {
-  class Container {
-    defaultPort?: number;
-    sleepAfter?: string;
-    fetch(request: Request): Promise<Response>;
-  }
-  
-  function getContainer(binding: Container, id: string): Container;
-}
+// ✅ Import Container from Cloudflare runtime (not declare global)
+import { Container, getContainer } from "cloudflare:containers";
 
 // Cloudflare Container binding for sandboxed execution
-// This class is instantiated by the runtime based on wrangler.toml config
 export class BlobSandbox extends Container {
   defaultPort = 8080;
   sleepAfter = "5m";

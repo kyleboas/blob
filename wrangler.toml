@@ -9,18 +9,16 @@ crons = ["*/5 * * * *", "0 0 * * 0"]
 name = "BLOB"
 class_name = "BlobDO"
 
+[[migrations]]
+tag = "v1"
+new_classes = ["BlobDO"]
+
+# ✅ containers array (not a DO binding)
 [[containers]]
+name = "BLOB_SANDBOX"
 class_name = "BlobSandbox"
 image = "./sandbox/Dockerfile"
 max_instances = 3
-
-[[durable_objects.bindings]]
-name = "BLOB_SANDBOX"
-class_name = "BlobSandbox"
-
-[[migrations]]
-tag = "v1"
-new_classes = ["BlobDO", "BlobSandbox"]
 
 [observability]
 [observability.logs]
