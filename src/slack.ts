@@ -43,8 +43,7 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
       ], env, { maxTokens: 1000 });
 
       await postToSlack(channel, response, env);
-    } catch (err) {
-      console.error("Error calling LLM:", err);
+    } catch {
       await postToSlack(channel, "Sorry, I encountered an error processing your message.", env);
     }
   }
@@ -53,10 +52,7 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
 }
 
 async function postToSlack(channel: string, text: string, env: Env): Promise<void> {
-  if (!env.SLACK_BOT_TOKEN) {
-    console.log("No SLACK_BOT_TOKEN, skipping Slack post");
-    return;
-  }
+  if (!env.SLACK_BOT_TOKEN) return;
 
   await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",

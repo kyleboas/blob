@@ -17,8 +17,8 @@ export async function saveMessage(env: Env, role: string, content: string): Prom
       method: "POST",
       body: JSON.stringify({ role, content }),
     });
-  } catch (err) {
-    console.error("Failed to save message:", err);
+  } catch {
+    // Silently fail
   }
 }
 
@@ -28,8 +28,7 @@ export async function getRecentMessages(env: Env, limit = 10): Promise<Array<{ r
     const res = await do_.fetch(`http://do/messages?limit=${limit}`);
     const data = await res.json() as { messages: Array<{ role: string; content: string; timestamp: number }> };
     return data.messages;
-  } catch (err) {
-    console.error("Failed to get messages:", err);
+  } catch {
     return [];
   }
 }
@@ -41,8 +40,8 @@ export async function savePreference(env: Env, key: string, value: string): Prom
       method: "POST",
       body: JSON.stringify({ key, value }),
     });
-  } catch (err) {
-    console.error("Failed to save preference:", err);
+  } catch {
+    // Silently fail
   }
 }
 
@@ -51,8 +50,7 @@ export async function getMemory(env: Env): Promise<{ messages: Array<unknown>; u
     const do_ = await getMemoryDO(env);
     const res = await do_.fetch("http://do/memory");
     return await res.json() as { messages: Array<unknown>; userPreferences: Record<string, string>; context: Record<string, unknown> };
-  } catch (err) {
-    console.error("Failed to get memory:", err);
+  } catch {
     return { messages: [], userPreferences: {}, context: {} };
   }
 }
