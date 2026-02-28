@@ -1,5 +1,13 @@
 import type { Env } from "./types";
 
+interface CronJob {
+  id: string;
+  schedule: string; // e.g., "every 5 minutes", "daily at 9am"
+  task: string;
+  enabled: boolean;
+  createdAt: number;
+}
+
 interface BlobState {
   repos: string[];
   goals: Record<string, string[]>;
@@ -7,6 +15,7 @@ interface BlobState {
   userPreferences: Record<string, string>;
   modelCatalog?: Record<string, { name: string; description: string; maxTokens: number }>;
   processedEvents?: Array<{ id: string; timestamp: number }>;
+  cronJobs?: CronJob[];
 }
 
 const DEFAULT_CATALOG: Record<string, { name: string; description: string; maxTokens: number }> = {
@@ -143,6 +152,32 @@ export class AgentDO {
       await this.save();
       
       return json({ processed: false });
+    }
+
+    // Cron jobs endpoints
+    if (url.pathname === "/cron" && request.method === "GET") {
+      return json({ jobs: this.data.cronJobs || [] });
+    }
+
+    if (url.pathname === "/cron" && request.method === "POST") {
+      const { schedule, task } = await request.json() as { schedule: string; task: string };
+      const job: CronJob = {
+        id: crypto.randomUUID(),
+        schedule,
+        task,
+        enabled: true,
+        createdAt: Date.now(),
+      };
+      this.data.cronJobs = [...(this.data.cronJobs || []), job];
+      await this.save();
+      return json({ created: job });
+    }
+
+    if (url.pathname === "/cron/delete" && request.method === "POST") {
+      const { id } = await request.json() as { id: string };
+      this.data.cronJobs = (this.data.cronJobs || []).filter(j => j.id !== id);
+      await this.save();
+      return json({ deleted: id });
     }
 
     if (url.pathname === "/catalog/update" && request.method === "POST") {
