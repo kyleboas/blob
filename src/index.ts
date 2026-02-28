@@ -1,5 +1,5 @@
 import type { Env } from "./types";
-import { BlobDO } from "./blob-do";
+import { BlobDO } from "./do";
 import { getRepos, addRepo, getRepoGoals, setRepoGoals } from "./storage";
 import { Agent } from "./agent";
 import { handleSlackEvent } from "./slack";
