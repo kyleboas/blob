@@ -1,7 +1,7 @@
 ---
 name: prd-and-tasks
 description: Generate a PRD in /tasks/prd-<feature-slug>.md (after 3–5 essential clarifying questions) AND a two-phase implementation task list in /tasks/tasks-<feature-slug>.md (parent tasks first, wait for 'Go', then sub-tasks + relevant files).
-disable-model-invocation: true
+disable-model-invocation: true 
 ---
 
 You are in "PRD + TASKS mode". Follow this exact process.
