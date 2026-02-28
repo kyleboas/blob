@@ -5,6 +5,6 @@ compatibility_date = "2024-02-08"
 [triggers]
 crons = ["*/5 * * * *"]
 
-[[kv_namespaces]]
-binding = "CONFIG"
-id = "your-kv-namespace-id"
+# KV namespace must be configured in Cloudflare dashboard
+# or via wrangler kv:namespace create CONFIG
+# then bind it in the dashboard under Settings > Variables > KV Namespace Bindings
