@@ -3438,9 +3438,32 @@ ${history}` }]
     const userConfig = await this.getUserConfiguration();
     const kvGoals = getRepositoryGoals(userConfig, "kyleboas", "blob");
 
-    // Also check for locally set goals (from Slack)
-    const localGoalsJson = getSetting(this.db, "repo_goals:kyleboas/blob");
-    const localGoals = localGoalsJson ? JSON.parse(localGoalsJson) as string[] : null;
+    // Also check for locally set goals (from Slack) - both in KV and local settings
+    let localGoals: string[] | null = null;
+    
+    // Try KV first (where saveRepositoryGoals stores them)
+    if (this.env.USER_CONFIG_KV) {
+      try {
+        const kvData = await this.env.USER_CONFIG_KV.get("user-configuration");
+        if (kvData) {
+          const config = JSON.parse(kvData);
+          const repoConfig = config.repositories?.repositories?.["kyleboas/blob"];
+          if (repoConfig?.goals?.length > 0) {
+            localGoals = repoConfig.goals;
+          }
+        }
+      } catch {
+        // Fall through to local settings
+      }
+    }
+    
+    // Fallback to local settings
+    if (!localGoals) {
+      const localGoalsJson = getSetting(this.db, "repo_goals:kyleboas/blob");
+      if (localGoalsJson) {
+        localGoals = JSON.parse(localGoalsJson) as string[];
+      }
+    }
 
     const repoGoals = kvGoals || (localGoals ? { goals: localGoals } : null);
 
@@ -3449,10 +3472,10 @@ ${history}` }]
     if (!repoGoals) {
       goalsContext = "No specific repository goals configured. Using generic self-improvement goals.";
 
-      // Only notify once per day about missing goals
+      // Only notify once per week about missing goals (less annoying)
       const lastNotified = getSetting(this.db, "goals_notification_sent");
-      const today = new Date().toISOString().slice(0, 10);
-      if (lastNotified !== today) {
+      const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      if (!lastNotified || lastNotified < oneWeekAgo) {
         await this.deps.postSlackMessage(
           this.env.SLACK_BOT_TOKEN,
           channel,
@@ -3460,7 +3483,7 @@ ${history}` }]
           "What should I work towards? Tell me: 'My goals are: Keep code lightweight, maintain security, improve features'\n\n" +
           "Until then, I'll use generic self-improvement goals."
         );
-        setSetting(this.db, "goals_notification_sent", today);
+        setSetting(this.db, "goals_notification_sent", new Date().toISOString().slice(0, 10));
       }
     } else {
       goalsContext = `Repository goals for kyleboas/blob:\n${repoGoals.goals.map(g => `- ${g}`).join("\n")}`;
