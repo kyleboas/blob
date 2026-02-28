@@ -12,3 +12,8 @@ class_name = "AgentDO"
 [[migrations]]
 tag = "v1"
 new_classes = ["AgentDO"]
+
+[observability]
+[observability.logs]
+enabled = true
+invocation_logs = true
