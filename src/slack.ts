@@ -52,9 +52,7 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
     const reposContext = repos.join(", ");
 
     // Build system prompt with capabilities
-    const basePrompt = `You are Blob, a helpful AI assistant. You can chat, answer questions, help with coding, and manage repositories: ${reposContext}.
-
-IMPORTANT: Always respond in plain text only. Do not use markdown, code blocks, bold, italics, or any formatting. Just plain text.`;
+    const basePrompt = `You are Blob, a helpful AI assistant. You can chat, answer questions, help with coding, and manage repositories: ${reposContext}.`;
     const systemPrompt = getSystemPromptWithCapabilities(basePrompt, env);
 
     try {
@@ -76,6 +74,9 @@ IMPORTANT: Always respond in plain text only. Do not use markdown, code blocks, 
 async function postToSlack(channel: string, text: string, env: Env): Promise<void> {
   if (!env.SLACK_BOT_TOKEN) return;
 
+  // Strip markdown formatting
+  const plainText = stripFormatting(text);
+
   await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
     headers: {
@@ -84,7 +85,27 @@ async function postToSlack(channel: string, text: string, env: Env): Promise<voi
     },
     body: JSON.stringify({
       channel,
-      text,
+      text: plainText,
     }),
   });
+}
+
+function stripFormatting(text: string): string {
+  return text
+    // Remove code blocks
+    .replace(/```[\s\S]*?```/g, (match) => match.replace(/```/g, '').trim())
+    // Remove inline code
+    .replace(/`([^`]+)`/g, '$1')
+    // Remove bold/italic
+    .replace(/\*\*?([^*]+)\*\*?/g, '$1')
+    // Remove headers
+    .replace(/^#{1,6}\s+/gm, '')
+    // Remove links but keep text [text](url) -> text
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    // Remove blockquotes
+    .replace(/^>\s?/gm, '')
+    // Remove horizontal rules
+    .replace(/^(---|___|\*\*\*)$/gm, '')
+    // Clean up extra whitespace
+    .trim();
 }
