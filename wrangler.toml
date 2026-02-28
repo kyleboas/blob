@@ -7,11 +7,11 @@ crons = ["*/5 * * * *", "0 0 * * 0"]
 
 [[durable_objects.bindings]]
 name = "BLOB"
-class_name = "BlobDO"
+class_name = "AgentDO"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["BlobDO"]
+new_classes = ["AgentDO"]
 
 [observability]
 [observability.logs]

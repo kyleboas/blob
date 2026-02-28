@@ -1,5 +1,5 @@
 import type { Env } from "./types";
-import { BlobDO } from "./do";
+import { AgentDO } from "./do";
 import { getRepos, addRepo, getRepoGoals, setRepoGoals } from "./storage";
 import { Agent } from "./agent";
 import { handleSlackEvent } from "./slack";
@@ -72,7 +72,4 @@ export default {
   }
 };
 
-export { BlobDO };
-
-// Backward compatibility - AgentDO was renamed to BlobDO
-export { BlobDO as AgentDO };
+export { AgentDO };

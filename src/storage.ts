@@ -2,7 +2,7 @@ import type { Env } from "./types";
 
 const BLOB_ID = "blob";
 
-async function getBlobDO(env: Env): Promise<DurableObjectStub> {
+async function getAgentDO(env: Env): Promise<DurableObjectStub> {
   if (!env.BLOB) throw new Error("BLOB binding not found");
   const id = env.BLOB.idFromName(BLOB_ID);
   return env.BLOB.get(id);
@@ -10,7 +10,7 @@ async function getBlobDO(env: Env): Promise<DurableObjectStub> {
 
 export async function getRepos(env: Env): Promise<string[]> {
   try {
-    const do_ = await getBlobDO(env);
+    const do_ = await getAgentDO(env);
     const res = await do_.fetch("http://do/repos");
     const data = await res.json() as { repos: string[] };
     return data.repos;
@@ -21,7 +21,7 @@ export async function getRepos(env: Env): Promise<string[]> {
 
 export async function addRepo(env: Env, repo: string): Promise<void> {
   try {
-    const do_ = await getBlobDO(env);
+    const do_ = await getAgentDO(env);
     await do_.fetch("http://do/repos", {
       method: "POST",
       body: JSON.stringify({ repo }),
@@ -33,7 +33,7 @@ export async function addRepo(env: Env, repo: string): Promise<void> {
 
 export async function getRepoGoals(env: Env, repo: string): Promise<string[]> {
   try {
-    const do_ = await getBlobDO(env);
+    const do_ = await getAgentDO(env);
     const res = await do_.fetch(`http://do/goals?repo=${encodeURIComponent(repo)}`);
     const data = await res.json() as { goals: string[] };
     return data.goals;
@@ -44,7 +44,7 @@ export async function getRepoGoals(env: Env, repo: string): Promise<string[]> {
 
 export async function setRepoGoals(env: Env, repo: string, goals: string[]): Promise<void> {
   try {
-    const do_ = await getBlobDO(env);
+    const do_ = await getAgentDO(env);
     await do_.fetch("http://do/goals", {
       method: "POST",
       body: JSON.stringify({ repo, goals }),

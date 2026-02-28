@@ -22,7 +22,7 @@ const DEFAULT_CATALOG: Record<string, { name: string; description: string; maxTo
   }
 };
 
-export class BlobDO {
+export class AgentDO {
   private state: DurableObjectState;
   private data: BlobState = {
     repos: ["kyleboas/blob"],

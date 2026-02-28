@@ -2,14 +2,14 @@ import type { Env } from "./types";
 
 const BLOB_ID = "blob";
 
-async function getBlobDO(env: Env): Promise<DurableObjectStub> {
+async function getAgentDO(env: Env): Promise<DurableObjectStub> {
   if (!env.BLOB) throw new Error("BLOB binding not found");
   return env.BLOB.get(env.BLOB.idFromName(BLOB_ID));
 }
 
 export async function saveMessage(env: Env, role: string, content: string): Promise<void> {
   try {
-    const do_ = await getBlobDO(env);
+    const do_ = await getAgentDO(env);
     await do_.fetch("http://do/messages", {
       method: "POST",
       body: JSON.stringify({ role, content }),
@@ -21,7 +21,7 @@ export async function saveMessage(env: Env, role: string, content: string): Prom
 
 export async function getRecentMessages(env: Env, limit = 10): Promise<Array<{ role: string; content: string; timestamp: number }>> {
   try {
-    const do_ = await getBlobDO(env);
+    const do_ = await getAgentDO(env);
     const res = await do_.fetch(`http://do/messages?limit=${limit}`);
     const data = await res.json() as { messages: Array<{ role: string; content: string; timestamp: number }> };
     return data.messages;
@@ -32,7 +32,7 @@ export async function getRecentMessages(env: Env, limit = 10): Promise<Array<{ r
 
 export async function savePreference(env: Env, key: string, value: string): Promise<void> {
   try {
-    const do_ = await getBlobDO(env);
+    const do_ = await getAgentDO(env);
     await do_.fetch("http://do/preferences", {
       method: "POST",
       body: JSON.stringify({ key, value }),
@@ -44,7 +44,7 @@ export async function savePreference(env: Env, key: string, value: string): Prom
 
 export async function getModelCatalog(env: Env): Promise<Record<string, { name: string; description: string; maxTokens: number }>> {
   try {
-    const do_ = await getBlobDO(env);
+    const do_ = await getAgentDO(env);
     const res = await do_.fetch("http://do/catalog");
     const data = await res.json() as { catalog: Record<string, { name: string; description: string; maxTokens: number }> };
     return data.catalog;
@@ -61,7 +61,7 @@ export async function getModelCatalog(env: Env): Promise<Record<string, { name: 
 
 export async function updateModelCatalog(env: Env, catalog: Record<string, { name: string; description: string; maxTokens: number }>): Promise<void> {
   try {
-    const do_ = await getBlobDO(env);
+    const do_ = await getAgentDO(env);
     await do_.fetch("http://do/catalog", {
       method: "POST",
       body: JSON.stringify({ catalog }),
@@ -73,7 +73,7 @@ export async function updateModelCatalog(env: Env, catalog: Record<string, { nam
 
 export async function triggerCatalogUpdate(env: Env): Promise<{ updated: boolean; count?: number; reason?: string }> {
   try {
-    const do_ = await getBlobDO(env);
+    const do_ = await getAgentDO(env);
     const res = await do_.fetch("http://do/catalog/update", { 
       method: "POST",
       body: JSON.stringify({
