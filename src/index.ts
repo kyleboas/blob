@@ -1,5 +1,6 @@
 import type { Env } from "./types";
-import { getRepos, addRepo, getRepoGoals, setRepoGoals } from "./kv";
+import { RepoConfigDO } from "./do";
+import { getRepos, addRepo, getRepoGoals, setRepoGoals } from "./storage";
 import { Agent } from "./agent";
 
 function json(data: unknown): Response {
@@ -41,10 +42,10 @@ export default {
       repos.forEach(r => new Agent(r, [], env).run().catch(console.error));
       return json({ started: repos });
     }
-    
+
     return new Response("Not found", { status: 404 });
   },
-  
+
   async scheduled(_: ScheduledEvent, env: Env): Promise<void> {
     const repos = await getRepos(env);
     for (const repo of repos) {
@@ -53,3 +54,5 @@ export default {
     }
   }
 };
+
+export { RepoConfigDO };
