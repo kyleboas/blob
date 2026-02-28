@@ -1018,7 +1018,7 @@ def main() -> None:
 
     class AutoApprove(ApprovalGate):
         def request_approval(self, action_description: str, tier: str) -> bool:
-            return tier == "auto-approve"
+            return tier in ("auto-approve", "conditional")
 
     autonomous = args.autonomous or config.AUTONOMOUS_MODE
     approval_gate: ApprovalGate = AutonomousApprovalGate() if autonomous else AutoApprove()
