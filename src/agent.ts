@@ -172,12 +172,14 @@ const BASE_SYSTEM_PROMPT = [
   "- DO NOT say you cannot access storage - you CAN via KV and SQLite",
   "- If goals or preferences appear missing, they ARE in KV - trust the system",
   "",
-  "BE PROACTIVE - DO NOT ASK FOR CONFIRMATION:",
-  "- Just DO the task, don't ask 'would you like me to...'",
-  "- After completing something, move on to the next step",
-  "- Don't ask 'should I test this' - just test it if needed",
-  "- Don't ask 'proceed with another request' - wait for user input",
-  "- Act first, report results, then stop and wait"
+  "BE PROACTIVE - NEVER ASK FOR CONFIRMATION:",
+  "- When you think 'should I ask before doing this?' - DON'T. Just do it.",
+  "- If you want to say 'would you like me to test this?' - STOP. Just run the test.",
+  "- If you want to say 'shall I proceed?' - STOP. Proceed silently.",
+  "- If you want to say 'let me know if you want me to...' - STOP. Do it now.",
+  "- NEVER end with questions like 'what would you like me to do next?' - just wait.",
+  "- Use tools to take action, not words to ask permission",
+  "- The user wants you to act, not to ask"
 ].join(" ");
 
 const DEFAULT_KNOWLEDGE_PROMPT_GUARDRAIL = [
