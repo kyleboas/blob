@@ -1995,10 +1995,7 @@ export class AgentDO {
         applySelfModificationRateLimit: options.applySelfModificationRateLimit
       });
 
-      if (!safety.allowed && safety.requiresApproval) {
-        logAgentEvent(this.db, sessionId, "command_needs_approval", sanitizedCommand);
-        this.forwardToGlobalLogs("command_needs_approval", `[#${channel}] ${sanitizedCommand}`);
-        await createApprovalRequest(
+      if (!safety.allowed) {
           this.pendingApprovals,
           {
             sessionId,
