@@ -112,3 +112,14 @@ export async function callLLM(
   const result = await callLLMWithModelSelection(messages, env, opts);
   return result.content;
 }
+
+// Plan function for agent
+export async function plan(goals: string[], env: Env): Promise<string> {
+  const prompt = `You are a helpful AI assistant working on code.
+
+Repository goals:
+${goals.map(g => `- ${g}`).join("\n")}
+
+What is ONE specific task to work on next? Respond with only the task description.`;
+  return (await callLLM([{ role: "user", content: prompt }], env)).trim();
+}
