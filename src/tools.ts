@@ -77,6 +77,55 @@ export const WEATHER_TOOL = {
   }
 } as const;
 
+export const SQL_QUERY_TOOL = {
+  name: "sql_query",
+  description: "Execute a SQL query against the persistent SQLite storage. Use this to read or modify settings, knowledge, conversation history, heartbeats, agent events, and other stored data. SELECT queries return rows as JSON. INSERT/UPDATE/DELETE returns affected row count. Available tables: conversation_messages, agent_state, rate_limits, approval_log, knowledge, settings, extensions, session_nodes, agent_events, session_state, session_summaries, heartbeats, sub_agents, operator_feedback.",
+  input_schema: {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        description: "SQL query to execute (SELECT, INSERT, UPDATE, or DELETE)"
+      }
+    },
+    required: ["query"]
+  }
+} as const;
+
+export const KV_GET_TOOL = {
+  name: "kv_get",
+  description: "Read a value from Cloudflare KV storage. Use this to inspect user configuration, repository goals, preferences, and other KV-stored data. Pass 'user-configuration' to read the main user config.",
+  input_schema: {
+    type: "object",
+    properties: {
+      key: {
+        type: "string",
+        description: "KV key to read (e.g. 'user-configuration')"
+      }
+    },
+    required: ["key"]
+  }
+} as const;
+
+export const KV_PUT_TOOL = {
+  name: "kv_put",
+  description: "Write a value to Cloudflare KV storage. Use this to update user configuration, repository goals, preferences, and other KV-stored data.",
+  input_schema: {
+    type: "object",
+    properties: {
+      key: {
+        type: "string",
+        description: "KV key to write"
+      },
+      value: {
+        type: "string",
+        description: "Value to store (use JSON for structured data)"
+      }
+    },
+    required: ["key", "value"]
+  }
+} as const;
+
 export function sanitizeToolName(rawName: string): string {
   return rawName.trim().toLowerCase().replace(/[^a-z0-9_]/g, "_");
 }
