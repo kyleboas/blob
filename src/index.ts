@@ -2,6 +2,7 @@ import type { Env } from "./types";
 import { AgentDO } from "./do";
 import { getRepos, addRepo, getRepoGoals, setRepoGoals } from "./storage";
 import { Agent } from "./agent";
+import { handleSlackEvent } from "./slack";
 
 function json(data: unknown): Response {
   return new Response(JSON.stringify(data), { headers: { "content-type": "application/json" } });
@@ -10,6 +11,11 @@ function json(data: unknown): Response {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    
+    // Slack webhook endpoint
+    if (url.pathname === "/slack/events") {
+      return handleSlackEvent(request, env);
+    }
     
     if (url.pathname === "/health") return new Response("OK");
     
