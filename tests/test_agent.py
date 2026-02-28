@@ -151,123 +151,57 @@ def test_agent_normalizes_bash_command_before_execution() -> None:
     assert sandbox.commands[0] == 'curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/o/r/pulls'
 
 
-def test_make_pr_tool_path() -> None:
+def test_read_tool_path(tmp_path) -> None:
+    target = tmp_path / "hello.txt"
+    target.write_text("hello world", encoding="utf-8")
+
     llm = MockLLM([
         LLMResponse(
-            content=[
-                {
-                    "type": "tool_use",
-                    "id": "tool1",
-                    "name": "make_pr",
-                    "input": {"title": "T", "body": "B", "repo": "octo/example", "head": "work", "base": "main"},
-                }
-            ],
+            content=[{"type": "tool_use", "id": "tool1", "name": "read", "input": {"path": str(target)}}],
             stop_reason="tool_use",
             usage=LLMUsage(1, 1),
         ),
-        LLMResponse(content=[{"type": "text", "text": "ok"}], stop_reason="end_turn", usage=LLMUsage(1, 1)),
+        LLMResponse(content=[{"type": "text", "text": "done"}], stop_reason="end_turn", usage=LLMUsage(1, 1)),
     ])
-
     agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
-    with patch.object(agent, "_create_github_pr", return_value="ok: opened PR") as mock_make_pr:
-        result = agent.run_task("open pr")
-
-    assert result == "ok"
-    mock_make_pr.assert_called_once()
+    result = agent.run_task("read a file")
+    assert result == "done"
 
 
+def test_write_tool_path(tmp_path) -> None:
+    target = tmp_path / "out.txt"
 
-
-def test_push_branch_tool_path() -> None:
     llm = MockLLM([
         LLMResponse(
-            content=[
-                {
-                    "type": "tool_use",
-                    "id": "tool1",
-                    "name": "push_branch",
-                    "input": {"remote": "origin", "branch": "work"},
-                }
-            ],
+            content=[{"type": "tool_use", "id": "tool1", "name": "write", "input": {"path": str(target), "content": "written"}}],
             stop_reason="tool_use",
             usage=LLMUsage(1, 1),
         ),
-        LLMResponse(content=[{"type": "text", "text": "ok"}], stop_reason="end_turn", usage=LLMUsage(1, 1)),
+        LLMResponse(content=[{"type": "text", "text": "done"}], stop_reason="end_turn", usage=LLMUsage(1, 1)),
     ])
-
     agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
-    with patch.object(agent, "_push_branch_to_remote", return_value="ok: pushed work to origin") as mock_push:
-        result = agent.run_task("push fix")
-
-    assert result == "ok"
-    mock_push.assert_called_once()
+    result = agent.run_task("write a file")
+    assert result == "done"
+    assert target.read_text(encoding="utf-8") == "written"
 
 
+def test_edit_tool_path(tmp_path) -> None:
+    target = tmp_path / "edit.txt"
+    target.write_text("hello world", encoding="utf-8")
 
-def test_push_branch_uses_github_tools() -> None:
-    agent = Agent(llm_client=MockLLM([]), sandbox=DummySandbox(), approval_gate=DummyApproval())
+    llm = MockLLM([
+        LLMResponse(
+            content=[{"type": "tool_use", "id": "tool1", "name": "edit", "input": {"path": str(target), "old_text": "world", "new_text": "there"}}],
+            stop_reason="tool_use",
+            usage=LLMUsage(1, 1),
+        ),
+        LLMResponse(content=[{"type": "text", "text": "done"}], stop_reason="end_turn", usage=LLMUsage(1, 1)),
+    ])
+    agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
+    result = agent.run_task("edit a file")
+    assert result == "done"
+    assert target.read_text(encoding="utf-8") == "hello there"
 
-    def fake_run(cmd: list[str], **kwargs):
-        if cmd[:4] == ["git", "remote", "get-url", "origin"]:
-            return MagicMock(returncode=0, stdout="https://github.com/octo/example.git\n", stderr="")
-        if cmd[:3] == ["python", "github_tools.py", "push"]:
-            return MagicMock(returncode=0, stdout="ok", stderr="")
-        raise AssertionError(f"unexpected command: {cmd}")
-
-    with patch("agent.subprocess.run", side_effect=fake_run) as mock_run:
-        result = agent._push_branch_to_remote({"remote": "origin", "branch": "feature-1"})
-
-    assert result == "ok: pushed feature-1 to octo/example"
-    push_call = mock_run.call_args_list[1][0][0]
-    assert push_call == [
-        "python",
-        "github_tools.py",
-        "push",
-        "--owner",
-        "octo",
-        "--repo",
-        "example",
-        "--branch",
-        "feature-1",
-    ]
-
-
-def test_create_pr_uses_github_tools_push_and_create_pr() -> None:
-    agent = Agent(llm_client=MockLLM([]), sandbox=DummySandbox(), approval_gate=DummyApproval())
-
-    def fake_run(cmd: list[str], **kwargs):
-        if cmd[:4] == ["git", "remote", "get-url", "origin"]:
-            return MagicMock(returncode=0, stdout="https://github.com/octo/example.git\n", stderr="")
-        if cmd[:4] == ["git", "symbolic-ref", "refs/remotes/origin/HEAD"]:
-            return MagicMock(returncode=0, stdout="refs/remotes/origin/main\n", stderr="")
-        if cmd[:3] == ["python", "github_tools.py", "push"]:
-            return MagicMock(returncode=0, stdout="pushed", stderr="")
-        if cmd[:3] == ["python", "github_tools.py", "create-pr"]:
-            return MagicMock(returncode=0, stdout='{"url": "https://example/pr/1", "number": 1}', stderr="")
-        raise AssertionError(f"unexpected command: {cmd}")
-
-    with patch("agent.subprocess.run", side_effect=fake_run) as mock_run, patch.dict("os.environ", {"GITHUB_TOKEN": "t"}):
-        result = agent._create_github_pr({"title": "T", "body": "B", "head": "feature-1"})
-
-    assert result == "ok: opened PR #1 https://example/pr/1"
-    create_pr_call = mock_run.call_args_list[3][0][0]
-    assert create_pr_call == [
-        "python",
-        "github_tools.py",
-        "create-pr",
-        "--owner",
-        "octo",
-        "--repo",
-        "example",
-        "--title",
-        "T",
-        "--body",
-        "B",
-        "--head",
-        "octo:feature-1",
-        "--base",
-        "main",
-    ]
 
 def test_step_limit_enforcement() -> None:
     llm = MockLLM([
@@ -674,45 +608,3 @@ def test_extract_urls_handles_slack_link_format() -> None:
     assert _extract_urls(text) == ["https://blog.cloudflare.com/code-mode-mcp/?utm_source=twitter"]
 
 
-def test_get_authenticated_push_url_embeds_token(tmp_path: Path) -> None:
-    llm = MockLLM([])
-    agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
-
-    mock_result = MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = "https://github.com/kyleboas/blob.git\n"
-
-    with patch("agent.subprocess.run", return_value=mock_result), \
-         patch.dict("os.environ", {"GITHUB_TOKEN": "ghp_testtoken123"}):
-        url = agent._get_authenticated_push_url("origin")
-
-    assert url == "https://ghp_testtoken123@github.com/kyleboas/blob.git"
-
-
-def test_get_authenticated_push_url_returns_none_without_token(tmp_path: Path) -> None:
-    llm = MockLLM([])
-    agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
-
-    with patch.dict("os.environ", {}, clear=True):
-        # Remove token env vars if present
-        import os
-        os.environ.pop("GITHUB_TOKEN", None)
-        os.environ.pop("GH_TOKEN", None)
-        url = agent._get_authenticated_push_url("origin")
-
-    assert url is None
-
-
-def test_get_authenticated_push_url_returns_none_on_git_failure(tmp_path: Path) -> None:
-    llm = MockLLM([])
-    agent = Agent(llm_client=llm, sandbox=DummySandbox(), approval_gate=DummyApproval())
-
-    mock_result = MagicMock()
-    mock_result.returncode = 128
-    mock_result.stdout = ""
-
-    with patch("agent.subprocess.run", return_value=mock_result), \
-         patch.dict("os.environ", {"GITHUB_TOKEN": "ghp_testtoken123"}):
-        url = agent._get_authenticated_push_url("origin")
-
-    assert url is None
