@@ -7,9 +7,7 @@ export interface Env {
   AI?: unknown;
   CONFIG?: KVNamespace;
   
-  // Configuration (fallback defaults)
-  GOALS?: string;
-  REPO?: string;
+  // GitHub token for accessing repos
   GITHUB_TOKEN?: string;
   
   // AI Gateway
@@ -17,9 +15,16 @@ export interface Env {
   AI_GATEWAY_BASE_URL?: string;
 }
 
+export interface RepoConfig {
+  goals: string[];
+  owner: string;
+  repo: string;
+  isPrivate: boolean;
+}
+
 export interface AgentConfig {
   goals: string[];
-  repo: string;
+  repo: string;  // owner/repo format
   maxSteps: number;
 }
 
