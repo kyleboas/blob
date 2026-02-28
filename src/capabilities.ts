@@ -33,7 +33,7 @@ export const BLOB_CAPABILITIES: Capability[] = [
   {
     name: "sandbox",
     description: "Execute commands safely in isolated container",
-    available: false,
+    available: true,
   },
   {
     name: "model_selection",
@@ -48,7 +48,7 @@ export const BLOB_CAPABILITIES: Capability[] = [
   {
     name: "github",
     description: "Push code changes to GitHub",
-    available: false,
+    available: true,
   },
 ];
 
