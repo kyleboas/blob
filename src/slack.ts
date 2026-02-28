@@ -1,7 +1,6 @@
 import type { Env } from "./types";
-import { getRepos, addRepo, getRepoGoals, setRepoGoals } from "./storage";
-import { Agent } from "./agent";
-import { callLLM } from "./llm";
+import { getRepos } from "./storage";
+import { callLLMWithRouting } from "./llm";
 
 export async function handleSlackEvent(request: Request, env: Env): Promise<Response> {
   const body = await request.json() as {
@@ -33,14 +32,14 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
     const repos = await getRepos(env);
     const reposContext = repos.join(", ");
 
-    // Send to LLM for response
+    // Send to LLM with model routing
     const systemPrompt = `You are Blob, an autonomous coding agent. You manage repositories: ${reposContext}. You can add repos, set goals, and run tasks. Be helpful and concise.`;
     
     try {
-      const response = await callLLM([
+      const response = await callLLMWithRouting([
         { role: "system", content: systemPrompt },
         { role: "user", content: text }
-      ], env, { maxTokens: 1000 });
+      ], env, text);
 
       await postToSlack(channel, response, env);
     } catch {
