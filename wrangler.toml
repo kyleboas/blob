@@ -1,6 +1,7 @@
 name = "blob-agent" 
 main = "src/index.ts"
 compatibility_date = "2024-04-03"
+compatibility_flags = ["containers"]
 
 [triggers]
 crons = ["*/5 * * * *", "0 0 * * 0"]
@@ -9,7 +10,7 @@ crons = ["*/5 * * * *", "0 0 * * 0"]
 name = "BLOB"
 class_name = "BlobDO"
 
-# ✅ Container/DO class definition
+# Container/DO class definition
 [[durable_objects.bindings]]
 name = "BLOB_SANDBOX"
 class_name = "BlobSandbox"
@@ -24,7 +25,7 @@ new_classes = ["BlobDO"]
 tag = "v2"
 new_classes = ["BlobSandbox"]
 
-# ✅ Container config
+# Container config
 [[containers]]
 class_name = "BlobSandbox"
 image = "./sandbox/Dockerfile"

@@ -1,9 +1,17 @@
 import type { Env } from "./types";
 
-// ✅ Import Container from Cloudflare runtime (not declare global)
-import { Container, getContainer } from "cloudflare:containers";
+// TypeScript-only declarations for the runtime globals
+declare global {
+  class Container {
+    defaultPort?: number;
+    sleepAfter?: string;
+    fetch(request: Request): Promise<Response>;
+  }
 
-// Cloudflare Container binding for sandboxed execution
+  function getContainer(binding: unknown, id: string): Container;
+}
+
+// Container binding class
 export class BlobSandbox extends Container {
   defaultPort = 8080;
   sleepAfter = "5m";
