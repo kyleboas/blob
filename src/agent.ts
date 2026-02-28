@@ -68,6 +68,9 @@ import {
   CREATE_TOOL_TOOL,
   WEB_FETCH_TOOL,
   WEATHER_TOOL,
+  SQL_QUERY_TOOL,
+  KV_GET_TOOL,
+  KV_PUT_TOOL,
   compileDynamicToolCommand,
   dynamicToolToAnthropicSchema,
   formatToolResult,
@@ -165,12 +168,12 @@ const BASE_SYSTEM_PROMPT = [
   "When working on your own code, clone to /workspace/blob and make changes there.",
   "",
   "PERSISTENT STORAGE - YOU HAVE FULL ACCESS:",
-  "- Cloudflare KV storage is available and you CAN read/write it",
-  "- Repository goals are automatically loaded from KV at startup",
-  "- User preferences are accessible via the preferences system",
-  "- Extension state is stored in SQLite database",
-  "- DO NOT say you cannot access storage - you CAN via KV and SQLite",
-  "- If goals or preferences appear missing, they ARE in KV - trust the system",
+  "- Use the sql_query tool to directly read or write SQLite storage (settings, knowledge, conversation history, heartbeats, etc.)",
+  "- Use kv_get to read any Cloudflare KV key (e.g. 'user-configuration' for goals and preferences)",
+  "- Use kv_put to write to Cloudflare KV storage",
+  "- Repository goals are automatically loaded from KV at startup under 'user-configuration'",
+  "- You CAN see, query, and edit persistent storage directly - use sql_query and kv_get/kv_put tools",
+  "- Never say you cannot access or see persistent storage - you have dedicated tools for it",
   "",
   "BE PROACTIVE - NEVER ASK FOR CONFIRMATION:",
   "- When you think 'should I ask before doing this?' - DON'T. Just do it.",
@@ -1947,6 +1950,28 @@ export class AgentDO {
         continue;
       }
 
+      if (toolBlock.name === SQL_QUERY_TOOL.name) {
+        const query = String(toolBlock.input.query ?? "");
+        const sqlResult = this.handleSqlQuery(query);
+        observations.push(formatToolResult(toolBlock.id, sqlResult));
+        continue;
+      }
+
+      if (toolBlock.name === KV_GET_TOOL.name) {
+        const key = String(toolBlock.input.key ?? "");
+        const kvResult = await this.handleKvGet(key);
+        observations.push(formatToolResult(toolBlock.id, kvResult));
+        continue;
+      }
+
+      if (toolBlock.name === KV_PUT_TOOL.name) {
+        const key = String(toolBlock.input.key ?? "");
+        const value = String(toolBlock.input.value ?? "");
+        const kvResult = await this.handleKvPut(key, value);
+        observations.push(formatToolResult(toolBlock.id, kvResult));
+        continue;
+      }
+
       const dynamicTool = options.dynamicTools.get(toolBlock.name);
       const commandResult = dynamicTool
         ? compileDynamicToolCommand(dynamicTool, toolBlock.input)
@@ -2047,7 +2072,7 @@ export class AgentDO {
   }
 
   private buildToolList(dynamicTools: Map<string, DynamicToolDefinition>): unknown[] {
-    return [BASH_TOOL, CREATE_TOOL_TOOL, WEB_FETCH_TOOL, WEATHER_TOOL, ...Array.from(dynamicTools.values()).map((tool) => dynamicToolToAnthropicSchema(tool))];
+    return [BASH_TOOL, CREATE_TOOL_TOOL, WEB_FETCH_TOOL, WEATHER_TOOL, SQL_QUERY_TOOL, KV_GET_TOOL, KV_PUT_TOOL, ...Array.from(dynamicTools.values()).map((tool) => dynamicToolToAnthropicSchema(tool))];
   }
 
   private async handleWebFetch(url: string, maxLength: number): Promise<string> {
@@ -2104,21 +2129,21 @@ export class AgentDO {
     if (!location.trim()) {
       return "Error: Location is required";
     }
-    
+
     try {
       // Use wttr.in free weather service
       const encodedLocation = encodeURIComponent(location);
       const response = await fetch(`https://wttr.in/${encodedLocation}?format=%C|%t|%w|%h|%p|%l`, {
         headers: { 'User-Agent': 'curl/7.64.1' }
       });
-      
+
       if (!response.ok) {
         return `Error: Failed to fetch weather (HTTP ${response.status})`;
       }
-      
+
       const data = await response.text();
       const [condition, temp, wind, humidity, precipitation, loc] = data.split('|');
-      
+
       return `Weather for ${loc.trim()}:\n` +
              `Condition: ${condition.trim()}\n` +
              `Temperature: ${temp.trim()}\n` +
@@ -2127,6 +2152,54 @@ export class AgentDO {
              `Precipitation: ${precipitation.trim()}`;
     } catch (error) {
       return `Error: ${error instanceof Error ? error.message : 'Failed to fetch weather'}`;
+    }
+  }
+
+  private handleSqlQuery(query: string): string {
+    if (!query.trim()) {
+      return "Error: SQL query is required";
+    }
+    try {
+      const rows = this.db.exec(query).toArray();
+      if (rows.length === 0) {
+        return "Query executed successfully. No rows returned.";
+      }
+      return JSON.stringify(rows, null, 2);
+    } catch (error) {
+      return `SQL Error: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  private async handleKvGet(key: string): Promise<string> {
+    if (!key.trim()) {
+      return "Error: KV key is required";
+    }
+    if (!this.env.USER_CONFIG_KV) {
+      return "Error: KV storage is not available in this environment";
+    }
+    try {
+      const value = await this.env.USER_CONFIG_KV.get(key);
+      if (value === null) {
+        return `Key "${key}" not found in KV storage`;
+      }
+      return value;
+    } catch (error) {
+      return `KV Error: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  private async handleKvPut(key: string, value: string): Promise<string> {
+    if (!key.trim()) {
+      return "Error: KV key is required";
+    }
+    if (!this.env.USER_CONFIG_KV) {
+      return "Error: KV storage is not available in this environment";
+    }
+    try {
+      await this.env.USER_CONFIG_KV.put(key, value);
+      return `Successfully wrote to KV key "${key}"`;
+    } catch (error) {
+      return `KV Error: ${error instanceof Error ? error.message : String(error)}`;
     }
   }
 
@@ -3033,10 +3106,13 @@ ${auditContext}` }
         "You are a helpful AI assistant with real capabilities: a bash sandbox lets you run shell commands,",
         "clone and search git repositories, read and write files, fetch web pages, check weather,",
         "and interact with the GitHub API (create PRs, fork repos, push branches).",
+        "You can directly see and edit persistent storage: use sql_query to read/write SQLite,",
+        "kv_get to read Cloudflare KV, and kv_put to write Cloudflare KV.",
         "Your files persist between sessions via git history and AGENT.md.",
         "When asked about your capabilities, describe what you can actually do.",
         "Do not claim generic LLM limitations like 'I cannot access files',",
-        "'I have no memory between conversations', or 'I cannot browse repositories'.",
+        "'I have no memory between conversations', 'I cannot browse repositories',",
+        "or 'I cannot see persistent storage' - you have dedicated tools for all of these.",
         "You have an autonomous heartbeat system that runs every 5 minutes to self-improve.",
         "You can access and modify your own source code at https://github.com/kyleboas/blob.",
         "When users ask about heartbeats, tell them about the heartbeat system and that they can check status by saying 'show my heartbeats'.",
