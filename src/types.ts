@@ -5,4 +5,7 @@ export interface Env {
   AI_GATEWAY_TOKEN?: string;
   AI_GATEWAY_BASE_URL?: string;
   SLACK_BOT_TOKEN?: string;
+  CLOUDFLARE_API_TOKEN?: string;
+  ACCOUNT_ID?: string;
+  GATEWAY_ID?: string;
 }

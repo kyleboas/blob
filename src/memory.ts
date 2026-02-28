@@ -89,7 +89,13 @@ export async function updateModelCatalog(env: Env, catalog: Record<string, { nam
 export async function triggerCatalogUpdate(env: Env): Promise<{ updated: boolean; count?: number; reason?: string }> {
   try {
     const do_ = await getMemoryDO(env);
-    const res = await do_.fetch("http://do/catalog/update", { method: "POST" });
+    const res = await do_.fetch("http://do/catalog/update", { 
+      method: "POST",
+      body: JSON.stringify({
+        cfToken: env.CLOUDFLARE_API_TOKEN,
+        accountId: env.ACCOUNT_ID
+      })
+    });
     return await res.json() as { updated: boolean; count?: number; reason?: string };
   } catch {
     return { updated: false, reason: "Failed to trigger update" };

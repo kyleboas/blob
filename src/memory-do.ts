@@ -100,7 +100,11 @@ export class MemoryDO {
     
     if (url.pathname === "/catalog/update" && request.method === "POST") {
       // Cron job endpoint to update catalog
-      const updated = await this.fetchModelsFromGateway();
+      const body = await request.json().catch(() => ({})) as { 
+        cfToken?: string; 
+        accountId?: string;
+      };
+      const updated = await this.fetchModelsFromGateway(body.cfToken, body.accountId);
       if (updated) {
         this.memory.modelCatalog = updated;
         await this.state.storage.put("memory", this.memory);
@@ -112,11 +116,59 @@ export class MemoryDO {
     return new Response("Not found", { status: 404 });
   }
   
-  private async fetchModelsFromGateway(): Promise<Record<string, { name: string; description: string; maxTokens: number }> | null> {
-    // Note: Cloudflare AI Gateway doesn't have a public list models API
-    // This is a placeholder for when/if it becomes available
-    // For now, we return the default catalog
-    return DEFAULT_CATALOG;
+  private async fetchModelsFromGateway(
+    cfToken?: string, 
+    accountId?: string
+  ): Promise<Record<string, { name: string; description: string; maxTokens: number }> | null> {
+    if (!cfToken || !accountId) {
+      return DEFAULT_CATALOG;
+    }
+
+    try {
+      // Fetch Workers AI models
+      const response = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/models/search?per_page=100&hide_experimental=true`,
+        {
+          headers: {
+            "Authorization": `Bearer ${cfToken}`,
+          },
+        }
+      );
+
+      if (!response.ok) {
+        return DEFAULT_CATALOG;
+      }
+
+      const data = await response.json() as { 
+        result?: Array<{ 
+          id: string; 
+          name?: string; 
+          description?: string;
+          task?: string;
+        }> 
+      };
+
+      if (!data.result) {
+        return DEFAULT_CATALOG;
+      }
+
+      // Convert to catalog format
+      const catalog: Record<string, { name: string; description: string; maxTokens: number }> = {};
+      
+      for (const model of data.result) {
+        if (model.task === "text-generation") {
+          catalog[`workers-ai/${model.id}`] = {
+            name: model.name || model.id,
+            description: model.description || "Workers AI model",
+            maxTokens: 4096
+          };
+        }
+      }
+
+      return Object.keys(catalog).length > 0 ? catalog : DEFAULT_CATALOG;
+    } catch {
+      return DEFAULT_CATALOG;
+    }
   }
 }
 
