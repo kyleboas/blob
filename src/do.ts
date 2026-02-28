@@ -38,24 +38,24 @@ export class BlobDO {
 
   private async init(): Promise<void> {
     if (this.initialized) return;
-    
+
     const stored = await this.state.storage.get<BlobState>("data");
     if (stored) {
       this.data = { ...this.data, ...stored };
     }
-    
+
     this.initialized = true;
   }
 
   async fetch(request: Request): Promise<Response> {
     await this.init();
     const url = new URL(request.url);
-    
+
     // Repo endpoints
     if (url.pathname === "/repos" && request.method === "GET") {
       return json({ repos: this.data.repos });
     }
-    
+
     if (url.pathname === "/repos" && request.method === "POST") {
       const { repo } = await request.json() as { repo: string };
       if (!this.data.repos.includes(repo)) {
@@ -64,59 +64,66 @@ export class BlobDO {
       }
       return json({ added: repo });
     }
-    
+
     if (url.pathname === "/goals" && request.method === "GET") {
       const repo = url.searchParams.get("repo");
       if (!repo) return json({ error: "missing repo" }, 400);
       const goals = this.data.goals[repo] || ["improve codebase"];
       return json({ repo, goals });
     }
-    
+
     if (url.pathname === "/goals" && request.method === "POST") {
       const { repo, goals } = await request.json() as { repo: string; goals: string[] };
       this.data.goals[repo] = goals;
       await this.save();
       return json({ saved: repo, goals });
     }
-    
+
     // Memory endpoints
     if (url.pathname === "/messages" && request.method === "POST") {
       const { role, content } = await request.json() as { role: string; content: string };
       this.data.messages.push({ role, content, timestamp: Date.now() });
-      if (this.data.messages.length > 100) {
+
+      // Compact messages if too many
+      if (this.data.messages.length > 50) {
+        await this.compactMessages();
+      } else if (this.data.messages.length > 100) {
         this.data.messages = this.data.messages.slice(-100);
+        await this.save();
+      } else {
+        await this.save();
       }
-      await this.save();
+
       return json({ saved: true });
     }
-    
+
     if (url.pathname === "/messages" && request.method === "GET") {
       const limit = parseInt(url.searchParams.get("limit") || "10");
       return json({ messages: this.data.messages.slice(-limit) });
     }
-    
+
     if (url.pathname === "/preferences" && request.method === "POST") {
       const { key, value } = await request.json() as { key: string; value: string };
       this.data.userPreferences[key] = value;
       await this.save();
       return json({ saved: true });
     }
-    
+
     // Catalog endpoints
     if (url.pathname === "/catalog" && request.method === "GET") {
       return json({ catalog: this.data.modelCatalog || DEFAULT_CATALOG });
     }
-    
+
     if (url.pathname === "/catalog" && request.method === "POST") {
       const { catalog } = await request.json() as { catalog: Record<string, { name: string; description: string; maxTokens: number }> };
       this.data.modelCatalog = catalog;
       await this.save();
       return json({ saved: true, count: Object.keys(catalog).length });
     }
-    
+
     if (url.pathname === "/catalog/update" && request.method === "POST") {
-      const body = await request.json().catch(() => ({})) as { 
-        cfToken?: string; 
+      const body = await request.json().catch(() => ({})) as {
+        cfToken?: string;
         accountId?: string;
       };
       const updated = await this.fetchModelsFromGateway(body.cfToken, body.accountId);
@@ -127,16 +134,29 @@ export class BlobDO {
       }
       return json({ updated: false, reason: "Could not fetch models" });
     }
-    
+
     return new Response("Not found", { status: 404 });
   }
-  
+
   private async save(): Promise<void> {
     await this.state.storage.put("data", this.data);
   }
-  
+
+  private async compactMessages(): Promise<void> {
+    // Summarize older messages to prevent context overflow
+    const toSummarize = this.data.messages.slice(0, -20);
+    const summary = `[${toSummarize.length} older messages summarized]`;
+
+    this.data.messages = [
+      { role: "system", content: summary, timestamp: Date.now() },
+      ...this.data.messages.slice(-20)
+    ];
+
+    await this.save();
+  }
+
   private async fetchModelsFromGateway(
-    cfToken?: string, 
+    cfToken?: string,
     accountId?: string
   ): Promise<Record<string, { name: string; description: string; maxTokens: number }> | null> {
     if (!cfToken || !accountId) return DEFAULT_CATALOG;
@@ -149,8 +169,8 @@ export class BlobDO {
 
       if (!response.ok) return DEFAULT_CATALOG;
 
-      const data = await response.json() as { 
-        result?: Array<{ id: string; name?: string; description?: string; task?: string }> 
+      const data = await response.json() as {
+        result?: Array<{ id: string; name?: string; description?: string; task?: string }>
       };
 
       if (!data.result) return DEFAULT_CATALOG;
@@ -174,8 +194,8 @@ export class BlobDO {
 }
 
 function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), { 
+  return new Response(JSON.stringify(data), {
     status,
-    headers: { "content-type": "application/json" } 
+    headers: { "content-type": "application/json" }
   });
 }
