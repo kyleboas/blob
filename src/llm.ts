@@ -5,6 +5,10 @@ export async function callLLM(
   env: Env,
   opts: { maxTokens?: number } = {}
 ): Promise<string> {
+  if (!env.AI_GATEWAY_BASE_URL || !env.AI_GATEWAY_TOKEN) {
+    throw new Error("AI Gateway not configured");
+  }
+
   const response = await fetch(`${env.AI_GATEWAY_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
@@ -17,7 +21,18 @@ export async function callLLM(
       max_tokens: opts.maxTokens ?? 4096,
     }),
   });
-  const data = await response.json() as { choices: Array<{ message: { content: string } }> };
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`LLM error: ${response.status} ${text}`);
+  }
+
+  const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+  
+  if (!data.choices || data.choices.length === 0) {
+    throw new Error("No choices in LLM response");
+  }
+  
   return data.choices[0]?.message?.content ?? "";
 }
 
