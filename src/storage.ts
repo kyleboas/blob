@@ -91,6 +91,11 @@ async function getSnapshotCandidates(
   return Array.from(new Set([...basePaths, ...parseChangedPaths(gitStatus.stdout)]));
 }
 
+function columnExists(sql: SqlStorage, table: string, column: string): boolean {
+  const rows = sql.exec(`PRAGMA table_info(${table})`).toArray();
+  return rows.some((row) => String(row.name) === column);
+}
+
 export function initSchema(sql: SqlStorage): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS conversation_messages (
@@ -236,6 +241,51 @@ export function initSchema(sql: SqlStorage): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     )
   `);
+
+  // Schema migrations: handle existing Durable Object databases created with
+  // older schemas. CREATE TABLE IF NOT EXISTS never alters existing tables, so
+  // columns added in later versions must be backfilled here.
+
+  // rate_limits: older deployments used only 'scope' as the primary key and
+  // did not have a 'key' column. Drop and recreate (rate-limit counters are
+  // ephemeral; losing them is safe).
+  if (!columnExists(sql, "rate_limits", "key")) {
+    sql.exec(`DROP TABLE IF EXISTS rate_limits`);
+    sql.exec(`
+      CREATE TABLE rate_limits (
+        scope TEXT NOT NULL,
+        key TEXT NOT NULL,
+        count INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        PRIMARY KEY (scope, key)
+      )
+    `);
+  }
+
+  // knowledge: older deployments may not have the 'key' primary-key column.
+  // Without it the table is unreadable by current code, so drop and recreate.
+  if (!columnExists(sql, "knowledge", "key")) {
+    sql.exec(`DROP TABLE IF EXISTS knowledge`);
+    sql.exec(`
+      CREATE TABLE knowledge (
+        key TEXT PRIMARY KEY,
+        content TEXT NOT NULL,
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      )
+    `);
+  }
+
+  // settings: same situation as knowledge above.
+  if (!columnExists(sql, "settings", "key")) {
+    sql.exec(`DROP TABLE IF EXISTS settings`);
+    sql.exec(`
+      CREATE TABLE settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      )
+    `);
+  }
 }
 
 export function resolveOrCreateSession(
