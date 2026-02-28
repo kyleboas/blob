@@ -101,10 +101,10 @@ describe("enforceSafety", () => {
     expect(decision).toEqual({ allowed: true, requiresApproval: false });
   });
 
-  it("requires approval for conditional commands", () => {
+  it("auto-approves conditional commands", () => {
     const sql = new FakeSql();
     const decision = enforceSafety("git commit -m 'update'", sql, "session-2", ["src/index.ts"]);
-    expect(decision).toEqual({ allowed: true, requiresApproval: true });
+    expect(decision).toEqual({ allowed: true, requiresApproval: false });
   });
 
 
@@ -129,7 +129,7 @@ describe("enforceSafety", () => {
     const decision = enforceSafety("sed -i 's/a/b/' src/safety.ts", sql, "session-6", ["src/safety.ts"], {
       applySelfModificationRateLimit: false
     });
-    expect(decision).toEqual({ allowed: true, requiresApproval: true });
+    expect(decision).toEqual({ allowed: true, requiresApproval: false });
   });
   it("applies self-modification limits only to modifying commands", () => {
     const sql = new FakeSql();

@@ -164,8 +164,10 @@ export function enforceSafety(
     };
   }
 
+  // Auto-approve conditional commands (git add, git commit, sed, etc.)
+  // Only block dangerous ones that match BLOCKED_PATTERNS (already checked above)
   if (classification === "conditional") {
-    return { allowed: true, requiresApproval: true };
+    return { allowed: true, requiresApproval: false };
   }
 
   return { allowed: true, requiresApproval: false };
