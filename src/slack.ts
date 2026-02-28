@@ -4,13 +4,12 @@ import { callLLMWithModelSelection, callLLM } from "./llm";
 import { getSystemPromptWithCapabilities } from "./capabilities";
 import { getCronJobs, addCronJob, deleteCronJob } from "./cron";
 import { startCodexLogin, saveCodexAuth, runCodex, sandboxStatus } from "./sandbox";
-import { runSetupWizard, completeCodexSetup, getSetupHelp } from "./setup";
 
 // Track in-flight events to prevent race conditions
 const inFlightEvents = new Set<string>();
 
 interface IntentResult {
-  intent: "list_cron" | "add_cron" | "delete_cron" | "codex_login" | "codex_run" | "setup" | "setup_status" | "chat";
+  intent: "list_cron" | "add_cron" | "delete_cron" | "codex_login" | "codex_run" | "chat";
   schedule?: string;
   task?: string;
   search?: string;
@@ -26,8 +25,6 @@ Possible intents:
 - "delete_cron": User wants to remove a scheduled task (e.g., "delete the email reminder", "remove my test job")
 - "codex_login": User wants to login to Codex/OpenAI (e.g., "login to codex", "codex auth", "connect openai")
 - "codex_run": User wants to run Codex (e.g., "run codex", "use codex to fix this", "codex: refactor this code")
-- "setup": User wants to run setup wizard (e.g., "setup blob", "run setup", "configure blob")
-- "setup_status": User wants to check setup status (e.g., "setup status", "check configuration", "what's configured")
 - "chat": General conversation, not a specific command
 
 For "add_cron", extract:
@@ -41,7 +38,7 @@ For "codex_run", extract:
 - prompt: The task for Codex (e.g., "fix this bug", "refactor the auth module")
 
 Respond with ONLY a JSON object in this format:
-{"intent": "list_cron|add_cron|delete_cron|codex_login|codex_run|setup|setup_status|chat", "schedule": "...", "task": "...", "search": "...", "prompt": "..."}
+{"intent": "list_cron|add_cron|delete_cron|codex_login|codex_run|chat", "schedule": "...", "task": "...", "search": "...", "prompt": "..."}
 
 Message: "${text}"`;
 
@@ -214,49 +211,21 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
       return new Response("OK");
     }
 
-    // Handle setup wizard
-    if (intent.intent === "setup") {
-      const result = await runSetupWizard(env, async (msg) => {
-        await postToSlack(channel, msg, env);
-      });
-      
-      if (result.complete) {
-        await postToSlack(channel, "\n🎉 **Setup complete!** Blob is ready to help.", env);
-      }
-      return new Response("OK");
-    }
-
-    // Handle setup status check
-    if (intent.intent === "setup_status") {
-      const status = await sandboxStatus(env);
-      const repos = await getRepos(env);
-      
-      let msg = "📊 **Blob Setup Status**\n\n";
-      msg += `Sandbox: ${status.ready ? "✅ Ready" : "❌ " + status.message}\n`;
-      msg += `Repositories: ${repos.length > 0 ? repos.join(", ") : "❌ None configured"}\n`;
-      msg += `Codex: ${status.ready ? "ℹ️ Run 'login to codex' to authenticate" : "❌ Sandbox required"}\n\n`;
-      msg += "Need help? Say 'setup help'";
-      
-      await postToSlack(channel, msg, env);
-      return new Response("OK");
-    }
-
-    // Handle "done" after Codex login (save auth)
+    // Check for "done" after login (save auth)
     if (originalText.toLowerCase().trim() === "done") {
-      const result = await completeCodexSetup(env);
-      await postToSlack(channel, result.message, env);
-      
-      if (result.success) {
-        await postToSlack(channel, "\nContinuing setup...", env);
-        const setupResult = await runSetupWizard(env, async (msg) => {
-          await postToSlack(channel, msg, env);
-        });
-        
-        if (setupResult.complete) {
-          await postToSlack(channel, "\n🎉 **Setup complete!**", env);
+      // Try to save auth - this will fail gracefully if no auth pending
+      try {
+        const status = await sandboxStatus(env);
+        if (status.ready) {
+          const saved = await saveCodexAuth(env);
+          if (saved.saved) {
+            await postToSlack(channel, `✅ ${saved.message}. You can now run Codex!`, env);
+            return new Response("OK");
+          }
         }
+      } catch {
+        // Not a "done" for Codex, continue to chat
       }
-      return new Response("OK");
     }
 
     // Get repos for context
