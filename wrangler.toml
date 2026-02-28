@@ -26,8 +26,3 @@ new_classes = ["BlobDO", "BlobSandbox"]
 [observability.logs]
 enabled = true
 invocation_logs = true
-
-[observability]
-[observability.logs]
-enabled = true
-invocation_logs = true
