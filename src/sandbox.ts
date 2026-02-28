@@ -6,12 +6,17 @@ interface SandboxResult {
   exitCode: number;
 }
 
+interface CodexLoginResult {
+  url: string;
+  code?: string;
+  instructions: string;
+}
+
 // Validate command before execution
 function validateCommand(command: string): { valid: boolean; error?: string } {
-  // Block dangerous commands
   const dangerous = [
     /rm\s+-rf\s+\//,
-    /:\(\)\{\s*:\|:\s*&\s*\}.*:\)/, // Fork bomb
+    /:\(\)\{\s*:\|:\s*&\s*\}.*:\)/,
   ];
   
   for (const pattern of dangerous) {
@@ -28,7 +33,6 @@ export async function executeInSandbox(
   env: Env,
   opts: { timeout?: number; signal?: AbortSignal } = {}
 ): Promise<SandboxResult> {
-  // Validate command
   const validation = validateCommand(command);
   if (!validation.valid) {
     throw new Error(validation.error);
@@ -50,6 +54,72 @@ export async function executeInSandbox(
   if (!response.ok) {
     const error = await response.text();
     throw new Error(`Sandbox error: ${response.status} ${error}`);
+  }
+
+  return await response.json() as SandboxResult;
+}
+
+// Start Codex device-code login flow
+export async function startCodexLogin(env: Env): Promise<CodexLoginResult> {
+  if (!env.SANDBOX) {
+    throw new Error("SANDBOX binding not found");
+  }
+
+  const response = await env.SANDBOX.fetch("http://localhost:8080/codex/login/start", {
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Codex login error: ${response.status} ${error}`);
+  }
+
+  return await response.json() as CodexLoginResult;
+}
+
+// Save Codex auth to persistent storage
+export async function saveCodexAuth(env: Env): Promise<{ saved: boolean; message: string }> {
+  if (!env.SANDBOX) {
+    throw new Error("SANDBOX binding not found");
+  }
+
+  const response = await env.SANDBOX.fetch("http://localhost:8080/codex/auth/save", {
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Codex auth save error: ${response.status} ${error}`);
+  }
+
+  return await response.json() as { saved: boolean; message: string };
+}
+
+// Run Codex with a prompt
+export async function runCodex(
+  prompt: string,
+  env: Env,
+  opts: { timeout?: number } = {}
+): Promise<SandboxResult> {
+  if (!env.SANDBOX) {
+    throw new Error("SANDBOX binding not found");
+  }
+
+  const timeout = opts.timeout || 120000; // Default 2 min for Codex
+
+  const response = await env.SANDBOX.fetch("http://localhost:8080/codex/run", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ prompt, timeout }),
+  });
+
+  if (response.status === 401) {
+    throw new Error("Not authenticated. Run /codex login first.");
+  }
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Codex run error: ${response.status} ${error}`);
   }
 
   return await response.json() as SandboxResult;

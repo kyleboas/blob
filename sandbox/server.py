@@ -4,10 +4,15 @@ import json
 import subprocess
 import sys
 import os
+import threading
+import time
+
+AUTH_PATH = os.path.expanduser("~/.codex/auth.json")
+AUTH_DIR = os.path.dirname(AUTH_PATH)
+PERSISTENT_AUTH_DIR = "/workspace/.codex-auth"
 
 class SandboxHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        # Suppress default logging
         pass
     
     def do_GET(self):
@@ -21,19 +26,26 @@ class SandboxHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
     
     def do_POST(self):
-        if self.path != '/execute':
+        if self.path == '/execute':
+            self.handle_execute()
+        elif self.path == '/codex/login/start':
+            self.handle_codex_login_start()
+        elif self.path == '/codex/auth/save':
+            self.handle_codex_auth_save()
+        elif self.path == '/codex/run':
+            self.handle_codex_run()
+        else:
             self.send_response(404)
             self.end_headers()
-            return
-        
-        # Read request body
+    
+    def handle_execute(self):
         content_length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(content_length).decode('utf-8')
         
         try:
             data = json.loads(body)
             command = data.get('command', '')
-            timeout = data.get('timeout', 30000) / 1000  # Convert ms to seconds
+            timeout = data.get('timeout', 30000) / 1000
         except json.JSONDecodeError:
             self.send_response(400)
             self.send_header('Content-Type', 'application/json')
@@ -42,7 +54,7 @@ class SandboxHandler(http.server.BaseHTTPRequestHandler):
             return
         
         # Block dangerous commands
-        dangerous = ['rm -rf /', ':(){ :|: & };:', '> /dev/null']
+        dangerous = ['rm -rf /', ':(){ :|: & };:']
         for d in dangerous:
             if d in command:
                 self.send_response(400)
@@ -51,11 +63,149 @@ class SandboxHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": "Dangerous command blocked"}).encode())
                 return
         
-        # Execute command
         try:
             result = subprocess.run(
-                command,
-                shell=True,
+                command, shell=True, capture_output=True, text=True,
+                timeout=timeout, cwd='/workspace'
+            )
+            response = {
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "exitCode": result.returncode
+            }
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(response).encode())
+        except subprocess.TimeoutExpired:
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "stdout": "",
+                "stderr": f"Command timed out after {timeout}s",
+                "exitCode": 124
+            }).encode())
+        except Exception as e:
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "stdout": "",
+                "stderr": str(e),
+                "exitCode": 1
+            }).encode())
+    
+    def handle_codex_login_start(self):
+        """Start Codex device-code login flow."""
+        try:
+            # Run codex login to get device code
+            result = subprocess.run(
+                ["codex", "login"],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            # Parse output to extract URL and code
+            output = result.stdout + result.stderr
+            
+            # Extract URL and code from output
+            url = None
+            code = None
+            
+            for line in output.split('\n'):
+                if 'https://' in line and 'device' in line:
+                    url = line.strip()
+                if len(line.strip()) == 8 and line.strip().isalnum():
+                    code = line.strip()
+            
+            if not url:
+                url = "https://auth.openai.com/codex/device"
+            
+            response = {
+                "url": url,
+                "code": code,
+                "instructions": f"1. Open {url} on your device\n2. Enter code: {code}\n3. Complete login\n4. Call /codex/auth/save to persist credentials"
+            }
+            
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(response).encode())
+            
+        except Exception as e:
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode())
+    
+    def handle_codex_auth_save(self):
+        """Save Codex auth to persistent storage."""
+        try:
+            if not os.path.exists(AUTH_PATH):
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "No auth.json found. Complete login first."}).encode())
+                return
+            
+            # Read auth file
+            with open(AUTH_PATH, 'r') as f:
+                auth_data = json.load(f)
+            
+            # Ensure persistent directory exists
+            os.makedirs(PERSISTENT_AUTH_DIR, exist_ok=True)
+            
+            # Copy to persistent storage
+            persistent_path = os.path.join(PERSISTENT_AUTH_DIR, "auth.json")
+            with open(persistent_path, 'w') as f:
+                json.dump(auth_data, f)
+            
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "saved": True,
+                "message": "Auth credentials persisted to storage"
+            }).encode())
+            
+        except Exception as e:
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode())
+    
+    def handle_codex_run(self):
+        """Run Codex with a prompt."""
+        content_length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(content_length).decode('utf-8')
+        
+        try:
+            data = json.loads(body)
+            prompt = data.get('prompt', '')
+            timeout = data.get('timeout', 120000) / 1000  # Default 2 min
+        except json.JSONDecodeError:
+            self.send_response(400)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
+            return
+        
+        # Check auth exists
+        if not os.path.exists(AUTH_PATH):
+            self.send_response(401)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "error": "Not authenticated. Call /codex/login/start first."
+            }).encode())
+            return
+        
+        try:
+            # Run codex with the prompt
+            result = subprocess.run(
+                ["codex", "--quiet", prompt],
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -79,10 +229,9 @@ class SandboxHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({
                 "stdout": "",
-                "stderr": f"Command timed out after {timeout}s",
+                "stderr": f"Codex timed out after {timeout}s",
                 "exitCode": 124
             }).encode())
-            
         except Exception as e:
             self.send_response(500)
             self.send_header('Content-Type', 'application/json')
