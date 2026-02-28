@@ -12,14 +12,14 @@ export async function callLLM(
     throw new Error("AI Gateway not configured");
   }
 
-  const response = await fetch(`${env.AI_GATEWAY_BASE_URL}/compat/chat/completions`, {
+  const response = await fetch(`${env.AI_GATEWAY_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       "Authorization": `Bearer ${env.AI_GATEWAY_TOKEN}`,
     },
     body: JSON.stringify({
-      model: "@cf/meta/llama-3.1-8b-instruct",
+      model: "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
       messages,
       max_tokens: opts.maxTokens ?? 4096,
     }),
