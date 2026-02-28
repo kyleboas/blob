@@ -1,6 +1,6 @@
 import type { Env } from "./types";
 
-// Cloudflare Containers types (available at runtime when binding is configured)
+// Cloudflare Container class - provided by runtime when binding is configured
 declare global {
   class Container {
     defaultPort?: number;
@@ -11,11 +11,12 @@ declare global {
   function getContainer(binding: Container, id: string): Container;
 }
 
-// Container configuration (used by wrangler.toml)
-export const BlobSandboxConfig = {
-  defaultPort: 8080,
-  sleepAfter: "5m",
-};
+// Cloudflare Container binding for sandboxed execution
+// This class is instantiated by the runtime based on wrangler.toml config
+export class BlobSandbox extends Container {
+  defaultPort = 8080;
+  sleepAfter = "5m";
+}
 
 interface SandboxResult {
   stdout: string;

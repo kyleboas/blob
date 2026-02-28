@@ -1,6 +1,6 @@
 import type { Env } from "./types";
 import { BlobDO } from "./do";
-import { BlobSandboxConfig } from "./sandbox";
+import { BlobSandbox } from "./sandbox";
 import { getRepos, addRepo, getRepoGoals, setRepoGoals } from "./storage";
 import { Agent } from "./agent";
 import { handleSlackEvent } from "./slack";
@@ -73,4 +73,4 @@ export default {
   }
 };
 
-export { BlobDO, BlobSandboxConfig };
+export { BlobDO, BlobSandbox };
