@@ -3039,8 +3039,8 @@ ${auditContext}` }
     if (isGreeting || classification.intent === "general_chat") {
       messageType = "chat";
     } else {
-      // Use complexity from classification, default to routine
-      messageType = classification.complexity ?? "routine";
+      // Use complexity from classification, default to complex (user wants thorough solutions)
+      messageType = classification.complexity ?? "complex";
     }
 
     // Handle session summarization in background for chat messages to reduce latency

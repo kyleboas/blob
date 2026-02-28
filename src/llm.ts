@@ -708,11 +708,13 @@ Intents:
 - general_chat: General conversation or unclear intent
 
 Also classify the complexity for execution tasks:
-- routine: Simple queries, status checks, memory lookups, simple commands
-- complex: Code changes, refactoring, bug fixes, multi-step operations, architecture decisions
+- routine: ONLY simple queries that need no reasoning (time, weather, memory lookups)
+- complex: Everything else including code changes, analysis, reasoning, planning, debugging, refactoring, bug fixes, multi-step operations, architecture decisions, explanations, and any task requiring thought
+
+DEFAULT TO COMPLEX unless the task is a trivial lookup. The user wants thorough, well-reasoned solutions.
 
 Respond with ONLY a JSON object:
-{"intent": "intent_name", "confidence": 0.95, "complexity": "routine", "entities": {"location": "London", "name": "", "owner": "", "repo": ""}}
+{"intent": "intent_name", "confidence": 0.95, "complexity": "complex", "entities": {"location": "London", "name": "", "owner": "", "repo": ""}}
 
 Include only relevant entities. Use empty strings for missing entities. No markdown, just JSON.` + getLearningExamples();
 
