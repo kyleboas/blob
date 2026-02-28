@@ -3,15 +3,17 @@ import { getRepos } from "./storage";
 import { callLLMWithModelSelection, callLLM } from "./llm";
 import { getSystemPromptWithCapabilities } from "./capabilities";
 import { getCronJobs, addCronJob, deleteCronJob } from "./cron";
+import { startCodexLogin, saveCodexAuth, runCodex, sandboxStatus } from "./sandbox";
 
 // Track in-flight events to prevent race conditions
 const inFlightEvents = new Set<string>();
 
 interface IntentResult {
-  intent: "list_cron" | "add_cron" | "delete_cron" | "chat";
+  intent: "list_cron" | "add_cron" | "delete_cron" | "codex_login" | "codex_run" | "chat";
   schedule?: string;
   task?: string;
   search?: string;
+  prompt?: string;
 }
 
 async function classifyIntent(text: string, env: Env): Promise<IntentResult> {
@@ -21,7 +23,9 @@ Possible intents:
 - "list_cron": User wants to see their scheduled cron jobs (e.g., "show my jobs", "what tasks do I have", "list my cron jobs")
 - "add_cron": User wants to create a new scheduled task (e.g., "remind me every 5 minutes to check email", "add a job to run tests daily")
 - "delete_cron": User wants to remove a scheduled task (e.g., "delete the email reminder", "remove my test job")
-- "chat": General conversation, not a cron command
+- "codex_login": User wants to login to Codex/OpenAI (e.g., "login to codex", "codex auth", "connect openai")
+- "codex_run": User wants to run Codex (e.g., "run codex", "use codex to fix this", "codex: refactor this code")
+- "chat": General conversation, not a specific command
 
 For "add_cron", extract:
 - schedule: The time pattern (e.g., "every 5 minutes", "daily at 9am", "hourly")
@@ -30,8 +34,11 @@ For "add_cron", extract:
 For "delete_cron", extract:
 - search: Keywords to find the job to delete (e.g., "email", "test", "backup")
 
+For "codex_run", extract:
+- prompt: The task for Codex (e.g., "fix this bug", "refactor the auth module")
+
 Respond with ONLY a JSON object in this format:
-{"intent": "list_cron|add_cron|delete_cron|chat", "schedule": "...", "task": "...", "search": "..."}
+{"intent": "list_cron|add_cron|delete_cron|codex_login|codex_run|chat", "schedule": "...", "task": "...", "search": "...", "prompt": "..."}
 
 Message: "${text}"`;
 
@@ -143,6 +150,82 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
         await postToSlack(channel, "Which job would you like to delete? Try: 'delete my email reminder job'", env);
       }
       return new Response("OK");
+    }
+
+    // Handle Codex login
+    if (intent.intent === "codex_login") {
+      const status = await sandboxStatus(env);
+      if (!status.ready) {
+        await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
+        return new Response("OK");
+      }
+
+      try {
+        const login = await startCodexLogin(env);
+        await postToSlack(channel, 
+          `🔐 **Codex Login Required**\n\n` +
+          `1. Open: ${login.url}\n` +
+          `2. Enter code: \`${login.code || "see instructions"}\`\n` +
+          `3. Complete login on your device\n` +
+          `4. Reply here with "done" to save credentials`,
+          env
+        );
+      } catch (err) {
+        await postToSlack(channel, `❌ Codex login failed: ${err}`, env);
+      }
+      return new Response("OK");
+    }
+
+    // Handle Codex run
+    if (intent.intent === "codex_run") {
+      const status = await sandboxStatus(env);
+      if (!status.ready) {
+        await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
+        return new Response("OK");
+      }
+
+      const prompt = intent.prompt || originalText.replace(/codex[,:]?\s*/i, "");
+      
+      await postToSlack(channel, `🤖 Running Codex: "${prompt}"...`, env);
+      
+      try {
+        const result = await runCodex(prompt, env);
+        const output = result.stdout || result.stderr || "No output";
+        await postToSlack(channel, 
+          `✅ Codex completed (exit: ${result.exitCode})\n\n` +
+          "```\n" + output.slice(0, 3000) + "\n```",
+          env
+        );
+      } catch (err) {
+        const errMsg = String(err);
+        if (errMsg.includes("Not authenticated")) {
+          await postToSlack(channel, 
+            `❌ Not logged in to Codex.\n\n` +
+            `Run "login to codex" first to authenticate.`,
+            env
+          );
+        } else {
+          await postToSlack(channel, `❌ Codex error: ${errMsg}`, env);
+        }
+      }
+      return new Response("OK");
+    }
+
+    // Check for "done" after login (save auth)
+    if (originalText.toLowerCase().trim() === "done") {
+      // Try to save auth - this will fail gracefully if no auth pending
+      try {
+        const status = await sandboxStatus(env);
+        if (status.ready) {
+          const saved = await saveCodexAuth(env);
+          if (saved.saved) {
+            await postToSlack(channel, `✅ ${saved.message}. You can now run Codex!`, env);
+            return new Response("OK");
+          }
+        }
+      } catch {
+        // Not a "done" for Codex, continue to chat
+      }
     }
 
     // Get repos for context
