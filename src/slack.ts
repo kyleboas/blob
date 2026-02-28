@@ -3,6 +3,9 @@ import { getRepos } from "./storage";
 import { callLLMWithModelSelection } from "./llm";
 import { getSystemPromptWithCapabilities } from "./capabilities";
 
+// Track in-flight events to prevent race conditions
+const inFlightEvents = new Set<string>();
+
 export async function handleSlackEvent(request: Request, env: Env): Promise<Response> {
   const body = await request.json() as {
     type?: string;
@@ -23,17 +26,30 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
     return new Response(body.challenge);
   }
 
-  // Deduplicate using DO
+  // Deduplicate using DO with in-flight check
   const eventId = body.event_id || body.event?.ts;
   if (eventId && env.BLOB) {
-    const do_ = env.BLOB.get(env.BLOB.idFromName("blob"));
-    const checkRes = await do_.fetch("http://do/events/check", {
-      method: "POST",
-      body: JSON.stringify({ eventId }),
-    });
-    const { processed } = await checkRes.json() as { processed: boolean };
-    if (processed) {
-      return new Response("OK"); // Already processed
+    // Check if already processing
+    if (inFlightEvents.has(eventId)) {
+      return new Response("OK");
+    }
+    
+    // Mark as in-flight immediately
+    inFlightEvents.add(eventId);
+    
+    try {
+      const do_ = env.BLOB.get(env.BLOB.idFromName("blob"));
+      const checkRes = await do_.fetch("http://do/events/check", {
+        method: "POST",
+        body: JSON.stringify({ eventId }),
+      });
+      const { processed } = await checkRes.json() as { processed: boolean };
+      if (processed) {
+        return new Response("OK");
+      }
+    } finally {
+      // Remove from in-flight after 10s
+      setTimeout(() => inFlightEvents.delete(eventId), 10000);
     }
   }
 
