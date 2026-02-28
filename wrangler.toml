@@ -9,13 +9,23 @@ crons = ["*/5 * * * *", "0 0 * * 0"]
 name = "BLOB"
 class_name = "BlobDO"
 
+# ✅ Container/DO class definition
+[[durable_objects.bindings]]
+name = "BLOB_SANDBOX"
+class_name = "BlobSandbox"
+
+# Migration v1 (already deployed)
 [[migrations]]
 tag = "v1"
 new_classes = ["BlobDO"]
 
-# ✅ containers array (not a DO binding)
+# Migration v2 (adds BlobSandbox)
+[[migrations]]
+tag = "v2"
+new_classes = ["BlobSandbox"]
+
+# ✅ Container config
 [[containers]]
-name = "BLOB_SANDBOX"
 class_name = "BlobSandbox"
 image = "./sandbox/Dockerfile"
 max_instances = 3
