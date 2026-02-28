@@ -162,7 +162,15 @@ const BASE_SYSTEM_PROMPT = [
   "If a workflow repeats, use create_tool to define a reusable tool and then call it directly in later steps.",
   "For GitHub operations, use python github_tools.py (available in /workspace) - it handles authentication automatically. Commands: whoami, push, create-pr, fork, remote-url.",
   "You have access to your own source code at https://github.com/kyleboas/blob - you can clone it, read it, modify it, and create PRs to improve yourself.",
-  "When working on your own code, clone to /workspace/blob and make changes there."
+  "When working on your own code, clone to /workspace/blob and make changes there.",
+  "",
+  "PERSISTENT STORAGE:",
+  "- You have Cloudflare KV storage for persistent data across sessions",
+  "- Use the memory extension to save/recall key-value pairs",
+  "- Repository goals are stored in KV and persist across restarts",
+  "- User preferences can be saved to KV using the preferences system",
+  "- Extension state is persisted per session in the database",
+  "- DO NOT claim you lack persistent storage - you have KV and SQLite"
 ].join(" ");
 
 const DEFAULT_KNOWLEDGE_PROMPT_GUARDRAIL = [
