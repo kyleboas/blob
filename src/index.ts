@@ -1,5 +1,5 @@
 import type { Env } from "./types";
-import { RepoConfigDO } from "./do";
+import { AgentDO } from "./do";
 import { getRepos, addRepo, getRepoGoals, setRepoGoals } from "./storage";
 import { Agent } from "./agent";
 
@@ -55,4 +55,4 @@ export default {
   }
 };
 
-export { RepoConfigDO };
+export { AgentDO };

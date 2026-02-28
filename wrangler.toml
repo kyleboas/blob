@@ -7,8 +7,8 @@ crons = ["*/5 * * * *"]
 
 [[durable_objects.bindings]]
 name = "REPO_CONFIG"
-class_name = "RepoConfigDO"
+class_name = "AgentDO"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["RepoConfigDO"]
+new_classes = ["AgentDO"]

@@ -1,6 +1,6 @@
 import type { Env } from "./types";
 
-export class RepoConfigDO {
+export class AgentDO {
   private state: DurableObjectState;
   private repos: string[] = ["kyleboas/blob"];
   private goals: Map<string, string[]> = new Map();
