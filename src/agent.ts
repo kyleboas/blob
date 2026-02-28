@@ -1300,6 +1300,36 @@ export class AgentDO {
             .map((b) => b.text)
             .join("\n")
             .trim() || "Done.";
+          
+          // Check if the response is asking for confirmation instead of taking action
+          if (this.isAskingForConfirmation(finalText)) {
+            // Re-prompt the LLM to take action instead of asking
+            const proactivePrompt = `You were about to ask: "${finalText}"
+
+INSTEAD OF ASKING, JUST DO IT. Take the action directly using the appropriate tool.
+If you were going to ask about testing, run the test. If about implementing, implement it.
+Use the bash, write, or edit tool to take action right now.`;
+            
+            conversation.push({ role: "user", content: proactivePrompt });
+            saveMessage(this.db, sessionId, { role: "user", content: proactivePrompt });
+            
+            llmResponse = await this.deps.llmCall(this.buildLlmInput({
+              systemPrompt: systemPromptWithStatus,
+              messages: conversation,
+              tools: this.buildToolList(dynamicTools),
+              taskComplexityHint: options.taskComplexityHint,
+              modelRole: "execution"
+            }));
+            
+            // Safety check - if the response is invalid, break to avoid infinite loop
+            if (!llmResponse || !llmResponse.content) {
+              finalText = "Error: Invalid response from proactive re-prompt";
+              break;
+            }
+            
+            continue; // Process the new response with tool calls
+          }
+          
           break;
         }
 
@@ -1343,6 +1373,12 @@ export class AgentDO {
           })),
           channel
         );
+        
+        // Safety check - if the response is invalid, break to avoid errors
+        if (!llmResponse || !llmResponse.content) {
+          finalText = "Error: Invalid response from LLM";
+          break;
+        }
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -1496,6 +1532,29 @@ export class AgentDO {
   private getRepoContextForCwd(cwd: string | null): RepoContext | null {
     if (!cwd) return null;
     return this.repoContextByCwd.get(cwd) ?? null;
+  }
+
+  private isAskingForConfirmation(text: string): boolean {
+    const confirmationPatterns = [
+      /would you like me to/i,
+      /should i/i,
+      /do you want me to/i,
+      /would you prefer/i,
+      /shall i/i,
+      /let me know if you'd like/i,
+      /just let me know/i,
+      /or would you rather/i,
+      /would you like to/i,
+      /should we/i,
+      /i can.*if you'd like/i,
+      /i could.*if you prefer/i,
+      /what would you like me to do next/i,
+      /how would you like to proceed/i,
+      /what should i do next/i,
+      /ready for your next request/i,
+      /awaiting your instructions/i,
+    ];
+    return confirmationPatterns.some(pattern => pattern.test(text));
   }
 
   private async maybeCaptureRepoContext(cwd: string | null): Promise<RepoContext | null> {
@@ -2021,6 +2080,26 @@ export class AgentDO {
       const safety = enforceSafety(command, this.db, sessionId, [], {
         applySelfModificationRateLimit: options.applySelfModificationRateLimit
       });
+
+      if (!safety.allowed && safety.requiresApproval) {
+        logAgentEvent(this.db, sessionId, "command_needs_approval", sanitizedCommand);
+        this.forwardToGlobalLogs("command_needs_approval", `[#${channel}] ${sanitizedCommand}`);
+        await createApprovalRequest(
+          this.pendingApprovals,
+          {
+            sessionId,
+            command,
+            channel
+          },
+          this.deps,
+          this.env.SLACK_BOT_TOKEN,
+          this.ctx.storage
+        );
+        observations.push(formatToolResult(toolBlock.id, "Paused pending approval."));
+        done = true;
+        doneText = "Paused pending approval.";
+        continue;
+      }
 
       if (!safety.allowed) {
         const blockedReason = safety.reason ?? "Blocked by safety policy.";

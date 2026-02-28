@@ -5,7 +5,7 @@ import {
 } from "./config";
 import { getRateLimit, type SqlStorage } from "./storage";
 
-export type CommandClassification = "auto_approve" | "conditional";
+export type CommandClassification = "auto_approve" | "conditional" | "requires_approval";
 
 export interface SafetyDecision {
   allowed: boolean;
@@ -31,6 +31,13 @@ const SELF_MOD_TARGET_PATTERNS = [
 
 const AUTO_APPROVE_PATTERNS = [
   /^(cat|ls|pwd|echo|head|tail|wc|find|grep|git\s+status)\b/
+];
+
+const REQUIRES_APPROVAL_PATTERNS = [
+  /git\s+reset\s+--hard/,
+  /git\s+clean\s+-fd/,
+  /rm\s+-rf/,
+  /git\s+push\s+--force/
 ];
 
 const BLOCKED_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
@@ -78,6 +85,10 @@ export function checkRateLimit(
 
 export function classifyCommand(command: string): CommandClassification {
   const normalized = command.trim();
+
+  if (REQUIRES_APPROVAL_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return "requires_approval";
+  }
 
   if (AUTO_APPROVE_PATTERNS.some((pattern) => pattern.test(normalized))) {
     return "auto_approve";
@@ -141,6 +152,10 @@ export function enforceSafety(
   }
 
   const classification = classifyCommand(command);
+  if (classification === "requires_approval") {
+    return { allowed: false, requiresApproval: true };
+  }
+
   if (classification === "conditional") {
     return { allowed: true, requiresApproval: false };
   }

@@ -70,8 +70,8 @@ describe("classifyCommand", () => {
     expect(classifyCommand("git commit -m 'x'")).toBe("conditional");
   });
 
-  it("classifies destructive commands as conditional in autonomous mode", () => {
-    expect(classifyCommand("rm -rf tmp")).toBe("conditional");
+  it("classifies destructive commands as requires_approval", () => {
+    expect(classifyCommand("rm -rf tmp")).toBe("requires_approval");
   });
 });
 
