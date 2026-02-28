@@ -13,7 +13,7 @@ import {
   MODEL_EXECUTION_COMPLEX,
   buildExecutionGuardrails
 } from "./config";
-import { loadUserConfiguration, getRepositoryGoals } from "./kv-loader";
+import { loadUserConfiguration, getRepositoryGoals, saveRepositoryGoals } from "./kv-loader";
 import type { UserConfiguration } from "./kv-schema";
 import { callLLM, classifyMessage, type LLMResponse } from "./llm";
 import { callWorkersAI, shouldUseWorkersAI } from "./workers-ai";
@@ -2433,15 +2433,33 @@ export class AgentDO {
         return "❌ No goals found. Please provide goals separated by commas or new lines.";
       }
 
-      // Store in database settings (since we can't easily update KV from here)
-      const repoKey = `repo_goals:${owner}/${repo}`;
-      setSetting(this.db, repoKey, JSON.stringify(goals));
+      // Store in KV for cross-DO access
+      const saved = await saveRepositoryGoals(
+        { USER_CONFIG_KV: this.env.USER_CONFIG_KV },
+        owner,
+        repo,
+        goals
+      );
+
+      if (!saved) {
+        // Fallback to local storage if KV fails
+        const repoKey = `repo_goals:${owner}/${repo}`;
+        setSetting(this.db, repoKey, JSON.stringify(goals));
+        
+        await this.deps.postSlackMessage(
+          this.env.SLACK_BOT_TOKEN,
+          channel,
+          `🎯 Set ${goals.length} goal(s) for ${owner}/${repo} (local only):\n${goals.map(g => `• ${g}`).join('\n')}\n\n` +
+          `⚠️ KV storage unavailable. Goals may not persist across restarts.`
+        );
+        
+        return `✅ Goals set locally for ${owner}/${repo}! (KV unavailable)`;
+      }
 
       await this.deps.postSlackMessage(
         this.env.SLACK_BOT_TOKEN,
         channel,
-        `🎯 Set ${goals.length} goal(s) for ${owner}/${repo}:\n${goals.map(g => `• ${g}`).join('\n')}\n\n` +
-        `Note: These are stored locally. For permanent storage, add to Cloudflare KV.`
+        `🎯 Set ${goals.length} goal(s) for ${owner}/${repo}:\n${goals.map(g => `• ${g}`).join('\n')}`
       );
 
       return `✅ Goals set for ${owner}/${repo}! I'll work towards these in my autonomous tasks.`;

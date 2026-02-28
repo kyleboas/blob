@@ -141,6 +141,57 @@ export async function saveUserConfiguration(
 }
 
 /**
+ * Save repository goals to KV storage.
+ * This makes goals accessible across all DOs.
+ */
+export async function saveRepositoryGoals(
+  env: { USER_CONFIG_KV?: KVNamespace },
+  owner: string,
+  repo: string,
+  goals: string[],
+  constraints?: string[]
+): Promise<boolean> {
+  if (!env.USER_CONFIG_KV) {
+    return false;
+  }
+
+  try {
+    // Load existing config
+    const existingConfig = await loadUserConfiguration(env);
+    
+    // Ensure repositories structure exists
+    if (!existingConfig.repositories) {
+      existingConfig.repositories = { repositories: {} };
+    }
+    
+    const repoKey = `${owner}/${repo}`;
+    
+    // Update or create repository config
+    existingConfig.repositories.repositories[repoKey] = {
+      owner,
+      repo,
+      goals,
+      constraints: constraints || [],
+      priority: "medium"
+    };
+
+    // Save back to KV
+    await env.USER_CONFIG_KV.put(CONFIG_KV_KEY, JSON.stringify(existingConfig));
+    
+    // Update cache
+    configCache = {
+      config: existingConfig,
+      cachedAt: Date.now(),
+    };
+
+    return true;
+  } catch (err) {
+    console.error("Failed to save repository goals to KV:", err);
+    return false;
+  }
+}
+
+/**
  * Get goals for a specific repository from the configuration.
  * Returns null if no goals are configured for the repository.
  */
