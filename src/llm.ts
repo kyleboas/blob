@@ -1,9 +1,89 @@
 import type { Env } from "./types";
+import { MODELS, DEFAULT_MODEL, ESCALATION_CHAIN } from "./models";
 
-export async function callLLM(
+interface LLMResponse {
+  content: string;
+  escalated: boolean;
+  modelUsed: string;
+}
+
+export async function callLLMWithEscalation(
   messages: Array<{ role: string; content: string }>,
   env: Env,
-  opts: { maxTokens?: number } = {}
+  opts: { maxTokens?: number; startModel?: string } = {}
+): Promise<LLMResponse> {
+  const startModelKey = opts.startModel ?? DEFAULT_MODEL;
+  const startModel = MODELS[startModelKey];
+  
+  if (!startModel) {
+    throw new Error(`Unknown model: ${startModelKey}`);
+  }
+
+  // Try with starting model
+  const systemPrompt = messages.find(m => m.role === "system")?.content ?? "";
+  const userMessage = messages.find(m => m.role === "user")?.content ?? "";
+  
+  const augmentedMessages = [
+    { 
+      role: "system", 
+      content: `${systemPrompt}\n\nIf this task is too complex for you, respond with [[ESCALATE:reason]] and nothing else. Otherwise, respond normally.` 
+    },
+    { role: "user", content: userMessage }
+  ];
+
+  const firstResponse = await callLLMRaw(augmentedMessages, startModel.id, opts.maxTokens ?? startModel.maxTokens, env);
+  
+  // Check if escalation requested
+  const escalateMatch = firstResponse.match(/\[\[ESCALATE:(.+?)\]\]/);
+  
+  if (!escalateMatch) {
+    // No escalation needed
+    return {
+      content: firstResponse,
+      escalated: false,
+      modelUsed: startModel.name
+    };
+  }
+
+  // Escalate to next model in chain
+  const escalateReason = escalateMatch[1];
+  const currentIndex = ESCALATION_CHAIN.indexOf(startModelKey);
+  const nextModelKey = ESCALATION_CHAIN[currentIndex + 1];
+  
+  if (!nextModelKey) {
+    // No more models to try
+    return {
+      content: firstResponse.replace(/\[\[ESCALATE:.+?\]\]/, "").trim(),
+      escalated: false,
+      modelUsed: startModel.name
+    };
+  }
+
+  const nextModel = MODELS[nextModelKey];
+  
+  // Retry with more powerful model
+  const retryMessages = [
+    { 
+      role: "system", 
+      content: `${systemPrompt}\n\nThe previous model requested escalation because: ${escalateReason}. You are the specialized model handling this complex task.` 
+    },
+    { role: "user", content: userMessage }
+  ];
+
+  const secondResponse = await callLLMRaw(retryMessages, nextModel.id, opts.maxTokens ?? nextModel.maxTokens, env);
+
+  return {
+    content: secondResponse,
+    escalated: true,
+    modelUsed: nextModel.name
+  };
+}
+
+async function callLLMRaw(
+  messages: Array<{ role: string; content: string }>,
+  modelId: string,
+  maxTokens: number,
+  env: Env
 ): Promise<string> {
   if (!env.AI_GATEWAY_BASE_URL || !env.AI_GATEWAY_TOKEN) {
     throw new Error("AI Gateway not configured");
@@ -16,9 +96,9 @@ export async function callLLM(
       "Authorization": `Bearer ${env.AI_GATEWAY_TOKEN}`,
     },
     body: JSON.stringify({
-      model: "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      model: modelId,
       messages,
-      max_tokens: opts.maxTokens ?? 4096,
+      max_tokens: maxTokens,
     }),
   });
 
@@ -36,7 +116,12 @@ export async function callLLM(
   return data.choices[0]?.message?.content ?? "";
 }
 
-export async function plan(goals: string[], env: Env): Promise<string> {
-  const prompt = `You are an autonomous coding agent.\n\nRepository goals:\n${goals.map(g => `- ${g}`).join("\n")}\n\nWhat is ONE specific task to work on next? Respond with only the task description.`;
-  return (await callLLM([{ role: "user", content: prompt }], env)).trim();
+// Simple call without escalation (for internal use)
+export async function callLLM(
+  messages: Array<{ role: string; content: string }>,
+  env: Env,
+  opts: { maxTokens?: number } = {}
+): Promise<string> {
+  const result = await callLLMWithEscalation(messages, env, opts);
+  return result.content;
 }
