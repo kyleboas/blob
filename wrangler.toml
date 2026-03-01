@@ -14,7 +14,6 @@ class_name = "SandboxDO"
 [[migrations]]
 tag = "v3"
 new_sqlite_classes = ["SandboxDO"]
-deleted_classes = ["Sandbox"]
 
 [[r2_buckets]]
 binding = "REPO_STORE"
