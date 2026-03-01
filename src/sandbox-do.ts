@@ -1,30 +1,39 @@
 import type { Env } from "./types";
 
-// Container fetcher type - matches Cloudflare's container binding interface
-interface ContainerFetcher {
-  fetch: typeof fetch;
-}
-
-// Extend DurableObjectState to include container for container-backed DOs
-declare module "@cloudflare/workers-types" {
-  interface DurableObjectState {
-    container?: ContainerFetcher;
-  }
-}
-
 // Note: Class must be named "Sandbox" to match wrangler.toml class_name
 export class Sandbox {
   constructor(private state: DurableObjectState, private env: Env) {}
 
   async fetch(request: Request): Promise<Response> {
-    // For container-backed DOs, the container is injected into state.container
-    // by the Cloudflare runtime when the DO class has a [[containers]] binding
-    const container = this.state.container;
+    // Try multiple ways to access the container
+    // 1. state.container - for container-backed DOs
+    // 2. env.sandbox_v2 - for explicit container bindings
+    const container = (this.state as any).container ?? (this.env as any).sandbox_v2;
 
     if (!container) {
       return new Response(JSON.stringify({ 
-        error: "Container not attached to this DO",
-        hint: "Make sure the DO class has a [[containers]] binding in wrangler.toml"
+        error: "Container not available",
+        debug: {
+          stateKeys: Object.keys(this.state),
+          envKeys: Object.keys(this.env).filter(k => !k.startsWith('_')),
+          hasStateContainer: 'container' in this.state,
+          hasEnvSandbox: 'sandbox_v2' in this.env
+        }
+      }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // Check if container has fetch method
+    if (typeof container.fetch !== 'function') {
+      return new Response(JSON.stringify({ 
+        error: "Container exists but fetch is not a function",
+        debug: {
+          containerType: typeof container,
+          containerKeys: Object.keys(container),
+          hasFetch: typeof container.fetch === 'function'
+        }
       }), {
         status: 503,
         headers: { "Content-Type": "application/json" },
@@ -32,7 +41,6 @@ export class Sandbox {
     }
 
     const url = new URL(request.url);
-    // Cloudflare containers use http://localhost:<port> internally
     const containerUrl = `http://localhost:8080${url.pathname}${url.search}`;
 
     try {
@@ -42,15 +50,12 @@ export class Sandbox {
         body: request.body,
       });
 
-      // For health checks, if we get a non-OK response, include details
       if (!resp.ok && url.pathname === '/health') {
         const bodyText = await resp.text().catch(() => 'No body');
         return new Response(JSON.stringify({ 
           ready: false, 
           status: resp.status,
-          statusText: resp.statusText,
-          body: bodyText,
-          url: containerUrl
+          body: bodyText
         }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
@@ -59,19 +64,8 @@ export class Sandbox {
 
       return new Response(resp.body, { status: resp.status, headers: resp.headers });
     } catch (err) {
-      if (url.pathname === '/health') {
-        return new Response(JSON.stringify({
-          ready: false,
-          error: String(err),
-          url: containerUrl,
-        }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      return new Response(JSON.stringify({
+      return new Response(JSON.stringify({ 
         error: String(err),
-        url: containerUrl,
         type: 'exception'
       }), {
         status: 500,
