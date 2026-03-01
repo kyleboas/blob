@@ -72,11 +72,25 @@ async function callLLMRaw(
   maxTokens: number,
   env: Env
 ): Promise<string> {
+  // Fallback to Workers AI if gateway not configured
   if (!env.AI_GATEWAY_BASE_URL || !env.AI_GATEWAY_TOKEN) {
-    throw new Error("AI Gateway not configured");
+    // Use Workers AI directly
+    const ai = (env as any).AI as { run: (model: string, inputs: { messages: typeof messages; max_tokens: number }) => Promise<{ response?: string }> };
+    if (!ai) {
+      throw new Error("Neither AI Gateway nor Workers AI available");
+    }
+    const result = await ai.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+      messages,
+      max_tokens: maxTokens,
+    });
+    return result.response ?? "";
   }
 
-  const response = await fetch(`${env.AI_GATEWAY_BASE_URL}`, {
+  // Ensure URL ends with /chat/completions for OpenAI-compatible endpoint
+  const baseUrl = env.AI_GATEWAY_BASE_URL.replace(/\/$/, '');
+  const url = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
+
+  const response = await fetch(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
