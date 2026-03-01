@@ -48,10 +48,10 @@ export default {
     // Codex login start
     if (url.pathname === '/codex/login/start' && request.method === 'POST') {
       return new Response(JSON.stringify({
-        url: 'https://auth.openai.com/codex/device',
-        code: 'TEST-CODE',
-        instructions: '1. Open the URL\n2. Enter the code\n3. Complete login'
+        error: 'Codex login endpoint is not wired in this worker build.',
+        instructions: 'Deploy the sandbox container worker (wrangler.sandbox.toml) to get real device login codes.'
       }), {
+        status: 501,
         headers: { 'Content-Type': 'application/json' }
       });
     }

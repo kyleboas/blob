@@ -10,6 +10,22 @@ function json(data: unknown): Response {
   return new Response(JSON.stringify(data), { headers: { "content-type": "application/json" } });
 }
 
+function parseCodexLoginOutput(output: string): { url?: string; code?: string } {
+  const urlMatch = output.match(/https:\/\/[^\s)\]]+/i);
+  const codeMatch = output.match(/\b([A-Z0-9]{4}-[A-Z0-9]{4}|[A-Z0-9]{8})\b/);
+
+  return {
+    url: urlMatch?.[0],
+    code: codeMatch?.[1],
+  };
+}
+
+function isUnsupportedRuntimeError(errorText: string): boolean {
+  return errorText.includes("[unenv] child_process.execSyn is not implemented yet") ||
+    errorText.includes("[unenv] child_process.execSync is not implemented yet") ||
+    errorText.includes("Cannot find module 'child_process'");
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -39,6 +55,19 @@ export default {
           exitCode: 0
         }), { headers: { 'Content-Type': 'application/json' }});
       } catch (err: any) {
+        const errorText = String(err);
+
+        if (isUnsupportedRuntimeError(errorText)) {
+          return new Response(JSON.stringify({
+            stdout: '',
+            stderr: 'Command execution is unavailable in this worker runtime. Deploy the sandbox container worker (wrangler.sandbox.toml).',
+            exitCode: 1
+          }), {
+            status: 501,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
         return new Response(JSON.stringify({ 
           stdout: err.stdout || '', 
           stderr: err.stderr || String(err), 
@@ -60,35 +89,57 @@ export default {
           stdio: ['pipe', 'pipe', 'pipe']
         });
         
-        // Parse output to extract URL and code
-        const urlMatch = result.match(/(https:\/\/\S+)/);
-        const codeMatch = result.match(/([A-Z0-9]{4}-[A-Z0-9]{4})/);
+        const { url, code } = parseCodexLoginOutput(result);
+
+        if (!url || !code) {
+          return new Response(JSON.stringify({
+            instructions: 'Could not parse device-login details from codex output.',
+            rawOutput: result,
+          }), {
+            status: 502,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
         
         return new Response(JSON.stringify({
-          url: urlMatch ? urlMatch[1] : 'https://auth.openai.com/codex/device',
-          code: codeMatch ? codeMatch[1] : 'TEST-CODE',
+          url,
+          code,
           instructions: '1. Open the URL on your device\n2. Enter the code\n3. Complete login\n4. Reply "done" to save credentials'
         }), { headers: { 'Content-Type': 'application/json' }});
       } catch (err: any) {
+        const errorText = String(err);
+
+        if (isUnsupportedRuntimeError(errorText)) {
+          return new Response(JSON.stringify({
+            instructions: 'Codex device login is unavailable in this worker runtime. Deploy the sandbox container worker (wrangler.sandbox.toml) and route SANDBOX binding traffic there.',
+            output: errorText,
+            error: errorText,
+          }), {
+            status: 501,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
         // Even if command "fails", it might have printed the login info
         const output = err.stdout || err.stderr || String(err);
-        const urlMatch = output.match(/(https:\/\/\S+)/);
-        const codeMatch = output.match(/([A-Z0-9]{4}-[A-Z0-9]{4})/);
+        const { url, code } = parseCodexLoginOutput(output);
         
-        if (urlMatch && codeMatch) {
+        if (url && code) {
           return new Response(JSON.stringify({
-            url: urlMatch[1],
-            code: codeMatch[1],
+            url,
+            code,
             instructions: '1. Open the URL on your device\n2. Enter the code\n3. Complete login\n4. Reply "done" to save credentials'
           }), { headers: { 'Content-Type': 'application/json' }});
         }
         
         return new Response(JSON.stringify({
-          url: 'https://auth.openai.com/codex/device',
-          code: 'TEST-CODE',
-          instructions: '1. Open the URL on your device\n2. Enter the code\n3. Complete login\n4. Reply "done" to save credentials',
+          instructions: 'Could not parse device-login details from codex output.',
+          output,
           error: String(err)
-        }), { headers: { 'Content-Type': 'application/json' }});
+        }), {
+          status: 502,
+          headers: { 'Content-Type': 'application/json' }
+        });
       }
     }
     
