@@ -124,14 +124,66 @@ export async function sandboxStatus(env: Env): Promise<{ ready: boolean; message
   try {
     const stub = getSandboxStub(env);
     const response = await stub.fetch("http://sandbox/health");
-    
-    if (response.ok) {
-      return { ready: true };
-    }
-    
-    // Include response body for debugging
     const body = await response.text();
-    return { ready: false, message: `Health check failed: ${response.status} - ${body}` };
+
+    let parsed: {
+      status?: string;
+      mode?: string;
+      reason?: string;
+      hint?: string;
+      lookedFor?: string[];
+      envKeys?: string[];
+    } | undefined;
+
+    try {
+      parsed = JSON.parse(body) as {
+        status?: string;
+        mode?: string;
+        reason?: string;
+        hint?: string;
+        lookedFor?: string[];
+        envKeys?: string[];
+      };
+    } catch {
+      // Non-JSON health payloads are supported for compatibility.
+    }
+
+    if (!response.ok) {
+      return { ready: false, message: `Health check failed: ${response.status} - ${body}` };
+    }
+
+    // Detect fallback/degraded health responses from the DO (no sandbox container attached).
+    // Fallback responds with HTTP 200 and { status: "degraded", mode: "fallback", ... }.
+    const degraded = parsed?.status === "degraded" || parsed?.mode === "fallback";
+    if (degraded) {
+      const details: string[] = [];
+
+      if (parsed?.reason) {
+        details.push(parsed.reason);
+      }
+
+      if (parsed?.hint) {
+        details.push(parsed.hint);
+      }
+
+      if (Array.isArray(parsed?.lookedFor) && Array.isArray(parsed?.envKeys)) {
+        const missing = parsed.lookedFor
+          .filter((name) => name !== "state.container")
+          .filter((name) => !parsed!.envKeys!.includes(name));
+        if (missing.length > 0) {
+          details.push(`missing bindings: ${missing.join(", ")}`);
+        }
+      }
+
+      return {
+        ready: false,
+        message: details.length > 0
+          ? `Sandbox is in fallback mode (${details.join("; ")})`
+          : "Sandbox is in fallback mode",
+      };
+    }
+
+    return { ready: true };
   } catch (err) {
     return { ready: false, message: `Connection failed: ${err}` };
   }
