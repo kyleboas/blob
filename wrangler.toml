@@ -7,9 +7,17 @@ compatibility_flags = ["nodejs_compat"]
 name = "AGENT_DO"
 class_name = "AgentDO"
 
+[[durable_objects.bindings]]
+name = "SANDBOX_DO"
+class_name = "Sandbox"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["AgentDO"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Sandbox"]
 
 [[r2_buckets]]
 binding = "REPO_STORE"

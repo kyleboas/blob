@@ -73,4 +73,5 @@ export default {
   }
 };
 
+// Export both DO classes - the wrangler.toml controls which ones are actually bound
 export { AgentDO, Sandbox };
