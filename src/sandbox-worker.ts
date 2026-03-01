@@ -1,3 +1,4 @@
+import { Sandbox } from "./sandbox-do";
 import type { Env } from "./types";
 
 // Sandbox worker entry point
@@ -88,3 +89,5 @@ export default {
     return new Response('Not found', { status: 404 });
   }
 };
+
+export { Sandbox };
