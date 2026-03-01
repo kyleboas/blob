@@ -12,13 +12,6 @@ interface CodexLoginResult {
   instructions: string;
 }
 
-// Get the Sandbox DO stub
-async function getSandboxDO(env: Env): Promise<DurableObjectStub> {
-  if (!env.SANDBOX_DO) throw new Error("SANDBOX_DO binding not found");
-  const id = env.SANDBOX_DO.idFromName("default");
-  return env.SANDBOX_DO.get(id);
-}
-
 // Validate command before execution
 function validateCommand(command: string): { valid: boolean; error?: string } {
   const dangerous = [
@@ -45,10 +38,13 @@ export async function executeInSandbox(
     throw new Error(validation.error);
   }
 
-  const do_ = await getSandboxDO(env);
+  if (!env.SANDBOX) {
+    throw new Error("SANDBOX service binding not found");
+  }
+
   const timeout = opts.timeout || 30000;
 
-  const response = await do_.fetch("http://sandbox/execute", {
+  const response = await env.SANDBOX.fetch("http://sandbox/execute", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ command, timeout }),
@@ -64,9 +60,11 @@ export async function executeInSandbox(
 
 // Start Codex device-code login flow
 export async function startCodexLogin(env: Env): Promise<CodexLoginResult> {
-  const do_ = await getSandboxDO(env);
+  if (!env.SANDBOX) {
+    throw new Error("SANDBOX service binding not found");
+  }
 
-  const response = await do_.fetch("http://sandbox/codex/login/start", {
+  const response = await env.SANDBOX.fetch("http://sandbox/codex/login/start", {
     method: "POST",
   });
 
@@ -80,9 +78,11 @@ export async function startCodexLogin(env: Env): Promise<CodexLoginResult> {
 
 // Save Codex auth to persistent storage
 export async function saveCodexAuth(env: Env): Promise<{ saved: boolean; message: string }> {
-  const do_ = await getSandboxDO(env);
+  if (!env.SANDBOX) {
+    throw new Error("SANDBOX service binding not found");
+  }
 
-  const response = await do_.fetch("http://sandbox/codex/auth/save", {
+  const response = await env.SANDBOX.fetch("http://sandbox/codex/auth/save", {
     method: "POST",
   });
 
@@ -100,10 +100,13 @@ export async function runCodex(
   env: Env,
   opts: { timeout?: number } = {}
 ): Promise<SandboxResult> {
-  const do_ = await getSandboxDO(env);
-  const timeout = opts.timeout || 120000; // Default 2 min for Codex
+  if (!env.SANDBOX) {
+    throw new Error("SANDBOX service binding not found");
+  }
 
-  const response = await do_.fetch("http://sandbox/codex/run", {
+  const timeout = opts.timeout || 120000;
+
+  const response = await env.SANDBOX.fetch("http://sandbox/codex/run", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ prompt, timeout }),
@@ -122,24 +125,17 @@ export async function runCodex(
 }
 
 export async function sandboxStatus(env: Env): Promise<{ ready: boolean; message?: string }> {
-  if (!env.SANDBOX_DO) {
-    return { ready: false, message: "SANDBOX_DO binding not found" };
+  if (!env.SANDBOX) {
+    return { ready: false, message: "SANDBOX service binding not found" };
   }
 
   try {
-    const do_ = await getSandboxDO(env);
-    const response = await do_.fetch("http://sandbox/health");
-
-    if (!response.ok) {
-      return { ready: false, message: `Health check failed: ${response.status}` };
+    const response = await env.SANDBOX.fetch("http://sandbox/health");
+    
+    if (response.ok) {
+      return { ready: true };
     }
-
-    const body = await response.json() as { status?: string; ready?: boolean; error?: string };
-    if (body.ready === false) {
-      return { ready: false, message: body.error || "Container not ready" };
-    }
-
-    return { ready: true };
+    return { ready: false, message: `Health check failed: ${response.status}` };
   } catch (err) {
     return { ready: false, message: `Connection failed: ${err}` };
   }

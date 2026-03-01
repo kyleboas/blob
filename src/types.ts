@@ -1,11 +1,8 @@
 export interface Env {
   AGENT_DO?: DurableObjectNamespace;
   
-  // DO namespace binding (so other code can call the Sandbox DO)
-  SANDBOX_DO?: DurableObjectNamespace;
-  
-  // Container fetcher binding (from [[containers]] name="sandbox_v2")
-  sandbox_v2?: Fetcher;
+  // Service binding to sandbox worker
+  SANDBOX?: Fetcher;
   
   // Workers AI binding - no config needed
   AI?: {
