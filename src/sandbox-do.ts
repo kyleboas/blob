@@ -5,11 +5,13 @@ export class Sandbox {
   constructor(private state: DurableObjectState, private env: Env) {}
 
   async fetch(request: Request): Promise<Response> {
-    // Prefer explicit container binding. Keep state.container as fallback for older runtimes.
-    const container = this.env.sandbox_v2 ?? ((this.state as any).container as Fetcher | undefined);
+    // Container-backed DOs access their container via state.container
+    // This is injected by the Cloudflare runtime when the DO is backed by a container
+    const stateWithContainer = this.state as DurableObjectState & { container?: { fetch: typeof fetch } };
+    const container = stateWithContainer.container;
 
     if (!container) {
-      return new Response(JSON.stringify({ error: "Container not available" }), {
+      return new Response(JSON.stringify({ error: "Container not attached to this DO" }), {
         status: 503,
         headers: { "Content-Type": "application/json" },
       });
