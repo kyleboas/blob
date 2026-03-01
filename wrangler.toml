@@ -8,7 +8,7 @@ name = "AGENT_DO"
 class_name = "AgentDO"
 
 [[migrations]]
-tag = "v1"
+tag = "v2"
 new_sqlite_classes = ["AgentDO"]
 
 [[r2_buckets]]
