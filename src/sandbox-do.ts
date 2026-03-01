@@ -5,8 +5,8 @@ export class Sandbox {
   constructor(private state: DurableObjectState, private env: Env) {}
 
   async fetch(request: Request): Promise<Response> {
-    // Container fetcher is accessed via this.state.container for container-backed DOs
-    const container = (this.state as any).container as Fetcher;
+    // Prefer explicit container binding. Keep state.container as fallback for older runtimes.
+    const container = this.env.sandbox_v2 ?? ((this.state as any).container as Fetcher | undefined);
 
     if (!container) {
       return new Response(JSON.stringify({ error: "Container not available" }), {
