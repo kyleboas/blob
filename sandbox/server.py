@@ -28,14 +28,30 @@ class SandboxHandler(http.server.BaseHTTPRequestHandler):
     
     def do_GET(self):
         self.log_message(f"GET {self.path}")
-        if self.path == '/health':
-            self.send_response(200)
+        try:
+            if self.path == '/health':
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "healthy", "time": time.time()}).encode())
+            elif self.path == '/codex/status':
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "authenticated": os.path.exists(AUTH_PATH)
+                }).encode())
+            else:
+                self.send_response(404)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Not found", "path": self.path}).encode())
+        except Exception as e:
+            self.log_message(f"Error in do_GET: {e}")
+            self.send_response(500)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps({"status": "healthy", "time": time.time()}).encode())
-        else:
-            self.send_response(404)
-            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode())
     
     def do_POST(self):
         self.log_message(f"POST {self.path}")

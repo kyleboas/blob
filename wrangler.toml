@@ -6,12 +6,10 @@ compatibility_flags = ["nodejs_compat"]
 [[durable_objects.bindings]]
 name = "AGENT_DO"
 class_name = "AgentDO"
-script_name = "blob-agent"
 
 [[durable_objects.bindings]]
 name = "SANDBOX_DO"
 class_name = "Sandbox"
-script_name = "blob-agent-sandbox"
 
 [[migrations]]
 tag = "v1"
