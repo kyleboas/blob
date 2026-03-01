@@ -13,14 +13,23 @@ name = "SANDBOX_DO"
 class_name = "Sandbox"
 script_name = "blob-agent-sandbox"
 
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["AgentDO"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Sandbox"]
+
 [[r2_buckets]]
 binding = "REPO_STORE"
 bucket_name = "blob-repo-store"
 
-[[services]]
-binding = "SANDBOX"
-service = "blob-agent-sandbox"
-environment = "production"
+# Cloudflare Sandbox container binding
+[[containers]]
+name = "sandbox"
+class_name = "Sandbox"
+image = "./sandbox/Dockerfile"
 
 [ai]
 binding = "AI"
