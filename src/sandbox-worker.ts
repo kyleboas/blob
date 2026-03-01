@@ -9,6 +9,9 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     
+    // Log all requests for debugging
+    console.log(`[SandboxWorker] ${request.method} ${url.pathname}`);
+    
     // Health check
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({ status: 'healthy' }), {
@@ -86,7 +89,16 @@ export default {
       }
     }
     
-    return new Response('Not found', { status: 404 });
+    // Return 404 with debug info
+    return new Response(JSON.stringify({
+      error: 'Not found',
+      path: url.pathname,
+      method: request.method,
+      available: ['/health', '/execute', '/codex/login/start', '/codex/auth/save', '/codex/run']
+    }), { 
+      status: 404,
+      headers: { 'Content-Type': 'application/json' }
+    });
   }
 };
 
