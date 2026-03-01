@@ -24,24 +24,72 @@ export default {
     if (url.pathname === '/execute' && request.method === 'POST') {
       try {
         const { command, timeout } = await request.json() as { command: string; timeout?: number };
+        
+        // Execute the command using bash
+        const { execSync } = await import('child_process');
+        const result = execSync(command, { 
+          encoding: 'utf-8', 
+          timeout: (timeout || 30) * 1000,
+          stdio: ['pipe', 'pipe', 'pipe']
+        });
+        
         return new Response(JSON.stringify({
-          stdout: `Executed: ${command}`,
+          stdout: result,
           stderr: '',
           exitCode: 0
         }), { headers: { 'Content-Type': 'application/json' }});
-      } catch (err) {
-        return new Response(JSON.stringify({ stdout: '', stderr: String(err), exitCode: 1 }), {
-          status: 500, headers: { 'Content-Type': 'application/json' }
+      } catch (err: any) {
+        return new Response(JSON.stringify({ 
+          stdout: err.stdout || '', 
+          stderr: err.stderr || String(err), 
+          exitCode: err.status || 1 
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
         });
       }
     }
     
     if (url.pathname === '/codex/login/start' && request.method === 'POST') {
-      return new Response(JSON.stringify({
-        url: 'https://auth.openai.com/codex/device',
-        code: 'TEST-CODE',
-        instructions: '1. Open the URL\n2. Enter the code\n3. Complete login'
-      }), { headers: { 'Content-Type': 'application/json' }});
+      try {
+        // Run codex login and capture output
+        const { execSync } = await import('child_process');
+        const result = execSync('codex login', { 
+          encoding: 'utf-8', 
+          timeout: 30000,
+          stdio: ['pipe', 'pipe', 'pipe']
+        });
+        
+        // Parse output to extract URL and code
+        const urlMatch = result.match(/(https:\/\/\S+)/);
+        const codeMatch = result.match(/([A-Z0-9]{4}-[A-Z0-9]{4})/);
+        
+        return new Response(JSON.stringify({
+          url: urlMatch ? urlMatch[1] : 'https://auth.openai.com/codex/device',
+          code: codeMatch ? codeMatch[1] : 'TEST-CODE',
+          instructions: '1. Open the URL on your device\n2. Enter the code\n3. Complete login\n4. Reply "done" to save credentials'
+        }), { headers: { 'Content-Type': 'application/json' }});
+      } catch (err: any) {
+        // Even if command "fails", it might have printed the login info
+        const output = err.stdout || err.stderr || String(err);
+        const urlMatch = output.match(/(https:\/\/\S+)/);
+        const codeMatch = output.match(/([A-Z0-9]{4}-[A-Z0-9]{4})/);
+        
+        if (urlMatch && codeMatch) {
+          return new Response(JSON.stringify({
+            url: urlMatch[1],
+            code: codeMatch[1],
+            instructions: '1. Open the URL on your device\n2. Enter the code\n3. Complete login\n4. Reply "done" to save credentials'
+          }), { headers: { 'Content-Type': 'application/json' }});
+        }
+        
+        return new Response(JSON.stringify({
+          url: 'https://auth.openai.com/codex/device',
+          code: 'TEST-CODE',
+          instructions: '1. Open the URL on your device\n2. Enter the code\n3. Complete login\n4. Reply "done" to save credentials',
+          error: String(err)
+        }), { headers: { 'Content-Type': 'application/json' }});
+      }
     }
     
     if (url.pathname === '/codex/auth/save' && request.method === 'POST') {
