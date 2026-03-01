@@ -4,6 +4,9 @@
   "scripts": {
     "deploy": "wrangler deploy"
   },
+  "dependencies": {
+    "@cloudflare/sandbox": "^0.0.8"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250214.0",
     "typescript": "^5.9.3",

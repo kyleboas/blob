@@ -7,18 +7,24 @@ compatibility_flags = ["nodejs_compat"]
 name = "AGENT_DO"
 class_name = "AgentDO"
 
+[[durable_objects.bindings]]
+name = "Sandbox"
+class_name = "Sandbox"
+
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["AgentDO"]
+new_sqlite_classes = ["AgentDO", "Sandbox"]
+
+[[containers]]
+class_name = "Sandbox"
+image = "./sandbox/Dockerfile"
+name = "sandbox"
+max_instances = 10
+instance_type = "basic"
 
 [[r2_buckets]]
 binding = "REPO_STORE"
 bucket_name = "blob-repo-store"
-
-[[services]]
-binding = "SANDBOX"
-service = "blob-agent-sandbox"
-environment = "production"
 
 [ai]
 binding = "AI"

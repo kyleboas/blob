@@ -7,15 +7,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   curl \
   git \
   python3 \
-  python3-pip \
   nodejs \
   build-essential \
   && rm -rf /var/lib/apt/lists/*
 
-# Install a non-interactive git credential helper used by Blob.
-# Git calls this script for Username/Password prompts and it provides:
-# - username: x-access-token
-# - password: $GITHUB_TOKEN (or $GH_TOKEN)
+# Non-interactive git credential helper - provides GitHub token for auth
 RUN cat >/usr/local/bin/blob-git-askpass <<'EOF' \
  && chmod 755 /usr/local/bin/blob-git-askpass
 #!/bin/sh
@@ -32,16 +28,3 @@ RUN mkdir -p /workspace
 RUN npm install -g @openai/codex
 
 WORKDIR /workspace
-
-# HTTP server with Codex support
-COPY server.py /server.py
-RUN chmod +x /server.py
-
-# Script to restore auth from persistent storage on startup
-COPY restore-auth.py /restore-auth.py
-RUN chmod +x /restore-auth.py
-
-EXPOSE 8080
-
-# Restore auth then start server
-CMD ["sh", "-c", "python3 /restore-auth.py && python3 /server.py"]
