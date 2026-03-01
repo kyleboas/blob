@@ -1,29 +1,33 @@
 import type { Env } from "./types";
 
+type ContainerBinding = { fetch: typeof fetch };
+
+function resolveContainerBinding(env: Env): { container?: ContainerBinding; candidates: string[] } {
+  const possibleNames = ["sandbox", "Sandbox", "SANDBOX", "BLOB_SANDBOX"] as const;
+
+  for (const name of possibleNames) {
+    const maybeContainer = (env as unknown as Record<string, unknown>)[name];
+    if (maybeContainer && typeof (maybeContainer as { fetch?: unknown }).fetch === "function") {
+      return { container: maybeContainer as ContainerBinding, candidates: [...possibleNames] };
+    }
+  }
+
+  return { candidates: [...possibleNames] };
+}
+
 // Sandbox DO - forwards requests to the container
 export class Sandbox {
   constructor(private state: DurableObjectState, private env: Env) {}
 
   async fetch(request: Request): Promise<Response> {
-    // Try to get container from env (binding name is "sandbox" in wrangler.toml)
-    const container = (this.env as any).sandbox as { fetch: typeof fetch } | undefined;
+    const { container, candidates } = resolveContainerBinding(this.env);
 
     if (!container) {
       return new Response(JSON.stringify({ 
         error: "Container binding not found",
-        hint: "Make sure [[containers]] name='sandbox' is configured in wrangler.toml"
-      }), {
-        status: 503,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    // Verify container has fetch method
-    if (typeof container.fetch !== 'function') {
-      return new Response(JSON.stringify({ 
-        error: "Container does not have fetch method",
-        type: typeof container,
-        keys: Object.keys(container)
+        hint: "Make sure [[containers]] is configured in wrangler.toml and that the binding is available to this Durable Object.",
+        lookedFor: candidates,
+        envKeys: Object.keys(this.env),
       }), {
         status: 503,
         headers: { "Content-Type": "application/json" },
