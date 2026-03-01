@@ -76,7 +76,7 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
 
   // Deduplicate using DO with in-flight check
   const eventId = body.event_id || body.event?.ts;
-  if (eventId && env.BLOB) {
+  if (eventId && env.AGENT_DO) {
     // Check if already processing
     if (inFlightEvents.has(eventId)) {
       return new Response("OK");
@@ -86,7 +86,7 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
     inFlightEvents.add(eventId);
     
     try {
-      const do_ = env.BLOB.get(env.BLOB.idFromName("blob"));
+      const do_ = env.AGENT_DO.get(env.AGENT_DO.idFromName("blob"));
       const checkRes = await do_.fetch("http://do/events/check", {
         method: "POST",
         body: JSON.stringify({ eventId }),

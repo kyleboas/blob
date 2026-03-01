@@ -3,9 +3,9 @@ import type { Env } from "./types";
 const BLOB_ID = "blob";
 
 async function getAgentDO(env: Env): Promise<DurableObjectStub> {
-  if (!env.BLOB) throw new Error("BLOB binding not found");
-  const id = env.BLOB.idFromName(BLOB_ID);
-  return env.BLOB.get(id);
+  if (!env.AGENT_DO) throw new Error("AGENT_DO binding not found");
+  const id = env.AGENT_DO.idFromName(BLOB_ID);
+  return env.AGENT_DO.get(id);
 }
 
 export async function getRepos(env: Env): Promise<string[]> {

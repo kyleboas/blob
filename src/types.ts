@@ -1,6 +1,7 @@
 export interface Env {
-  BLOB?: DurableObjectNamespace;
+  AGENT_DO?: DurableObjectNamespace;
   SANDBOX?: Fetcher;
+  REPO_STORE?: R2Bucket;
   GITHUB_TOKEN?: string;
   AI_GATEWAY_TOKEN?: string;
   AI_GATEWAY_BASE_URL?: string;

@@ -1,0 +1,22 @@
+name = "blob-agent-sandbox"
+main = "index.ts"
+compatibility_date = "2026-02-19"
+compatibility_flags = ["nodejs_compat"]
+
+[[durable_objects.bindings]]
+name = "Sandbox"
+class_name = "Sandbox"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Sandbox"]
+
+[[containers]]
+class_name = "Sandbox"
+image = "./Dockerfile"
+name = "sandbox"
+max_instances = 3
+instance_type = "basic"
+
+[observability.logs]
+enabled = true

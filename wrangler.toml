@@ -1,21 +1,24 @@
-name = "blob-agent" 
+name = "blob-agent"
 main = "src/index.ts"
-compatibility_date = "2025-12-01"
+compatibility_date = "2026-02-19"
+compatibility_flags = ["nodejs_compat"]
 
 [[durable_objects.bindings]]
-name = "BLOB"
+name = "AGENT_DO"
 class_name = "AgentDO"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["AgentDO"]
+new_sqlite_classes = ["AgentDO"]
 
-# NOTE: Container binding configured via Cloudflare Dashboard
-# Go to: Worker > Settings > Bindings > Add > Container
-# Binding name: SANDBOX
-# Container: sandbox
+[[r2_buckets]]
+binding = "REPO_STORE"
+bucket_name = "blob-repo-store"
 
-[observability]
+[[services]]
+binding = "SANDBOX"
+service = "blob-agent-sandbox"
+environment = "production"
+
 [observability.logs]
 enabled = true
-invocation_logs = true
