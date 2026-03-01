@@ -15,6 +15,9 @@ interface IntentResult {
   prompt?: string;
 }
 
+const codexLoginRegex = /^(login to codex|login with codex|codex login|codex auth|connect openai)$/i;
+const codexRunRegex = /^(run codex|codex run|use codex)[,:]?\s*/i;
+
 async function classifyIntent(text: string, env: Env): Promise<IntentResult> {
   const prompt = `You are an intent classifier for a Slack bot. Analyze the message and extract the user's intent.
 
@@ -112,7 +115,7 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
     const lowerText = originalText.toLowerCase().trim();
     
     // Codex commands
-    if (/^(login to codex|codex login|codex auth|connect openai)$/.test(lowerText)) {
+    if (codexLoginRegex.test(lowerText)) {
       const status = await sandboxStatus(env);
       if (!status.ready) {
         await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
@@ -135,14 +138,14 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
       return new Response("OK");
     }
 
-    if (/^(run codex|codex run|use codex)/.test(lowerText)) {
+    if (codexRunRegex.test(originalText)) {
       const status = await sandboxStatus(env);
       if (!status.ready) {
         await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
         return new Response("OK");
       }
 
-      const prompt = originalText.replace(/^(run codex|codex run|use codex)[,:]?\s*/i, "");
+      const prompt = originalText.replace(codexRunRegex, "");
       
       await postToSlack(channel, `🤖 Running Codex: "${prompt}"...`, env);
       
@@ -189,6 +192,62 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
     const intent = await classifyIntent(originalText, env);
 
     // Handle cron commands based on LLM intent
+    if (intent.intent === "codex_login") {
+      const status = await sandboxStatus(env);
+      if (!status.ready) {
+        await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
+        return new Response("OK");
+      }
+
+      try {
+        const login = await startCodexLogin(env);
+        await postToSlack(channel,
+          `🔐 **Codex Login Required**\n\n` +
+          `1. Open: ${login.url}\n` +
+          `2. Enter code: \`${login.code || "see instructions"}\`\n` +
+          `3. Complete login on your device\n` +
+          `4. Reply here with "done" to save credentials`,
+          env
+        );
+      } catch (err) {
+        await postToSlack(channel, `❌ Codex login failed: ${err}`, env);
+      }
+      return new Response("OK");
+    }
+
+    if (intent.intent === "codex_run") {
+      const status = await sandboxStatus(env);
+      if (!status.ready) {
+        await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
+        return new Response("OK");
+      }
+
+      const prompt = intent.prompt?.trim() || originalText;
+      await postToSlack(channel, `🤖 Running Codex: "${prompt}"...`, env);
+
+      try {
+        const result = await runCodex(prompt, env);
+        const output = result.stdout || result.stderr || "No output";
+        await postToSlack(channel,
+          `✅ Codex completed (exit: ${result.exitCode})\n\n` +
+          "```\n" + output.slice(0, 3000) + "\n```",
+          env
+        );
+      } catch (err) {
+        const errMsg = String(err);
+        if (errMsg.includes("Not authenticated")) {
+          await postToSlack(channel,
+            `❌ Not logged in to Codex.\n\n` +
+            `Run "login to codex" first to authenticate.`,
+            env
+          );
+        } else {
+          await postToSlack(channel, `❌ Codex error: ${errMsg}`, env);
+        }
+      }
+      return new Response("OK");
+    }
+
     if (intent.intent === "list_cron") {
       const jobs = await getCronJobs(env);
       if (jobs.length === 0) {
