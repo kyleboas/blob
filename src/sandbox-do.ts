@@ -2,17 +2,25 @@ import type { Env } from "./types";
 
 type ContainerBinding = { fetch: typeof fetch };
 
-function resolveContainerBinding(env: Env): { container?: ContainerBinding; candidates: string[] } {
+function resolveContainerBinding(
+  state: DurableObjectState,
+  env: Env
+): { container?: ContainerBinding; candidates: string[] } {
   const possibleNames = ["sandbox", "Sandbox", "SANDBOX", "BLOB_SANDBOX"] as const;
+
+  const stateContainer = (state as DurableObjectState & { container?: ContainerBinding }).container;
+  if (stateContainer && typeof stateContainer.fetch === "function") {
+    return { container: stateContainer, candidates: ["state.container", ...possibleNames] };
+  }
 
   for (const name of possibleNames) {
     const maybeContainer = (env as unknown as Record<string, unknown>)[name];
     if (maybeContainer && typeof (maybeContainer as { fetch?: unknown }).fetch === "function") {
-      return { container: maybeContainer as ContainerBinding, candidates: [...possibleNames] };
+      return { container: maybeContainer as ContainerBinding, candidates: ["state.container", ...possibleNames] };
     }
   }
 
-  return { candidates: [...possibleNames] };
+  return { candidates: ["state.container", ...possibleNames] };
 }
 
 // Sandbox DO - forwards requests to the container
@@ -20,7 +28,7 @@ export class Sandbox {
   constructor(private state: DurableObjectState, private env: Env) {}
 
   async fetch(request: Request): Promise<Response> {
-    const { container, candidates } = resolveContainerBinding(this.env);
+    const { container, candidates } = resolveContainerBinding(this.state, this.env);
 
     if (!container) {
       return new Response(JSON.stringify({ 
