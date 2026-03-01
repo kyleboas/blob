@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
+"""Simple HTTP server for Cloudflare Sandbox container."""
 import http.server
 import json
 import subprocess
 import sys
 import os
-import threading
-import time
 
 AUTH_PATH = os.path.expanduser("~/.codex/auth.json")
 AUTH_DIR = os.path.dirname(AUTH_PATH)
@@ -13,19 +12,21 @@ PERSISTENT_AUTH_DIR = "/workspace/.codex-auth"
 
 class SandboxHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        pass
+        print(f"[SERVER] {format % args}", file=sys.stderr)
     
     def do_GET(self):
+        self.log_message(f"GET {self.path}")
         if self.path == '/health':
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps({"status": "healthy"}).encode())
+            self.wfile.write(json.dumps({"status": "healthy", "time": os.time()}).encode())
         else:
             self.send_response(404)
             self.end_headers()
     
     def do_POST(self):
+        self.log_message(f"POST {self.path}")
         if self.path == '/execute':
             self.handle_execute()
         elif self.path == '/codex/login/start':
@@ -244,6 +245,15 @@ class SandboxHandler(http.server.BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
-    server = http.server.HTTPServer(('0.0.0.0', port), SandboxHandler)
-    print(f"Sandbox server running on port {port}", file=sys.stderr)
-    server.serve_forever()
+    print(f"Starting sandbox server on port {port}...", file=sys.stderr)
+    sys.stderr.flush()
+    
+    try:
+        server = http.server.HTTPServer(('0.0.0.0', port), SandboxHandler)
+        print(f"Sandbox server running on port {port}", file=sys.stderr)
+        sys.stderr.flush()
+        server.serve_forever()
+    except Exception as e:
+        print(f"Failed to start server: {e}", file=sys.stderr)
+        sys.stderr.flush()
+        raise
