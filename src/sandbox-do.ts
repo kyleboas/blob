@@ -1,17 +1,31 @@
 import type { Env } from "./types";
 
+// Container fetcher type - matches Cloudflare's container binding interface
+interface ContainerFetcher {
+  fetch: typeof fetch;
+}
+
+// Extend DurableObjectState to include container for container-backed DOs
+declare module "@cloudflare/workers-types" {
+  interface DurableObjectState {
+    container?: ContainerFetcher;
+  }
+}
+
 // Note: Class must be named "Sandbox" to match wrangler.toml class_name
 export class Sandbox {
   constructor(private state: DurableObjectState, private env: Env) {}
 
   async fetch(request: Request): Promise<Response> {
-    // Container-backed DOs access their container via state.container
-    // This is injected by the Cloudflare runtime when the DO is backed by a container
-    const stateWithContainer = this.state as DurableObjectState & { container?: { fetch: typeof fetch } };
-    const container = stateWithContainer.container;
+    // For container-backed DOs, the container is injected into state.container
+    // by the Cloudflare runtime when the DO class has a [[containers]] binding
+    const container = this.state.container;
 
     if (!container) {
-      return new Response(JSON.stringify({ error: "Container not attached to this DO" }), {
+      return new Response(JSON.stringify({ 
+        error: "Container not attached to this DO",
+        hint: "Make sure the DO class has a [[containers]] binding in wrangler.toml"
+      }), {
         status: 503,
         headers: { "Content-Type": "application/json" },
       });
