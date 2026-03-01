@@ -166,10 +166,12 @@ export async function sandboxStatus(env: Env): Promise<{ ready: boolean; message
         details.push(parsed.hint);
       }
 
-      if (Array.isArray(parsed?.lookedFor) && Array.isArray(parsed?.envKeys)) {
-        const missing = parsed.lookedFor
+      const lookedFor = parsed?.lookedFor;
+      const envKeys = parsed?.envKeys;
+      if (Array.isArray(lookedFor) && Array.isArray(envKeys)) {
+        const missing = lookedFor
           .filter((name) => name !== "state.container")
-          .filter((name) => !parsed!.envKeys!.includes(name));
+          .filter((name) => !envKeys.includes(name));
         if (missing.length > 0) {
           details.push(`missing bindings: ${missing.join(", ")}`);
         }
