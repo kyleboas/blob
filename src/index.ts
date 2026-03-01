@@ -12,7 +12,6 @@ function json(data: unknown): Response {
 
 // Get sandbox DO stub
 function sandboxStub(env: Env) {
-  if (!env.SANDBOX_DO) throw new Error("SANDBOX_DO binding not found");
   const id = env.SANDBOX_DO.idFromName("agent");
   return env.SANDBOX_DO.get(id);
 }
