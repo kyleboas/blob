@@ -1,9 +1,8 @@
 import type { Env } from "./types";
 import { getRepos } from "./storage";
 import { callLLMWithModelSelection, callLLM } from "./llm";
-import { getSystemPromptWithCapabilities } from "./capabilities";
 import { getCronJobs, addCronJob, deleteCronJob } from "./cron";
-import { startCodexLogin, saveCodexAuth, runCodex, sandboxStatus } from "./sandbox";
+import { startCodexLogin, saveCodexAuth, runCodex, sandboxStatus, executeInSandbox } from "./sandbox";
 
 // Track in-flight events to prevent race conditions
 const inFlightEvents = new Set<string>();
@@ -229,12 +228,42 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
       return new Response("OK");
     }
 
+    // Check for weather queries - handle directly
+    const weatherMatch = originalText.match(/weather\s+(?:in\s+)?([a-zA-Z\s]+)/i);
+    if (weatherMatch) {
+      const location = weatherMatch[1].trim();
+      const status = await sandboxStatus(env);
+      
+      if (status.ready) {
+        await postToSlack(channel, `🌤️ Checking weather in ${location}...`, env);
+        try {
+          const result = await executeInSandbox(`curl -s "wttr.in/${encodeURIComponent(location)}?format=3"`, env);
+          const weather = result.stdout.trim() || result.stderr.trim() || "Could not fetch weather";
+          await postToSlack(channel, `Weather in ${location}: ${weather}`, env);
+        } catch (err) {
+          await postToSlack(channel, `❌ Failed to get weather: ${err}`, env);
+        }
+      } else {
+        await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
+      }
+      return new Response("OK");
+    }
+
     // Get repos for context
     const repos = await getRepos(env);
     const reposContext = repos.join(", ");
 
-    // Build system prompt - simpler, no capabilities wall
-    const systemPrompt = `You are Blob, a helpful AI assistant. You can chat, answer questions, help with coding, and manage repositories: ${reposContext}. Be concise and helpful.`;
+    // Build system prompt with tool instructions
+    const systemPrompt = `You are Blob, a helpful AI assistant. You can chat, answer questions, help with coding, and manage repositories: ${reposContext}.
+
+You have 4 tools available: read, write, edit, bash.
+
+IMPORTANT: For real-time data (weather, time, etc.), use the bash tool to fetch it. For example:
+- Weather: curl wttr.in/London?format=3
+- Time: date
+- News: curl https://news.ycombinator.com/rss (or similar)
+
+Be concise and helpful.`;
 
     try {
       const result = await callLLMWithModelSelection([

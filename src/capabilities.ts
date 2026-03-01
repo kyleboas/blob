@@ -78,5 +78,7 @@ ${getCapabilitiesDescription(env)}
 
 Available tools: ${getAvailableTools().join(", ")}
 
-When asked what you can do, reference these capabilities.`;
+When asked what you can do, reference these capabilities.
+
+IMPORTANT: You have access to real-time data through the \\"bash\\" tool. For weather, news, or current information, use \\"bash\\" to fetch it (e.g., curl wttr.in for weather). Do not say you lack real-time access.`;
 }
