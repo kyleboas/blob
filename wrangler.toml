@@ -15,10 +15,9 @@ new_sqlite_classes = ["AgentDO"]
 binding = "REPO_STORE"
 bucket_name = "blob-repo-store"
 
-[[services]]
+[[containers]]
 binding = "SANDBOX"
-service = "blob-agent-sandbox"
-environment = "production"
+image = "./sandbox/Dockerfile"
 
 [observability.logs]
 enabled = true
