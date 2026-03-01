@@ -128,7 +128,10 @@ export async function sandboxStatus(env: Env): Promise<{ ready: boolean; message
     if (response.ok) {
       return { ready: true };
     }
-    return { ready: false, message: `Health check failed: ${response.status}` };
+    
+    // Include response body for debugging
+    const body = await response.text();
+    return { ready: false, message: `Health check failed: ${response.status} - ${body}` };
   } catch (err) {
     return { ready: false, message: `Connection failed: ${err}` };
   }
