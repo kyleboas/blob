@@ -5,11 +5,11 @@ export class Sandbox {
   constructor(private state: DurableObjectState, private env: Env) {}
 
   async fetch(request: Request): Promise<Response> {
-    // Container fetcher comes from [[containers]] name = "sandbox_v2" => env.sandbox_v2
-    const container = (this.env as any).sandbox_v2 as Fetcher;
+    // Container fetcher is accessed via this.state.container for container-backed DOs
+    const container = (this.state as any).container as Fetcher;
 
     if (!container) {
-      return new Response(JSON.stringify({ error: "Container binding not found" }), {
+      return new Response(JSON.stringify({ error: "Container not available" }), {
         status: 503,
         headers: { "Content-Type": "application/json" },
       });

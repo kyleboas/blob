@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 import os
+import time
 
 AUTH_PATH = os.path.expanduser("~/.codex/auth.json")
 AUTH_DIR = os.path.dirname(AUTH_PATH)
@@ -20,7 +21,7 @@ class SandboxHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps({"status": "healthy", "time": os.time()}).encode())
+            self.wfile.write(json.dumps({"status": "healthy", "time": time.time()}).encode())
         else:
             self.send_response(404)
             self.end_headers()
