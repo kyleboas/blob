@@ -109,7 +109,84 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
     // Ignore bot messages (including our own)
     if (!channel || body.event.bot_id) return new Response("OK");
 
-    // Classify intent using LLM
+    // Fast-path regex detection for common commands (before LLM classification)
+    const lowerText = originalText.toLowerCase().trim();
+    
+    // Codex commands
+    if (/^(login to codex|codex login|codex auth|connect openai)$/.test(lowerText)) {
+      const status = await sandboxStatus(env);
+      if (!status.ready) {
+        await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
+        return new Response("OK");
+      }
+
+      try {
+        const login = await startCodexLogin(env);
+        await postToSlack(channel, 
+          `🔐 **Codex Login Required**\n\n` +
+          `1. Open: ${login.url}\n` +
+          `2. Enter code: \`${login.code || "see instructions"}\`\n` +
+          `3. Complete login on your device\n` +
+          `4. Reply here with "done" to save credentials`,
+          env
+        );
+      } catch (err) {
+        await postToSlack(channel, `❌ Codex login failed: ${err}`, env);
+      }
+      return new Response("OK");
+    }
+
+    if (/^(run codex|codex run|use codex)/.test(lowerText)) {
+      const status = await sandboxStatus(env);
+      if (!status.ready) {
+        await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
+        return new Response("OK");
+      }
+
+      const prompt = originalText.replace(/^(run codex|codex run|use codex)[,:]?\s*/i, "");
+      
+      await postToSlack(channel, `🤖 Running Codex: "${prompt}"...`, env);
+      
+      try {
+        const result = await runCodex(prompt, env);
+        const output = result.stdout || result.stderr || "No output";
+        await postToSlack(channel, 
+          `✅ Codex completed (exit: ${result.exitCode})\n\n` +
+          "```\n" + output.slice(0, 3000) + "\n```",
+          env
+        );
+      } catch (err) {
+        const errMsg = String(err);
+        if (errMsg.includes("Not authenticated")) {
+          await postToSlack(channel, 
+            `❌ Not logged in to Codex.\n\n` +
+            `Run "login to codex" first to authenticate.`,
+            env
+          );
+        } else {
+          await postToSlack(channel, `❌ Codex error: ${errMsg}`, env);
+        }
+      }
+      return new Response("OK");
+    }
+
+    // Check for "done" after login (save auth)
+    if (lowerText === "done") {
+      try {
+        const status = await sandboxStatus(env);
+        if (status.ready) {
+          const saved = await saveCodexAuth(env);
+          if (saved.saved) {
+            await postToSlack(channel, `✅ ${saved.message}. You can now run Codex!`, env);
+            return new Response("OK");
+          }
+        }
+      } catch {
+        // Not a "done" for Codex, continue to chat
+      }
+    }
+
+    // Classify intent using LLM for other commands
     const intent = await classifyIntent(originalText, env);
 
     // Handle cron commands based on LLM intent
@@ -150,82 +227,6 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
         await postToSlack(channel, "Which job would you like to delete? Try: 'delete my email reminder job'", env);
       }
       return new Response("OK");
-    }
-
-    // Handle Codex login
-    if (intent.intent === "codex_login") {
-      const status = await sandboxStatus(env);
-      if (!status.ready) {
-        await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
-        return new Response("OK");
-      }
-
-      try {
-        const login = await startCodexLogin(env);
-        await postToSlack(channel, 
-          `🔐 **Codex Login Required**\n\n` +
-          `1. Open: ${login.url}\n` +
-          `2. Enter code: \`${login.code || "see instructions"}\`\n` +
-          `3. Complete login on your device\n` +
-          `4. Reply here with "done" to save credentials`,
-          env
-        );
-      } catch (err) {
-        await postToSlack(channel, `❌ Codex login failed: ${err}`, env);
-      }
-      return new Response("OK");
-    }
-
-    // Handle Codex run
-    if (intent.intent === "codex_run") {
-      const status = await sandboxStatus(env);
-      if (!status.ready) {
-        await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
-        return new Response("OK");
-      }
-
-      const prompt = intent.prompt || originalText.replace(/codex[,:]?\s*/i, "");
-      
-      await postToSlack(channel, `🤖 Running Codex: "${prompt}"...`, env);
-      
-      try {
-        const result = await runCodex(prompt, env);
-        const output = result.stdout || result.stderr || "No output";
-        await postToSlack(channel, 
-          `✅ Codex completed (exit: ${result.exitCode})\n\n` +
-          "```\n" + output.slice(0, 3000) + "\n```",
-          env
-        );
-      } catch (err) {
-        const errMsg = String(err);
-        if (errMsg.includes("Not authenticated")) {
-          await postToSlack(channel, 
-            `❌ Not logged in to Codex.\n\n` +
-            `Run "login to codex" first to authenticate.`,
-            env
-          );
-        } else {
-          await postToSlack(channel, `❌ Codex error: ${errMsg}`, env);
-        }
-      }
-      return new Response("OK");
-    }
-
-    // Check for "done" after login (save auth)
-    if (originalText.toLowerCase().trim() === "done") {
-      // Try to save auth - this will fail gracefully if no auth pending
-      try {
-        const status = await sandboxStatus(env);
-        if (status.ready) {
-          const saved = await saveCodexAuth(env);
-          if (saved.saved) {
-            await postToSlack(channel, `✅ ${saved.message}. You can now run Codex!`, env);
-            return new Response("OK");
-          }
-        }
-      } catch {
-        // Not a "done" for Codex, continue to chat
-      }
     }
 
     // Get repos for context
