@@ -19,4 +19,3 @@ EXPOSE 8080
 
 # Restore auth then start server
 CMD ["sh", "-c", "python3 /restore-auth.py && python3 /server.py"]
-
