@@ -64,16 +64,33 @@ export async function startCodexLogin(env: Env): Promise<CodexLoginResult> {
     throw new Error("SANDBOX service binding not found");
   }
 
-  const response = await env.SANDBOX.fetch("http://sandbox/codex/login/start", {
-    method: "POST",
-  });
+  const loginEndpoints = [
+    "http://sandbox/codex/login/start",
+    "http://sandbox/codex/login",
+  ];
 
-  if (!response.ok) {
+  let lastError = "";
+
+  for (const endpoint of loginEndpoints) {
+    const response = await env.SANDBOX.fetch(endpoint, {
+      method: "POST",
+    });
+
+    if (response.ok) {
+      return await response.json() as CodexLoginResult;
+    }
+
     const error = await response.text();
-    throw new Error(`Codex login error: ${response.status} ${error}`);
+    lastError = `Codex login error: ${response.status} ${error}`;
+
+    // Some sandbox deployments still expose /codex/login instead of /codex/login/start.
+    // Retry on 404 before surfacing the failure.
+    if (response.status !== 404) {
+      break;
+    }
   }
 
-  return await response.json() as CodexLoginResult;
+  throw new Error(lastError || "Codex login error: unknown");
 }
 
 // Save Codex auth to persistent storage
