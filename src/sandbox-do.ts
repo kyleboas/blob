@@ -8,13 +8,14 @@ export class SandboxDO {
     const container = (this.env as any).sandbox_v2 as Fetcher;
 
     if (!container) {
-      return new Response(JSON.stringify({ error: "Container not available" }), {
+      return new Response(JSON.stringify({ error: "Container binding not found" }), {
         status: 503,
         headers: { "Content-Type": "application/json" },
       });
     }
 
     const url = new URL(request.url);
+    // Cloudflare containers use http://localhost:<port> internally
     const containerUrl = `http://localhost:8080${url.pathname}${url.search}`;
 
     try {
@@ -24,9 +25,28 @@ export class SandboxDO {
         body: request.body,
       });
 
+      // For health checks, if we get a non-OK response, include details
+      if (!resp.ok && url.pathname === '/health') {
+        const bodyText = await resp.text().catch(() => 'No body');
+        return new Response(JSON.stringify({ 
+          ready: false, 
+          status: resp.status,
+          statusText: resp.statusText,
+          body: bodyText,
+          url: containerUrl
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
       return new Response(resp.body, { status: resp.status, headers: resp.headers });
     } catch (err) {
-      return new Response(JSON.stringify({ error: String(err) }), {
+      return new Response(JSON.stringify({ 
+        error: String(err),
+        url: containerUrl,
+        type: 'exception'
+      }), {
         status: 500,
         headers: { "Content-Type": "application/json" },
       });
