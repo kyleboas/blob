@@ -4,8 +4,8 @@ export interface Env {
   // DO namespace binding (so other code can call the Sandbox DO)
   SANDBOX_DO?: DurableObjectNamespace;
   
-  // Container fetcher binding (from [[containers]] name="sandbox")
-  sandbox?: Fetcher;
+  // Container fetcher binding (from [[containers]] name="sandbox_v2")
+  sandbox_v2?: Fetcher;
   
   REPO_STORE?: R2Bucket;
   GITHUB_TOKEN?: string;

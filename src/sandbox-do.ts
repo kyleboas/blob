@@ -4,8 +4,8 @@ export class SandboxDO {
   constructor(private state: DurableObjectState, private env: Env) {}
 
   async fetch(request: Request): Promise<Response> {
-    // Container fetcher comes from [[containers]] name = "sandbox" => env.sandbox
-    const container = (this.env as any).sandbox as Fetcher;
+    // Container fetcher comes from [[containers]] name = "sandbox_v2" => env.sandbox_v2
+    const container = (this.env as any).sandbox_v2 as Fetcher;
 
     if (!container) {
       return new Response(JSON.stringify({ error: "Container not available" }), {

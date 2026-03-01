@@ -24,7 +24,7 @@ binding = "REPO_STORE"
 bucket_name = "blob-repo-store"
 
 [[containers]]
-name = "sandbox"
+name = "sandbox_v2"
 class_name = "Sandbox"
 image = "./sandbox/Dockerfile"
 
