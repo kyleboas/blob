@@ -232,19 +232,21 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
     const weatherMatch = originalText.match(/weather\s+(?:in\s+)?([a-zA-Z\s]+)/i);
     if (weatherMatch) {
       const location = weatherMatch[1].trim();
-      const status = await sandboxStatus(env);
       
-      if (status.ready) {
-        await postToSlack(channel, `🌤️ Checking weather in ${location}...`, env);
-        try {
-          const result = await executeInSandbox(`curl -s "wttr.in/${encodeURIComponent(location)}?format=3"`, env);
-          const weather = result.stdout.trim() || result.stderr.trim() || "Could not fetch weather";
-          await postToSlack(channel, `Weather in ${location}: ${weather}`, env);
-        } catch (err) {
-          await postToSlack(channel, `❌ Failed to get weather: ${err}`, env);
-        }
-      } else {
+      // First check if sandbox service is available
+      const status = await sandboxStatus(env);
+      if (!status.ready) {
         await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
+        return new Response("OK");
+      }
+      
+      await postToSlack(channel, `🌤️ Checking weather in ${location}...`, env);
+      try {
+        const result = await executeInSandbox(`curl -s "wttr.in/${encodeURIComponent(location)}?format=3"`, env);
+        const weather = result.stdout.trim() || result.stderr.trim() || "Could not fetch weather";
+        await postToSlack(channel, `Weather in ${location}: ${weather}`, env);
+      } catch (err) {
+        await postToSlack(channel, `❌ Failed to get weather: ${err}`, env);
       }
       return new Response("OK");
     }
