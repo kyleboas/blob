@@ -17,6 +17,38 @@ interface IntentResult {
 }
 
 async function classifyIntent(text: string, env: Env): Promise<IntentResult> {
+  const lowerText = text.toLowerCase().trim();
+  
+  // Fast-path: regex-based intent detection (no LLM needed)
+  // Codex commands
+  if (/\b(login to codex|codex login|connect codex|codex auth)\b/.test(lowerText)) {
+    return { intent: "codex_login" };
+  }
+  if (/\b(run codex|use codex|codex:?)\b/.test(lowerText)) {
+    const prompt = text.replace(/\b(run codex|use codex|codex:?)[,\s]*/i, "").trim();
+    return { intent: "codex_run", prompt };
+  }
+  
+  // Cron commands
+  if (/\b(list|show|what are)\b.*\b(cron|jobs|tasks)\b/.test(lowerText)) {
+    return { intent: "list_cron" };
+  }
+  if (/\b(add|create|new)\b.*\b(cron|job|task|remind)\b/.test(lowerText)) {
+    // Try to extract schedule and task
+    const scheduleMatch = text.match(/(?:every|daily|hourly|weekly)\s+([^,]+)/i);
+    const taskMatch = text.match(/(?:to|for)\s+(.+)$/i) || text.match(/(?:remind me|add)\s+(?:\w+\s+)?(.+)$/i);
+    return { 
+      intent: "add_cron", 
+      schedule: scheduleMatch?.[1]?.trim() || "every 5 minutes",
+      task: taskMatch?.[1]?.trim() || text
+    };
+  }
+  if (/\b(delete|remove)\b.*\b(cron|job|task)\b/.test(lowerText)) {
+    const searchMatch = text.match(/(?:delete|remove)\s+(?:cron\s+)?(?:job\s+)?(.+)$/i);
+    return { intent: "delete_cron", search: searchMatch?.[1]?.trim() };
+  }
+
+  // LLM-based classification for more complex queries
   const prompt = `You are an intent classifier for a Slack bot. Analyze the message and extract the user's intent.
 
 Possible intents:
@@ -233,9 +265,8 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
     const repos = await getRepos(env);
     const reposContext = repos.join(", ");
 
-    // Build system prompt with capabilities
-    const basePrompt = `You are Blob, a helpful AI assistant. You can chat, answer questions, help with coding, and manage repositories: ${reposContext}.`;
-    const systemPrompt = getSystemPromptWithCapabilities(basePrompt, env);
+    // Build system prompt - simpler, no capabilities wall
+    const systemPrompt = `You are Blob, a helpful AI assistant. You can chat, answer questions, help with coding, and manage repositories: ${reposContext}. Be concise and helpful.`;
 
     try {
       const result = await callLLMWithModelSelection([
