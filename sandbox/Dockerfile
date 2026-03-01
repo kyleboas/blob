@@ -21,7 +21,7 @@ RUN cat >/usr/local/bin/blob-git-askpass <<'EOF' \
 #!/bin/sh
 case "$1" in
   *Username*) echo "x-access-token" ;;
-  *Password*) echo "${GITHUB_TOKEN:-${GH_TOKEN:-}}" ;;
+  *Password*) echo "${GITHUB_TOKEN}" ;;
   *) echo "" ;;
 esac
 EOF
