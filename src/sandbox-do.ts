@@ -1,6 +1,7 @@
 import type { Env } from "./types";
 
-export class SandboxDO {
+// Note: Class must be named "Sandbox" to match wrangler.toml class_name
+export class Sandbox {
   constructor(private state: DurableObjectState, private env: Env) {}
 
   async fetch(request: Request): Promise<Response> {

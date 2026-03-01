@@ -1,6 +1,6 @@
 import type { Env } from "./types";
 import { AgentDO } from "./do";
-import { SandboxDO } from "./sandbox-do";
+import { Sandbox } from "./sandbox-do";
 import { getRepos, addRepo, getRepoGoals, setRepoGoals } from "./storage";
 import { Agent } from "./agent";
 import { handleSlackEvent } from "./slack";
@@ -73,7 +73,7 @@ export default {
   }
 };
 
-export { AgentDO, SandboxDO };
+export { AgentDO, Sandbox };
 
 // Backward compatibility for previously deployed Durable Object class names.
 // Existing production instances still reference `Sandbox`.
