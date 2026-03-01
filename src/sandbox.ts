@@ -42,7 +42,11 @@ export async function runCodex(
 
 export async function startCodexLogin(env: Env): Promise<{ url: string; code?: string; instructions: string }> {
   const sandbox = getSandbox(env.Sandbox, "auth");
-  const result = await sandbox.exec("codex login 2>&1");
+  // Background the login process so it keeps polling for the OAuth callback,
+  // then read its output after 3s to capture the device code URL.
+  const result = await sandbox.exec(
+    "bash -c 'codex login > /tmp/codex-login.out 2>&1 & sleep 3; cat /tmp/codex-login.out'"
+  );
   const output = result.stdout ?? "";
 
   let url = "https://auth.openai.com/codex/device";
