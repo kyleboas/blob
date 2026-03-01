@@ -43,7 +43,17 @@ export class Sandbox {
 
       return new Response(resp.body, { status: resp.status, headers: resp.headers });
     } catch (err) {
-      return new Response(JSON.stringify({ 
+      if (url.pathname === '/health') {
+        return new Response(JSON.stringify({
+          ready: false,
+          error: String(err),
+          url: containerUrl,
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({
         error: String(err),
         url: containerUrl,
         type: 'exception'

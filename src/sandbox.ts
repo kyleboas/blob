@@ -129,11 +129,17 @@ export async function sandboxStatus(env: Env): Promise<{ ready: boolean; message
   try {
     const do_ = await getSandboxDO(env);
     const response = await do_.fetch("http://sandbox/health");
-    
-    if (response.ok) {
-      return { ready: true };
+
+    if (!response.ok) {
+      return { ready: false, message: `Health check failed: ${response.status}` };
     }
-    return { ready: false, message: `Health check failed: ${response.status}` };
+
+    const body = await response.json() as { status?: string; ready?: boolean; error?: string };
+    if (body.ready === false) {
+      return { ready: false, message: body.error || "Container not ready" };
+    }
+
+    return { ready: true };
   } catch (err) {
     return { ready: false, message: `Connection failed: ${err}` };
   }
