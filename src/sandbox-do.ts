@@ -71,7 +71,7 @@ export class Sandbox {
     const fallbackDetails = {
       mode: "fallback",
       reason: "Container binding not found",
-      hint: "Configure [[containers]] in wrangler.toml for full sandbox execution.",
+      hint: "Single-worker setup: keep everything in blob-agent, ensure [[containers]] name=\"sandbox\" class_name=\"Sandbox\" is deployed, then redeploy blob-agent.",
       lookedFor: candidates,
       envKeys: Object.keys(this.env),
     };
