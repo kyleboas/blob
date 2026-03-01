@@ -25,7 +25,6 @@ new_sqlite_classes = ["Sandbox"]
 binding = "REPO_STORE"
 bucket_name = "blob-repo-store"
 
-# Cloudflare Sandbox container binding
 [[containers]]
 name = "sandbox"
 class_name = "Sandbox"
