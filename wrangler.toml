@@ -14,8 +14,7 @@ new_classes = ["AgentDO"]
 [[containers]]
 binding = "SANDBOX"
 name = "sandbox"
-image = "./sandbox/Dockerfile"
-max_instances = 3
+class_name = "SandboxContainer"
 
 [observability]
 [observability.logs]
