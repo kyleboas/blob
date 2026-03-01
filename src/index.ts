@@ -11,7 +11,7 @@ function json(data: unknown): Response {
 }
 
 // Get sandbox DO stub
-function getSandboxStub(env: Env) {
+function sandboxStub(env: Env) {
   if (!env.SANDBOX_DO) throw new Error("SANDBOX_DO binding not found");
   const id = env.SANDBOX_DO.idFromName("agent");
   return env.SANDBOX_DO.get(id);
@@ -21,50 +21,14 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     
-    // Health check (Worker-level)
-    if (url.pathname === '/health') {
-      return json({ status: 'healthy', worker: 'blob-agent' });
-    }
-    
-    // Sandbox container routes - forward to DO which forwards to container
-    if (url.pathname === '/execute' && request.method === 'POST') {
-      const stub = getSandboxStub(env);
-      return stub.fetch(new Request("http://sandbox/execute", {
-        method: "POST",
-        headers: request.headers,
-        body: request.body,
-      }));
-    }
-    
-    if (url.pathname === '/codex/login/start' && request.method === 'POST') {
-      const stub = getSandboxStub(env);
-      return stub.fetch(new Request("http://sandbox/codex/login/start", {
-        method: "POST",
-        headers: request.headers,
-      }));
-    }
-    
-    if (url.pathname === '/codex/status' && request.method === 'GET') {
-      const stub = getSandboxStub(env);
-      return stub.fetch(new Request("http://sandbox/codex/status"));
-    }
-    
-    if (url.pathname === '/codex/auth/save' && request.method === 'POST') {
-      const stub = getSandboxStub(env);
-      return stub.fetch(new Request("http://sandbox/codex/auth/save", {
-        method: "POST",
-        headers: request.headers,
-        body: request.body,
-      }));
-    }
-    
-    if (url.pathname === '/codex/run' && request.method === 'POST') {
-      const stub = getSandboxStub(env);
-      return stub.fetch(new Request("http://sandbox/codex/run", {
-        method: "POST",
-        headers: request.headers,
-        body: request.body,
-      }));
+    // Forward sandbox endpoints to container via DO
+    if (
+      url.pathname === "/health" ||
+      url.pathname === "/execute" ||
+      url.pathname.startsWith("/codex/")
+    ) {
+      const stub = sandboxStub(env);
+      return stub.fetch(request);
     }
     
     // Main worker routes
