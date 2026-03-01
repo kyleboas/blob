@@ -74,6 +74,26 @@ export async function saveCodexAuth(env: Env): Promise<{ saved: boolean; message
   return { saved: true, message: "Auth credentials persisted to storage" };
 }
 
+export async function writeFileInSandbox(
+  path: string,
+  content: string,
+  env: Env,
+  opts: { instanceId?: string } = {}
+): Promise<void> {
+  const sandbox = getSandbox(env.Sandbox, opts.instanceId ?? "default");
+  await sandbox.writeFile(path, content);
+}
+
+export async function readFileInSandbox(
+  path: string,
+  env: Env,
+  opts: { instanceId?: string } = {}
+): Promise<string> {
+  const sandbox = getSandbox(env.Sandbox, opts.instanceId ?? "default");
+  const result = await sandbox.readFile(path);
+  return result.content ?? "";
+}
+
 export async function sandboxStatus(env: Env): Promise<{ ready: boolean; message?: string }> {
   try {
     const sandbox = getSandbox(env.Sandbox, "default");

@@ -1,5 +1,6 @@
 import type { Env } from "./types";
 import { DEFAULT_MODEL, getModelCatalogDescription } from "./models";
+import { executeInSandbox, writeFileInSandbox, readFileInSandbox } from "./sandbox";
 
 // Cache for model catalog description (refreshed every 5 minutes)
 let catalogCache: { description: string; timestamp: number } | null = null;
@@ -125,6 +126,81 @@ export async function callLLM(
 ): Promise<string> {
   const result = await callLLMWithModelSelection(messages, env, opts);
   return result.content;
+}
+
+type ToolAction =
+  | { action: "exec"; command: string }
+  | { action: "read"; path: string }
+  | { action: "write"; path: string; content: string }
+  | { action: "done"; result: string };
+
+// Agentic loop: let the model use sandbox tools to complete a task
+export async function runWithTools(
+  task: string,
+  env: Env,
+  opts: { instanceId?: string; maxSteps?: number } = {}
+): Promise<string> {
+  const { instanceId = "default", maxSteps = 20 } = opts;
+
+  const messages: Array<{ role: string; content: string }> = [
+    {
+      role: "system",
+      content: `You are an AI coding agent with access to a Linux sandbox. Complete the task by using tools.
+
+Respond with ONLY a JSON object (no other text):
+- Run a shell command: {"action":"exec","command":"<bash command>"}
+- Read a file:         {"action":"read","path":"<absolute path>"}
+- Write a file:        {"action":"write","path":"<absolute path>","content":"<full file content>"}
+- Finish:              {"action":"done","result":"<summary of what was done>"}
+
+The working directory is /workspace. Use exec for git, npm, tests, etc.`,
+    },
+    { role: "user", content: task },
+  ];
+
+  for (let step = 0; step < maxSteps; step++) {
+    const raw = await callLLM(messages, env, { maxTokens: 2000 });
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) break;
+
+    let parsed: ToolAction;
+    try {
+      parsed = JSON.parse(jsonMatch[0]) as ToolAction;
+    } catch {
+      break;
+    }
+
+    if (parsed.action === "done") {
+      return parsed.result;
+    }
+
+    messages.push({ role: "assistant", content: raw });
+
+    let observation: string;
+    if (parsed.action === "exec") {
+      const r = await executeInSandbox(parsed.command, env, { instanceId });
+      observation = (r.stdout + r.stderr).trim() || `exit ${r.exitCode}`;
+    } else if (parsed.action === "read") {
+      try {
+        observation = await readFileInSandbox(parsed.path, env, { instanceId });
+      } catch (err) {
+        observation = `Error reading file: ${err}`;
+      }
+    } else if (parsed.action === "write") {
+      try {
+        await writeFileInSandbox(parsed.path, parsed.content, env, { instanceId });
+        observation = `Written: ${parsed.path}`;
+      } catch (err) {
+        observation = `Error writing file: ${err}`;
+      }
+    } else {
+      break;
+    }
+
+    messages.push({ role: "user", content: `Result:\n${observation}` });
+  }
+
+  return "Task completed";
 }
 
 // Plan function for agent
