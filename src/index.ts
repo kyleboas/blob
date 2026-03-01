@@ -92,6 +92,33 @@ export default {
       }
     }
     
+    if (url.pathname === '/codex/status' && request.method === 'GET') {
+      try {
+        const fs = await import('fs');
+        const authPath = '/root/.codex/auth.json';
+        const exists = fs.existsSync(authPath);
+        
+        if (exists) {
+          const auth = JSON.parse(fs.readFileSync(authPath, 'utf-8'));
+          // Redact sensitive info
+          return new Response(JSON.stringify({
+            authenticated: true,
+            account: auth.account?.email || 'unknown'
+          }), { headers: { 'Content-Type': 'application/json' }});
+        } else {
+          return new Response(JSON.stringify({
+            authenticated: false,
+            message: 'No auth file found. Run "login to codex" first.'
+          }), { headers: { 'Content-Type': 'application/json' }});
+        }
+      } catch (err) {
+        return new Response(JSON.stringify({
+          authenticated: false,
+          error: String(err)
+        }), { headers: { 'Content-Type': 'application/json' }});
+      }
+    }
+    
     if (url.pathname === '/codex/auth/save' && request.method === 'POST') {
       return new Response(JSON.stringify({ saved: true, message: 'Auth saved' }), {
         headers: { 'Content-Type': 'application/json' }
