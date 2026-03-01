@@ -13,7 +13,8 @@ class_name = "Sandbox"
 
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["AgentDO", "Sandbox"]
+new_sqlite_classes = ["AgentDO"]
+new_classes = ["Sandbox"]
 
 [[r2_buckets]]
 binding = "REPO_STORE"
