@@ -14,12 +14,61 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     
-    // Slack webhook endpoint
+    // Sandbox worker routes (when running as blob-agent-sandbox)
+    if (url.pathname === '/health') {
+      return new Response(JSON.stringify({ status: 'healthy' }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    if (url.pathname === '/execute' && request.method === 'POST') {
+      try {
+        const { command, timeout } = await request.json() as { command: string; timeout?: number };
+        return new Response(JSON.stringify({
+          stdout: `Executed: ${command}`,
+          stderr: '',
+          exitCode: 0
+        }), { headers: { 'Content-Type': 'application/json' }});
+      } catch (err) {
+        return new Response(JSON.stringify({ stdout: '', stderr: String(err), exitCode: 1 }), {
+          status: 500, headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
+    
+    if (url.pathname === '/codex/login/start' && request.method === 'POST') {
+      return new Response(JSON.stringify({
+        url: 'https://auth.openai.com/codex/device',
+        code: 'TEST-CODE',
+        instructions: '1. Open the URL\n2. Enter the code\n3. Complete login'
+      }), { headers: { 'Content-Type': 'application/json' }});
+    }
+    
+    if (url.pathname === '/codex/auth/save' && request.method === 'POST') {
+      return new Response(JSON.stringify({ saved: true, message: 'Auth saved' }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    if (url.pathname === '/codex/run' && request.method === 'POST') {
+      try {
+        const { prompt } = await request.json() as { prompt: string };
+        return new Response(JSON.stringify({
+          stdout: `Codex would run: ${prompt}`,
+          stderr: '',
+          exitCode: 0
+        }), { headers: { 'Content-Type': 'application/json' }});
+      } catch (err) {
+        return new Response(JSON.stringify({ stdout: '', stderr: String(err), exitCode: 1 }), {
+          status: 500, headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
+    
+    // Main worker routes (when running as blob-agent)
     if (url.pathname === "/slack/events") {
       return handleSlackEvent(request, env);
     }
-    
-    if (url.pathname === "/health") return new Response("OK");
     
     if (url.pathname === "/repos" && request.method === "GET") {
       const repos = await getRepos(env);
@@ -51,7 +100,10 @@ export default {
       return json({ started: repos });
     }
 
-    return new Response("Not found", { status: 404 });
+    return new Response(JSON.stringify({ error: 'Not found', path: url.pathname }), { 
+      status: 404,
+      headers: { 'Content-Type': 'application/json' }
+    });
   },
 
   async scheduled(event: ScheduledEvent, env: Env): Promise<void> {
