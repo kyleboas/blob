@@ -7,6 +7,11 @@ export interface Env {
   // Container fetcher binding (from [[containers]] name="sandbox_v2")
   sandbox_v2?: Fetcher;
   
+  // Workers AI binding - no config needed
+  AI?: {
+    run: (model: string, inputs: { messages: Array<{ role: string; content: string }>; max_tokens: number }) => Promise<{ response?: string }>;
+  };
+  
   REPO_STORE?: R2Bucket;
   GITHUB_TOKEN?: string;
   AI_GATEWAY_TOKEN?: string;

@@ -28,5 +28,9 @@ name = "sandbox_v2"
 class_name = "Sandbox"
 image = "./sandbox/Dockerfile"
 
+# Workers AI binding - no configuration needed, works out of the box
+[ai]
+binding = "AI"
+
 [observability.logs]
 enabled = true
