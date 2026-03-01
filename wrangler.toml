@@ -10,11 +10,10 @@ class_name = "AgentDO"
 tag = "v1"
 new_classes = ["AgentDO"]
 
-# Container binding - this creates env.SANDBOX
-[[containers]]
-name = "SANDBOX"
-class_name = "SandboxContainer"
-image = "./sandbox/Dockerfile"
+# NOTE: Container binding configured via Cloudflare Dashboard
+# Go to: Worker > Settings > Bindings > Add > Container
+# Binding name: SANDBOX
+# Container: sandbox
 
 [observability]
 [observability.logs]
