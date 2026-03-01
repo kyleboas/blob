@@ -74,7 +74,3 @@ export default {
 };
 
 export { AgentDO, Sandbox };
-
-// Backward compatibility for previously deployed Durable Object class names.
-// Existing production instances still reference `Sandbox`.
-export class Sandbox extends SandboxDO {}
