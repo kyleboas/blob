@@ -5,11 +5,25 @@ export class Sandbox {
   constructor(private state: DurableObjectState, private env: Env) {}
 
   async fetch(request: Request): Promise<Response> {
-    const container = (this.state as any).container as { fetch: typeof fetch } | undefined;
+    // Try to get container from env (binding name is "sandbox" in wrangler.toml)
+    const container = (this.env as any).sandbox as { fetch: typeof fetch } | undefined;
 
     if (!container) {
       return new Response(JSON.stringify({ 
-        error: "Container not available"
+        error: "Container binding not found",
+        hint: "Make sure [[containers]] name='sandbox' is configured in wrangler.toml"
+      }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // Verify container has fetch method
+    if (typeof container.fetch !== 'function') {
+      return new Response(JSON.stringify({ 
+        error: "Container does not have fetch method",
+        type: typeof container,
+        keys: Object.keys(container)
       }), {
         status: 503,
         headers: { "Content-Type": "application/json" },
@@ -36,7 +50,8 @@ export class Sandbox {
       });
     } catch (err) {
       return new Response(JSON.stringify({ 
-        error: String(err)
+        error: String(err),
+        url: containerUrl
       }), {
         status: 500,
         headers: { "Content-Type": "application/json" },
