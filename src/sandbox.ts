@@ -167,12 +167,23 @@ export async function sandboxStatus(env: Env): Promise<{ ready: boolean; message
   }
 
   try {
-    const response = await env.SANDBOX.fetch("http://sandbox/health");
-    
+    const response = await env.SANDBOX.fetch("http://sandbox/execute", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ command: "echo ok", timeout: 5000 }),
+    });
+
     if (response.ok) {
       return { ready: true };
     }
-    return { ready: false, message: `Health check failed: ${response.status}` };
+
+    const errorBody = await response.text();
+    try {
+      const parsed = JSON.parse(errorBody) as { stderr?: string };
+      return { ready: false, message: parsed.stderr || `Execute check failed: ${response.status}` };
+    } catch {
+      return { ready: false, message: `Execute check failed: ${response.status}` };
+    }
   } catch (err) {
     return { ready: false, message: `Connection failed: ${err}` };
   }
