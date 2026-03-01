@@ -12,14 +12,6 @@ name = "SANDBOX_DO"
 class_name = "Sandbox"
 script_name = "blob-agent-sandbox"
 
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["Sandbox"]
-
-[[migrations]]
-tag = "v2"
-new_sqlite_classes = ["AgentDO"]
-
 [[r2_buckets]]
 binding = "REPO_STORE"
 bucket_name = "blob-repo-store"
