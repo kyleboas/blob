@@ -12,10 +12,10 @@ interface CodexLoginResult {
   instructions: string;
 }
 
-interface SandboxErrorPayload {
-  instructions?: string;
-  error?: string;
-  output?: string;
+// Get sandbox DO stub
+function getSandboxStub(env: Env) {
+  const id = env.SANDBOX_DO.idFromName("agent");
+  return env.SANDBOX_DO.get(id);
 }
 
 // Validate command before execution
@@ -44,13 +44,10 @@ export async function executeInSandbox(
     throw new Error(validation.error);
   }
 
-  if (!env.SANDBOX) {
-    throw new Error("SANDBOX service binding not found");
-  }
-
+  const stub = getSandboxStub(env);
   const timeout = opts.timeout || 30000;
 
-  const response = await env.SANDBOX.fetch("http://sandbox/execute", {
+  const response = await stub.fetch("http://sandbox/execute", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ command, timeout }),
@@ -66,60 +63,25 @@ export async function executeInSandbox(
 
 // Start Codex device-code login flow
 export async function startCodexLogin(env: Env): Promise<CodexLoginResult> {
-  if (!env.SANDBOX) {
-    throw new Error("SANDBOX service binding not found");
+  const stub = getSandboxStub(env);
+
+  const response = await stub.fetch("http://sandbox/codex/login/start", {
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Codex login error: ${response.status} ${error}`);
   }
 
-  const loginEndpoints = [
-    "http://sandbox/codex/login/start",
-    "http://sandbox/codex/login",
-  ];
-
-  let lastError = "";
-
-  for (const endpoint of loginEndpoints) {
-    const response = await env.SANDBOX.fetch(endpoint, {
-      method: "POST",
-    });
-
-    if (response.ok) {
-      return await response.json() as CodexLoginResult;
-    }
-
-    const rawError = await response.text();
-    let errorMessage = rawError;
-
-    try {
-      const payload = JSON.parse(rawError) as SandboxErrorPayload;
-
-      if (payload.instructions) {
-        errorMessage = payload.instructions;
-      } else if (payload.error) {
-        errorMessage = payload.error;
-      }
-    } catch {
-      // Ignore parse failures and fall back to raw response body.
-    }
-
-    lastError = `Codex login error: ${response.status} ${errorMessage}`;
-
-    // Some sandbox deployments still expose /codex/login instead of /codex/login/start.
-    // Retry on 404 before surfacing the failure.
-    if (response.status !== 404) {
-      break;
-    }
-  }
-
-  throw new Error(lastError || "Codex login error: unknown");
+  return await response.json() as CodexLoginResult;
 }
 
 // Save Codex auth to persistent storage
 export async function saveCodexAuth(env: Env): Promise<{ saved: boolean; message: string }> {
-  if (!env.SANDBOX) {
-    throw new Error("SANDBOX service binding not found");
-  }
+  const stub = getSandboxStub(env);
 
-  const response = await env.SANDBOX.fetch("http://sandbox/codex/auth/save", {
+  const response = await stub.fetch("http://sandbox/codex/auth/save", {
     method: "POST",
   });
 
@@ -137,13 +99,10 @@ export async function runCodex(
   env: Env,
   opts: { timeout?: number } = {}
 ): Promise<SandboxResult> {
-  if (!env.SANDBOX) {
-    throw new Error("SANDBOX service binding not found");
-  }
-
+  const stub = getSandboxStub(env);
   const timeout = opts.timeout || 120000;
 
-  const response = await env.SANDBOX.fetch("http://sandbox/codex/run", {
+  const response = await stub.fetch("http://sandbox/codex/run", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ prompt, timeout }),
@@ -162,12 +121,9 @@ export async function runCodex(
 }
 
 export async function sandboxStatus(env: Env): Promise<{ ready: boolean; message?: string }> {
-  if (!env.SANDBOX) {
-    return { ready: false, message: "SANDBOX service binding not found" };
-  }
-
   try {
-    const response = await env.SANDBOX.fetch("http://sandbox/health");
+    const stub = getSandboxStub(env);
+    const response = await stub.fetch("http://sandbox/health");
     
     if (response.ok) {
       return { ready: true };
