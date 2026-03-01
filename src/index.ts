@@ -10,6 +10,16 @@ function json(data: unknown): Response {
   return new Response(JSON.stringify(data), { headers: { "content-type": "application/json" } });
 }
 
+function parseCodexLoginOutput(output: string): { url?: string; code?: string } {
+  const urlMatch = output.match(/https:\/\/[^\s)\]]+/i);
+  const codeMatch = output.match(/\b([A-Z0-9]{4}-[A-Z0-9]{4}|[A-Z0-9]{8})\b/);
+
+  return {
+    url: urlMatch?.[0],
+    code: codeMatch?.[1],
+  };
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -60,35 +70,44 @@ export default {
           stdio: ['pipe', 'pipe', 'pipe']
         });
         
-        // Parse output to extract URL and code
-        const urlMatch = result.match(/(https:\/\/\S+)/);
-        const codeMatch = result.match(/([A-Z0-9]{4}-[A-Z0-9]{4})/);
+        const { url, code } = parseCodexLoginOutput(result);
+
+        if (!url || !code) {
+          return new Response(JSON.stringify({
+            instructions: 'Could not parse device-login details from codex output.',
+            rawOutput: result,
+          }), {
+            status: 502,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
         
         return new Response(JSON.stringify({
-          url: urlMatch ? urlMatch[1] : 'https://auth.openai.com/codex/device',
-          code: codeMatch ? codeMatch[1] : 'TEST-CODE',
+          url,
+          code,
           instructions: '1. Open the URL on your device\n2. Enter the code\n3. Complete login\n4. Reply "done" to save credentials'
         }), { headers: { 'Content-Type': 'application/json' }});
       } catch (err: any) {
         // Even if command "fails", it might have printed the login info
         const output = err.stdout || err.stderr || String(err);
-        const urlMatch = output.match(/(https:\/\/\S+)/);
-        const codeMatch = output.match(/([A-Z0-9]{4}-[A-Z0-9]{4})/);
+        const { url, code } = parseCodexLoginOutput(output);
         
-        if (urlMatch && codeMatch) {
+        if (url && code) {
           return new Response(JSON.stringify({
-            url: urlMatch[1],
-            code: codeMatch[1],
+            url,
+            code,
             instructions: '1. Open the URL on your device\n2. Enter the code\n3. Complete login\n4. Reply "done" to save credentials'
           }), { headers: { 'Content-Type': 'application/json' }});
         }
         
         return new Response(JSON.stringify({
-          url: 'https://auth.openai.com/codex/device',
-          code: 'TEST-CODE',
-          instructions: '1. Open the URL on your device\n2. Enter the code\n3. Complete login\n4. Reply "done" to save credentials',
+          instructions: 'Could not parse device-login details from codex output.',
+          output,
           error: String(err)
-        }), { headers: { 'Content-Type': 'application/json' }});
+        }), {
+          status: 502,
+          headers: { 'Content-Type': 'application/json' }
+        });
       }
     }
     

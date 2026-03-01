@@ -6,10 +6,21 @@ import subprocess
 import sys
 import os
 import time
+import re
 
 AUTH_PATH = os.path.expanduser("~/.codex/auth.json")
 AUTH_DIR = os.path.dirname(AUTH_PATH)
 PERSISTENT_AUTH_DIR = "/workspace/.codex-auth"
+
+
+def parse_codex_login_output(output: str):
+    """Extract device login URL + code from codex login output."""
+    url_match = re.search(r"https://[^\s\)\]]+", output)
+    code_match = re.search(r"\b([A-Z0-9]{4}-[A-Z0-9]{4}|[A-Z0-9]{8})\b", output)
+    return (
+        url_match.group(0) if url_match else None,
+        code_match.group(1) if code_match else None,
+    )
 
 class SandboxHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
@@ -109,21 +120,18 @@ class SandboxHandler(http.server.BaseHTTPRequestHandler):
                 timeout=30
             )
             
-            # Parse output to extract URL and code
             output = result.stdout + result.stderr
-            
-            # Extract URL and code from output
-            url = None
-            code = None
-            
-            for line in output.split('\n'):
-                if 'https://' in line and 'device' in line:
-                    url = line.strip()
-                if len(line.strip()) == 8 and line.strip().isalnum():
-                    code = line.strip()
-            
-            if not url:
-                url = "https://auth.openai.com/codex/device"
+            url, code = parse_codex_login_output(output)
+
+            if not url or not code:
+                self.send_response(502)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "error": "Could not parse device-login details from codex output.",
+                    "output": output,
+                }).encode())
+                return
             
             response = {
                 "url": url,
