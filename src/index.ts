@@ -1,5 +1,6 @@
 import type { Env } from "./types";
 import { AgentDO } from "./do";
+import { Sandbox } from "./sandbox-do";
 import { getRepos, addRepo, getRepoGoals, setRepoGoals } from "./storage";
 import { Agent } from "./agent";
 import { handleSlackEvent } from "./slack";
@@ -72,4 +73,4 @@ export default {
   }
 };
 
-export { AgentDO };
+export { AgentDO, Sandbox };

@@ -1,5 +1,6 @@
 export interface Env {
   AGENT_DO?: DurableObjectNamespace;
+  SANDBOX_DO?: DurableObjectNamespace;
   
   // Service binding to sandbox worker
   SANDBOX?: Fetcher;
