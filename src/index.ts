@@ -20,6 +20,12 @@ function parseCodexLoginOutput(output: string): { url?: string; code?: string } 
   };
 }
 
+function isUnsupportedRuntimeError(errorText: string): boolean {
+  return errorText.includes("[unenv] child_process.execSyn is not implemented yet") ||
+    errorText.includes("[unenv] child_process.execSync is not implemented yet") ||
+    errorText.includes("Cannot find module 'child_process'");
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -49,6 +55,19 @@ export default {
           exitCode: 0
         }), { headers: { 'Content-Type': 'application/json' }});
       } catch (err: any) {
+        const errorText = String(err);
+
+        if (isUnsupportedRuntimeError(errorText)) {
+          return new Response(JSON.stringify({
+            stdout: '',
+            stderr: 'Command execution is unavailable in this worker runtime. Deploy the sandbox container worker (wrangler.sandbox.toml).',
+            exitCode: 1
+          }), {
+            status: 501,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
         return new Response(JSON.stringify({ 
           stdout: err.stdout || '', 
           stderr: err.stderr || String(err), 
@@ -88,6 +107,19 @@ export default {
           instructions: '1. Open the URL on your device\n2. Enter the code\n3. Complete login\n4. Reply "done" to save credentials'
         }), { headers: { 'Content-Type': 'application/json' }});
       } catch (err: any) {
+        const errorText = String(err);
+
+        if (isUnsupportedRuntimeError(errorText)) {
+          return new Response(JSON.stringify({
+            instructions: 'Codex device login is unavailable in this worker runtime. Deploy the sandbox container worker (wrangler.sandbox.toml) and route SANDBOX binding traffic there.',
+            output: errorText,
+            error: errorText,
+          }), {
+            status: 501,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
         // Even if command "fails", it might have printed the login info
         const output = err.stdout || err.stderr || String(err);
         const { url, code } = parseCodexLoginOutput(output);
