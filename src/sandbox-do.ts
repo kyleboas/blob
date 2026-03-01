@@ -1,44 +1,34 @@
 import type { Env } from "./types";
 
-export class Sandbox {
-  private state: DurableObjectState;
-  private env: Env;
-
-  constructor(state: DurableObjectState, env: Env) {
-    this.state = state;
-    this.env = env;
-  }
+export class SandboxDO {
+  constructor(private state: DurableObjectState, private env: Env) {}
 
   async fetch(request: Request): Promise<Response> {
-    // Get the container fetcher from the environment
-    const container = (this.env as any).SANDBOX as Fetcher;
-    
+    // Container fetcher comes from [[containers]] name = "sandbox" => env.sandbox
+    const container = (this.env as any).sandbox as Fetcher;
+
     if (!container) {
       return new Response(JSON.stringify({ error: "Container not available" }), {
         status: 503,
-        headers: { "Content-Type": "application/json" }
+        headers: { "Content-Type": "application/json" },
       });
     }
 
-    // Forward the request to the container
     const url = new URL(request.url);
-    const containerUrl = `http://localhost:8080${url.pathname}`;
-    
+    const containerUrl = `http://localhost:8080${url.pathname}${url.search}`;
+
     try {
-      const response = await container.fetch(containerUrl, {
+      const resp = await container.fetch(containerUrl, {
         method: request.method,
         headers: request.headers,
-        body: request.body
+        body: request.body,
       });
-      
-      return new Response(response.body, {
-        status: response.status,
-        headers: response.headers
-      });
+
+      return new Response(resp.body, { status: resp.status, headers: resp.headers });
     } catch (err) {
       return new Response(JSON.stringify({ error: String(err) }), {
         status: 500,
-        headers: { "Content-Type": "application/json" }
+        headers: { "Content-Type": "application/json" },
       });
     }
   }

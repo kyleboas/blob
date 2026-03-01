@@ -8,16 +8,13 @@ name = "AGENT_DO"
 class_name = "AgentDO"
 
 [[durable_objects.bindings]]
-name = "SANDBOX"
-class_name = "Sandbox"
+name = "SANDBOX_DO"
+class_name = "SandboxDO"
 
 [[migrations]]
-tag = "v1"
-new_sqlite_classes = ["AgentDO"]
-
-[[migrations]]
-tag = "v2"
-new_sqlite_classes = ["Sandbox"]
+tag = "v3"
+new_sqlite_classes = ["SandboxDO"]
+deleted_classes = ["Sandbox"]
 
 [[r2_buckets]]
 binding = "REPO_STORE"
@@ -25,7 +22,7 @@ bucket_name = "blob-repo-store"
 
 [[containers]]
 name = "sandbox"
-class_name = "Sandbox"
+class_name = "SandboxDO"
 image = "./sandbox/Dockerfile"
 
 [observability.logs]
