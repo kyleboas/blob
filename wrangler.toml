@@ -19,7 +19,7 @@ new_sqlite_classes = ["AgentDO"]
 
 [[migrations]]
 tag = "v2"
-new_sqlite_classes = ["Sandbox"]
+new_classes = ["Sandbox"]
 
 [[r2_buckets]]
 binding = "REPO_STORE"
