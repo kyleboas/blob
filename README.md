@@ -12,7 +12,11 @@ wrangler secret put GITHUB_TOKEN
 wrangler secret put AI_GATEWAY_TOKEN  
 wrangler secret put AI_GATEWAY_BASE_URL
 
+# Deploy the main worker
 wrangler deploy
+
+# Deploy the sandbox worker
+wrangler deploy --config wrangler.sandbox.toml
 ```
 
 ## API
