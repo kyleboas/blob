@@ -33,6 +33,9 @@ RUN npm install -g @openai/codex
 
 WORKDIR /workspace
 
+# Ensure persistent auth directory exists
+RUN mkdir -p /workspace/.codex-auth
+
 # HTTP server with Codex support
 COPY server.py /server.py
 RUN chmod +x /server.py
@@ -45,5 +48,5 @@ EXPOSE 3000
 
 ENV PORT=3000
 
-# Restore auth then start server
-CMD ["sh", "-c", "python3 /restore-auth.py && python3 /server.py"]
+# Restore auth (non-fatal) then start server
+CMD ["sh", "-c", "python3 /restore-auth.py || true; exec python3 /server.py"]
