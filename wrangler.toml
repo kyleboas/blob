@@ -1,36 +1,16 @@
-name = "blob-agent"
-main = "src/index.ts"
+name = "blob-sandbox"
+main = "src/sandbox-worker.ts"
 compatibility_date = "2026-02-19"
 compatibility_flags = ["nodejs_compat"]
 
+[[containers]]
+name = "sandbox"
+class_name = "Sandbox"
+image = "./sandbox/Dockerfile"
+
 [[durable_objects.bindings]]
-name = "AGENT_DO"
-class_name = "AgentDO"
-
-# Migrations already applied on remote (v1, v2) - DO NOT MODIFY
-[[migrations]]
-tag = "v1"
-new_classes = ["AgentDO"] 
-
-[[migrations]]
-tag = "v2"
-new_sqlite_classes = ["AgentDO"]
-
-[[migrations]]
-tag = "v3"
-deleted_classes = ["Sandbox"]
-
-[[r2_buckets]]
-binding = "REPO_STORE"
-bucket_name = "blob-repo-store"
-
-[[services]]
-binding = "SANDBOX"
-service = "blob-sandbox"
-environment = "production"
-
-[ai] 
-binding = "AI"
+name = "Sandbox"
+class_name = "Sandbox"
 
 [observability.logs]
 enabled = true

@@ -1,0 +1,23 @@
+name = "blob-agent"
+main = "src/index.ts"
+compatibility_date = "2026-02-19"
+compatibility_flags = ["nodejs_compat"]
+
+[[durable_objects.bindings]]
+name = "AGENT_DO"
+class_name = "AgentDO"
+
+[[r2_buckets]]
+binding = "REPO_STORE"
+bucket_name = "blob-repo-store"
+
+[[services]]
+binding = "SANDBOX"
+service = "blob-sandbox"
+environment = "production"
+
+[ai] 
+binding = "AI"
+
+[observability.logs]
+enabled = true
