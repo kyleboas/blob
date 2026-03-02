@@ -6,13 +6,35 @@ import { handleSlackEvent } from "./slack";
 import { triggerCatalogUpdate } from "./memory";
 import { Sandbox as SandboxDO } from "@cloudflare/sandbox";
 
-function json(data: unknown): Response {
-  return new Response(JSON.stringify(data), { headers: { "content-type": "application/json" } });
+function json(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), { 
+    status,
+    headers: { "content-type": "application/json" } 
+  });
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    
+    // Sandbox health check
+    if (url.pathname === "/sandbox/health") {
+      try {
+        // Test RPC method
+        const result = await env.SANDBOX.exec("echo 'sandbox is alive'");
+        return json({ 
+          ok: true, 
+          sandbox: "connected",
+          execResult: result.stdout
+        });
+      } catch (e) {
+        return json({ 
+          ok: false, 
+          sandbox: "error", 
+          error: String(e) 
+        }, 503);
+      }
+    }
     
     // Main worker routes only
     if (url.pathname === "/slack/events") {
