@@ -7,19 +7,6 @@ compatibility_flags = ["nodejs_compat"]
 name = "AGENT_DO"
 class_name = "AgentDO"
 
-# Migrations already applied on remote (v1, v2) - DO NOT MODIFY
-[[migrations]]
-tag = "v1"
-new_classes = ["AgentDO"] 
-
-[[migrations]]
-tag = "v2"
-new_sqlite_classes = ["AgentDO"]
-
-[[migrations]]
-tag = "v3"
-deleted_classes = ["Sandbox"]
-
 [[r2_buckets]]
 binding = "REPO_STORE"
 bucket_name = "blob-repo-store"
