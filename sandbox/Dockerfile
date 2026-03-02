@@ -2,7 +2,6 @@ FROM docker.io/cloudflare/sandbox:0.7.8
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# (Optional but recommended): Install a modern Node.js version instead of the default apt package
 RUN apt-get update && apt-get install -y --no-install-recommends \
   bash \
   curl \
@@ -33,5 +32,6 @@ RUN npm install -g @openai/codex
 COPY restore-auth.py /restore-auth.py
 RUN chmod +x /restore-auth.py
 
-# Assuming the base image expects it in the WORKDIR
 COPY index.ts ./index.ts
+
+CMD ["bash", "-lc", "sleep infinity"]
