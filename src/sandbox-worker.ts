@@ -14,6 +14,12 @@ interface Env {
   Sandbox: DurableObjectNamespace<SandboxType>;
 }
 
+async function ensureSandboxStarted(sandbox: SandboxType): Promise<void> {
+  if ("start" in sandbox && typeof sandbox.start === "function") {
+    await sandbox.start();
+  }
+}
+
 export default class SandboxWorker extends WorkerEntrypoint<Env> {
   async fetch(request: Request): Promise<Response> {
     const proxied = await proxyToSandbox(request, this.env);
@@ -34,10 +40,17 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
     );
   }
 
+
+  async start(): Promise<void> {
+    const sandbox = getSandbox(this.env.Sandbox, "agent");
+    await ensureSandboxStarted(sandbox);
+  }
+
   // Initialize sandbox - run restore-auth on first use
   async init(): Promise<{ restored: boolean; message: string }> {
     const sandbox = getSandbox(this.env.Sandbox, "agent");
     try {
+      await ensureSandboxStarted(sandbox);
       const result = await sandbox.exec("python3 /restore-auth.py");
       const restored = result.success && !result.stderr?.includes("failed");
       return {
@@ -52,6 +65,7 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
   // Run command in sandbox
   async exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const sandbox = getSandbox(this.env.Sandbox, "agent");
+    await ensureSandboxStarted(sandbox);
     const result = await sandbox.exec(command);
     return {
       stdout: result.stdout ?? "",
@@ -62,11 +76,13 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
 
   async writeFile(path: string, content: string): Promise<void> {
     const sandbox = getSandbox(this.env.Sandbox, "agent");
+    await ensureSandboxStarted(sandbox);
     await sandbox.writeFile(path, content);
   }
 
   async readFile(path: string): Promise<string> {
     const sandbox = getSandbox(this.env.Sandbox, "agent");
+    await ensureSandboxStarted(sandbox);
     const result = await sandbox.readFile(path);
     return result.content ?? "";
   }

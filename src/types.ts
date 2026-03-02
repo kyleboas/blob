@@ -1,6 +1,7 @@
 // types.ts - Service binding interface for sandbox worker
 
 export interface SandboxService {
+  start?(): Promise<void>;
   exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }>;
   writeFile(path: string, content: string): Promise<void>;
   readFile(path: string): Promise<string>;
