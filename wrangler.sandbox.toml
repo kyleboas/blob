@@ -4,6 +4,7 @@ compatibility_date = "2026-02-19"
 compatibility_flags = ["nodejs_compat"]
 
 [[containers]]
+name = "sandbox"
 class_name = "Sandbox"
 image = "./sandbox/Dockerfile"
 # optional but nice:
