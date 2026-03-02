@@ -12,7 +12,7 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
   async fetch(request: Request): Promise<Response> {
     const proxyResponse = await proxyToSandbox(request, this.env);
     if (proxyResponse) return proxyResponse;
-    return new Response("blob-agent-sandbox", { status: 200 });
+    return new Response("blob-sandbox", { status: 200 });
   }
 
   async exec(command: string): Promise<{ stdout?: string; stderr?: string; exitCode?: number }> {

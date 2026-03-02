@@ -20,7 +20,7 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
     if (proxied) return proxied;
 
     // Fallback response (useful health check)
-    return new Response("blob-agent-sandbox", { status: 200 });
+    return new Response("blob-sandbox", { status: 200 });
   }
 
   // Optional: expose RPC-ish helpers if your main worker calls them via service binding
