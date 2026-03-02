@@ -10,12 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   python3-pip \
   nodejs \
   build-essential \
+  iproute2 \
   && rm -rf /var/lib/apt/lists/*
 
-# Install a non-interactive git credential helper used by Blob.
-# Git calls this script for Username/Password prompts and it provides:
-# - username: x-access-token
-# - password: $GITHUB_TOKEN (or $GH_TOKEN)
 RUN cat >/usr/local/bin/blob-git-askpass <<'EOF' \
  && chmod 755 /usr/local/bin/blob-git-askpass
 #!/bin/sh
@@ -26,31 +23,13 @@ case "$1" in
 esac
 EOF
 
-RUN mkdir -p /workspace
-
-# Install Codex CLI
-RUN npm install -g @openai/codex
-
+RUN mkdir -p /workspace /workspace/.codex-auth
 WORKDIR /workspace
 
-# Ensure persistent auth directory exists
-RUN mkdir -p /workspace/.codex-auth
+RUN npm install -g @openai/codex
 
-# HTTP server with Codex support
-COPY server.py /server.py
-RUN chmod +x /server.py
-
-# Script to restore auth from persistent storage on startup
 COPY restore-auth.py /restore-auth.py
 RUN chmod +x /restore-auth.py
 
-# Entrypoint script for verbose startup
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
-EXPOSE 3000
-
-ENV PORT=3000
-
-# Use entrypoint for verbose startup logging
-CMD ["/entrypoint.sh"]
+# ✅ IMPORTANT: do NOT override CMD.
+# The base cloudflare/sandbox image provides the /api/* server on port 3000.

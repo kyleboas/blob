@@ -34,7 +34,22 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
     );
   }
 
-  // Optional: expose RPC-ish helpers if your main worker calls them via service binding
+  // Initialize sandbox - run restore-auth on first use
+  async init(): Promise<{ restored: boolean; message: string }> {
+    const sandbox = getSandbox(this.env.Sandbox, "agent");
+    try {
+      const result = await sandbox.exec("python3 /restore-auth.py");
+      const restored = result.success && !result.stderr?.includes("failed");
+      return {
+        restored,
+        message: restored ? "Auth restored" : "No auth to restore or restore failed",
+      };
+    } catch (e) {
+      return { restored: false, message: `Restore error: ${e}` };
+    }
+  }
+
+  // Run command in sandbox
   async exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const sandbox = getSandbox(this.env.Sandbox, "agent");
     const result = await sandbox.exec(command);
