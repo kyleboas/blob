@@ -40,6 +40,12 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
     );
   }
 
+
+  async start(): Promise<void> {
+    const sandbox = getSandbox(this.env.Sandbox, "agent");
+    await ensureSandboxStarted(sandbox);
+  }
+
   // Initialize sandbox - run restore-auth on first use
   async init(): Promise<{ restored: boolean; message: string }> {
     const sandbox = getSandbox(this.env.Sandbox, "agent");

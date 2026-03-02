@@ -3,6 +3,7 @@ import { AgentDO } from "./do";
 import { getRepos, addRepo, getRepoGoals, setRepoGoals } from "./storage";
 import { Agent } from "./agent";
 import { handleSlackEvent } from "./slack";
+import { executeInSandbox } from "./sandbox";
 import { triggerCatalogUpdate } from "./memory";
 import { Sandbox as SandboxDO } from "@cloudflare/sandbox";
 
@@ -21,7 +22,7 @@ export default {
     if (url.pathname === "/sandbox/health") {
       try {
         // Test RPC method
-        const result = await env.SANDBOX.exec("echo 'sandbox is alive'");
+        const result = await executeInSandbox("echo 'sandbox is alive'", env);
         return json({ 
           ok: true, 
           sandbox: "connected",
