@@ -23,7 +23,7 @@ case "$1" in
 esac
 EOF
 
-RUN mkdir -p /workspace /workspace/.codex-auth
+RUN mkdir -p /workspace /workspace/.codex-auth /app
 WORKDIR /workspace
 
 RUN npm install -g @openai/codex
@@ -32,7 +32,9 @@ COPY restore-auth.py /restore-auth.py
 RUN chmod +x /restore-auth.py
 
 # Provide the module the base image expects
-COPY sandbox/index.ts /workspace/index.ts
+COPY index.ts /workspace/index.ts
+COPY index.ts /app/index.ts
+COPY index.ts /index.ts
 
 # ✅ DO NOT override CMD.
 # The base cloudflare/sandbox image provides the /api/* server on port 3000.

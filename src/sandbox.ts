@@ -6,6 +6,47 @@ interface SandboxResult {
   exitCode: number;
 }
 
+const SANDBOX_STARTUP_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseHttpStatus(err: unknown): number | undefined {
+  const message = err instanceof Error ? err.message : String(err);
+  const statusMatch = message.match(/status:\s*(\d+)/i);
+  if (!statusMatch) {
+    return undefined;
+  }
+  return Number.parseInt(statusMatch[1], 10);
+}
+
+function formatSandboxError(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  return String(err);
+}
+
+async function execWithRetry(env: Env, command: string, attempts = 3): Promise<SandboxResult> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await env.SANDBOX.exec(command);
+    } catch (err) {
+      lastError = err;
+      const status = parseHttpStatus(err);
+      const canRetry = status !== undefined && SANDBOX_STARTUP_RETRYABLE_STATUS.has(status) && attempt < attempts;
+      if (!canRetry) {
+        throw err;
+      }
+      await delay(attempt * 500);
+    }
+  }
+
+  throw lastError;
+}
+
 // Validate command before execution
 function validateCommand(command: string): { valid: boolean; error?: string } {
   const dangerous = [
@@ -33,14 +74,14 @@ export async function executeInSandbox(
   }
 
   // Use service binding method instead of HTTP fetch
-  const result = await env.SANDBOX.exec(command);
+  const result = await execWithRetry(env, command);
   return result;
 }
 
 // Start Codex device-code login flow
 export async function startCodexLogin(env: Env): Promise<{ url: string; code?: string; instructions: string }> {
   // For Codex login, we need to run the codex CLI command
-  const result = await env.SANDBOX.exec("codex login");
+  const result = await execWithRetry(env, "codex login");
   
   // Parse the output to extract URL and code
   const urlMatch = result.stdout.match(/https:\/\/[^\s]+/);
@@ -68,19 +109,19 @@ export async function runCodex(
 ): Promise<SandboxResult> {
   // Write prompt to a file and run codex
   await env.SANDBOX.writeFile("/tmp/prompt.txt", prompt);
-  const result = await env.SANDBOX.exec(`codex -f /tmp/prompt.txt`);
+  const result = await execWithRetry(env, `codex -f /tmp/prompt.txt`);
   return result;
 }
 
 export async function sandboxStatus(env: Env): Promise<{ ready: boolean; message?: string }> {
   try {
     // Try to exec a simple command to check if sandbox is responsive
-    const result = await env.SANDBOX.exec("echo 'health check'");
+    const result = await execWithRetry(env, "echo 'health check'");
     if (result.exitCode === 0) {
       return { ready: true };
     }
     return { ready: false, message: `Sandbox returned exit code ${result.exitCode}: ${result.stderr}` };
   } catch (err) {
-    return { ready: false, message: `Connection failed: ${err}` };
+    return { ready: false, message: `Connection failed: ${formatSandboxError(err)}` };
   }
 }
