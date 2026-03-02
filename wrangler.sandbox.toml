@@ -17,4 +17,4 @@ tag = "v1"
 new_sqlite_classes = ["Sandbox"]
 
 [observability.logs]
-enabled = true
+enabled = true 
