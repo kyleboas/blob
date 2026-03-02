@@ -1,15 +1,9 @@
-// types.ts - Clean Env interface for one-worker + Sandbox DO proxy
+import type { Sandbox } from "@cloudflare/sandbox";
 
 export interface Env {
-  // Durable Objects (required - Wrangler always provides these)
+  // Durable Objects
   AGENT_DO: DurableObjectNamespace;
-  SANDBOX_DO: DurableObjectNamespace;
-
-  // Container binding(s). Naming can vary by wrangler/container config.
-  sandbox?: { fetch: typeof fetch };
-  Sandbox?: { fetch: typeof fetch };
-  SANDBOX?: { fetch: typeof fetch };
-  BLOB_SANDBOX?: { fetch: typeof fetch };
+  SANDBOX_DO: DurableObjectNamespace<Sandbox>;
 
   // R2 Bucket
   REPO_STORE: R2Bucket;

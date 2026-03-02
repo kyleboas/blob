@@ -1,3 +1,4 @@
+import { getSandbox } from "@cloudflare/sandbox";
 import type { Env } from "./types";
 
 interface SandboxResult {
@@ -12,25 +13,19 @@ interface CodexLoginResult {
   instructions: string;
 }
 
-// Get sandbox DO stub
-function getSandboxStub(env: Env) {
-  const id = env.SANDBOX_DO.idFromName("agent");
-  return env.SANDBOX_DO.get(id);
-}
-
 // Validate command before execution
 function validateCommand(command: string): { valid: boolean; error?: string } {
   const dangerous = [
     /rm\s+-rf\s+\//,
     /:\(\)\{\s*:\|:\s*\&\s*\}.*:\)/,
   ];
-  
+
   for (const pattern of dangerous) {
     if (pattern.test(command)) {
       return { valid: false, error: `Dangerous command blocked: ${command}` };
     }
   }
-  
+
   return { valid: true };
 }
 
@@ -44,53 +39,50 @@ export async function executeInSandbox(
     throw new Error(validation.error);
   }
 
-  const stub = getSandboxStub(env);
-  const timeout = opts.timeout || 30000;
-
-  const response = await stub.fetch("http://sandbox/execute", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ command, timeout }),
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Sandbox error: ${response.status} ${error}`);
-  }
-
-  return await response.json() as SandboxResult;
+  const sandbox = getSandbox(env.SANDBOX_DO, "agent");
+  const result = await sandbox.exec(command, { timeout: opts.timeout ?? 30000 });
+  return {
+    stdout: result.stdout,
+    stderr: result.stderr,
+    exitCode: result.exitCode,
+  };
 }
 
 // Start Codex device-code login flow
 export async function startCodexLogin(env: Env): Promise<CodexLoginResult> {
-  const stub = getSandboxStub(env);
+  const sandbox = getSandbox(env.SANDBOX_DO, "agent");
+  const result = await sandbox.exec("codex login 2>&1", { timeout: 30000 });
+  const output = result.stdout + result.stderr;
 
-  const response = await stub.fetch("http://sandbox/codex/login/start", {
-    method: "POST",
-  });
+  const urlMatch = output.match(/https:\/\/[^\s\)\]]+/);
+  const codeMatch = output.match(/\b([A-Z0-9]{4}-[A-Z0-9]{4}|[A-Z0-9]{8})\b/);
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Codex login error: ${response.status} ${error}`);
+  if (!urlMatch || !codeMatch) {
+    throw new Error(`Could not parse device-login details from codex output: ${output}`);
   }
 
-  return await response.json() as CodexLoginResult;
+  const url = urlMatch[0];
+  const code = codeMatch[1];
+  return {
+    url,
+    code,
+    instructions: `1. Open ${url} on your device\n2. Enter code: ${code}\n3. Complete login\n4. Call /codex/auth/save to persist credentials`,
+  };
 }
 
 // Save Codex auth to persistent storage
 export async function saveCodexAuth(env: Env): Promise<{ saved: boolean; message: string }> {
-  const stub = getSandboxStub(env);
+  const sandbox = getSandbox(env.SANDBOX_DO, "agent");
+  const result = await sandbox.exec(
+    "mkdir -p /workspace/.codex-auth && cp ~/.codex/auth.json /workspace/.codex-auth/auth.json",
+    { timeout: 10000 }
+  );
 
-  const response = await stub.fetch("http://sandbox/codex/auth/save", {
-    method: "POST",
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Codex auth save error: ${response.status} ${error}`);
+  if (result.exitCode !== 0) {
+    throw new Error(`Codex auth save failed: ${result.stderr || result.stdout}`);
   }
 
-  return await response.json() as { saved: boolean; message: string };
+  return { saved: true, message: "Auth credentials persisted to storage" };
 }
 
 // Run Codex with a prompt
@@ -99,94 +91,29 @@ export async function runCodex(
   env: Env,
   opts: { timeout?: number } = {}
 ): Promise<SandboxResult> {
-  const stub = getSandboxStub(env);
-  const timeout = opts.timeout || 120000;
+  const sandbox = getSandbox(env.SANDBOX_DO, "agent");
+  const timeout = opts.timeout ?? 120000;
 
-  const response = await stub.fetch("http://sandbox/codex/run", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ prompt, timeout }),
-  });
-
-  if (response.status === 401) {
+  const authCheck = await sandbox.exec("test -f ~/.codex/auth.json && echo yes || echo no", { timeout: 5000 });
+  if (authCheck.stdout.trim() !== "yes") {
     throw new Error("Not authenticated. Run /codex login first.");
   }
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Codex run error: ${response.status} ${error}`);
-  }
-
-  return await response.json() as SandboxResult;
+  const escapedPrompt = prompt.replace(/'/g, "'\\''");
+  const result = await sandbox.exec(`codex --quiet '${escapedPrompt}'`, { timeout });
+  return {
+    stdout: result.stdout,
+    stderr: result.stderr,
+    exitCode: result.exitCode,
+  };
 }
 
 export async function sandboxStatus(env: Env): Promise<{ ready: boolean; message?: string }> {
   try {
-    const stub = getSandboxStub(env);
-    const response = await stub.fetch("http://sandbox/health");
-    const body = await response.text();
-
-    let parsed: {
-      status?: string;
-      mode?: string;
-      reason?: string;
-      hint?: string;
-      lookedFor?: string[];
-      envKeys?: string[];
-    } | undefined;
-
-    try {
-      parsed = JSON.parse(body) as {
-        status?: string;
-        mode?: string;
-        reason?: string;
-        hint?: string;
-        lookedFor?: string[];
-        envKeys?: string[];
-      };
-    } catch {
-      // Non-JSON health payloads are supported for compatibility.
-    }
-
-    if (!response.ok) {
-      return { ready: false, message: `Health check failed: ${response.status} - ${body}` };
-    }
-
-    // Detect fallback/degraded health responses from the DO (no sandbox container attached).
-    // Fallback responds with HTTP 200 and { status: "degraded", mode: "fallback", ... }.
-    const degraded = parsed?.status === "degraded" || parsed?.mode === "fallback";
-    if (degraded) {
-      const details: string[] = [];
-
-      if (parsed?.reason) {
-        details.push(parsed.reason);
-      }
-
-      if (parsed?.hint) {
-        details.push(parsed.hint);
-      }
-
-      const lookedFor = parsed?.lookedFor;
-      const envKeys = parsed?.envKeys;
-      if (Array.isArray(lookedFor) && Array.isArray(envKeys)) {
-        const missing = lookedFor
-          .filter((name) => name !== "state.container")
-          .filter((name) => !envKeys.includes(name));
-        if (missing.length > 0) {
-          details.push(`missing bindings: ${missing.join(", ")}`);
-        }
-      }
-
-      return {
-        ready: false,
-        message: details.length > 0
-          ? `Sandbox is in fallback mode (${details.join("; ")})`
-          : "Sandbox is in fallback mode",
-      };
-    }
-
+    const sandbox = getSandbox(env.SANDBOX_DO, "agent");
+    await sandbox.exec("echo ok", { timeout: 10000 });
     return { ready: true };
   } catch (err) {
-    return { ready: false, message: `Connection failed: ${err}` };
+    return { ready: false, message: `Sandbox not ready: ${err}` };
   }
 }
