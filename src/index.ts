@@ -4,6 +4,7 @@ import { getRepos, addRepo, getRepoGoals, setRepoGoals } from "./storage";
 import { Agent } from "./agent";
 import { handleSlackEvent } from "./slack";
 import { triggerCatalogUpdate } from "./memory";
+import { Sandbox as SandboxDO } from "@cloudflare/sandbox";
 
 function json(data: unknown): Response {
   return new Response(JSON.stringify(data), { headers: { "content-type": "application/json" } });
@@ -67,5 +68,9 @@ export default {
     }
   }
 };
+
+// Keep this export in the main bundle so CI `wrangler versions upload` remains compatible
+// even when connected builds override the target worker name to `blob-sandbox`.
+export class Sandbox extends SandboxDO {}
 
 export { AgentDO };
