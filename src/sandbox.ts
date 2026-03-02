@@ -12,12 +12,6 @@ interface CodexLoginResult {
   instructions: string;
 }
 
-// Get sandbox DO stub
-function getSandboxStub(env: Env) {
-  const id = env.SANDBOX_DO.idFromName("agent");
-  return env.SANDBOX_DO.get(id);
-}
-
 // Validate command before execution
 function validateCommand(command: string): { valid: boolean; error?: string } {
   const dangerous = [
@@ -44,10 +38,9 @@ export async function executeInSandbox(
     throw new Error(validation.error);
   }
 
-  const stub = getSandboxStub(env);
   const timeout = opts.timeout || 30000;
 
-  const response = await stub.fetch("http://sandbox/execute", {
+  const response = await env.SANDBOX.fetch("http://sandbox/execute", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ command, timeout }),
@@ -63,9 +56,7 @@ export async function executeInSandbox(
 
 // Start Codex device-code login flow
 export async function startCodexLogin(env: Env): Promise<CodexLoginResult> {
-  const stub = getSandboxStub(env);
-
-  const response = await stub.fetch("http://sandbox/codex/login/start", {
+  const response = await env.SANDBOX.fetch("http://sandbox/codex/login/start", {
     method: "POST",
   });
 
@@ -79,9 +70,7 @@ export async function startCodexLogin(env: Env): Promise<CodexLoginResult> {
 
 // Save Codex auth to persistent storage
 export async function saveCodexAuth(env: Env): Promise<{ saved: boolean; message: string }> {
-  const stub = getSandboxStub(env);
-
-  const response = await stub.fetch("http://sandbox/codex/auth/save", {
+  const response = await env.SANDBOX.fetch("http://sandbox/codex/auth/save", {
     method: "POST",
   });
 
@@ -99,10 +88,9 @@ export async function runCodex(
   env: Env,
   opts: { timeout?: number } = {}
 ): Promise<SandboxResult> {
-  const stub = getSandboxStub(env);
   const timeout = opts.timeout || 120000;
 
-  const response = await stub.fetch("http://sandbox/codex/run", {
+  const response = await env.SANDBOX.fetch("http://sandbox/codex/run", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ prompt, timeout }),
@@ -122,70 +110,14 @@ export async function runCodex(
 
 export async function sandboxStatus(env: Env): Promise<{ ready: boolean; message?: string }> {
   try {
-    const stub = getSandboxStub(env);
-    const response = await stub.fetch("http://sandbox/health");
+    const response = await env.SANDBOX.fetch("http://sandbox/health");
+    
+    if (response.ok) {
+      return { ready: true };
+    }
+    
     const body = await response.text();
-
-    let parsed: {
-      status?: string;
-      mode?: string;
-      reason?: string;
-      hint?: string;
-      lookedFor?: string[];
-      envKeys?: string[];
-    } | undefined;
-
-    try {
-      parsed = JSON.parse(body) as {
-        status?: string;
-        mode?: string;
-        reason?: string;
-        hint?: string;
-        lookedFor?: string[];
-        envKeys?: string[];
-      };
-    } catch {
-      // Non-JSON health payloads are supported for compatibility.
-    }
-
-    if (!response.ok) {
-      return { ready: false, message: `Health check failed: ${response.status} - ${body}` };
-    }
-
-    // Detect fallback/degraded health responses from the DO (no sandbox container attached).
-    // Fallback responds with HTTP 200 and { status: "degraded", mode: "fallback", ... }.
-    const degraded = parsed?.status === "degraded" || parsed?.mode === "fallback";
-    if (degraded) {
-      const details: string[] = [];
-
-      if (parsed?.reason) {
-        details.push(parsed.reason);
-      }
-
-      if (parsed?.hint) {
-        details.push(parsed.hint);
-      }
-
-      const lookedFor = parsed?.lookedFor;
-      const envKeys = parsed?.envKeys;
-      if (Array.isArray(lookedFor) && Array.isArray(envKeys)) {
-        const missing = lookedFor
-          .filter((name) => name !== "state.container")
-          .filter((name) => !envKeys.includes(name));
-        if (missing.length > 0) {
-          details.push(`missing bindings: ${missing.join(", ")}`);
-        }
-      }
-
-      return {
-        ready: false,
-        message: details.length > 0
-          ? `Sandbox is in fallback mode (${details.join("; ")})`
-          : "Sandbox is in fallback mode",
-      };
-    }
-
-    return { ready: true };
+    return { ready: false, message: `Health check failed: ${response.status} - ${body}` };
   } catch (err) {
     return { ready: false, message: `Connection failed: ${err}` };
   }
