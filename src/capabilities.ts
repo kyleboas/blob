@@ -10,7 +10,7 @@ export const BLOB_CAPABILITIES: Capability[] = [
     description: "General conversation and answering questions",
     available: true,
   },
-  {
+  { 
     name: "coding",
     description: "Write, review, and refactor code",
     available: true,
