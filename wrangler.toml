@@ -21,7 +21,7 @@ binding = "SANDBOX"
 service = "blob-agent-sandbox"
 environment = "production"
 
-[ai]
+[ai] 
 binding = "AI"
 
 [observability.logs]
