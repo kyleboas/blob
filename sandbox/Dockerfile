@@ -41,7 +41,9 @@ RUN chmod +x /server.py
 COPY restore-auth.py /restore-auth.py
 RUN chmod +x /restore-auth.py
 
-EXPOSE 8080
+EXPOSE 3000
+
+ENV PORT=3000
 
 # Restore auth then start server
 CMD ["sh", "-c", "python3 /restore-auth.py && python3 /server.py"]

@@ -269,13 +269,15 @@ class SandboxHandler(http.server.BaseHTTPRequestHandler):
             }).encode())
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))
+    # Use PORT env var or default to 3000 (matches Sandbox SDK health check)
+    port = int(os.environ.get('PORT', 3000))
     print(f"Starting sandbox server on port {port}...", file=sys.stderr)
     sys.stderr.flush()
     
     try:
+        # Bind to 0.0.0.0 so sandbox proxy can reach it
         server = http.server.HTTPServer(('0.0.0.0', port), SandboxHandler)
-        print(f"Sandbox server running on port {port}", file=sys.stderr)
+        print(f"Sandbox server running on 0.0.0.0:{port}", file=sys.stderr)
         sys.stderr.flush()
         server.serve_forever()
     except Exception as e:
