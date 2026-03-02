@@ -1,6 +1,5 @@
 import type { Env } from "./types";
 import { AgentDO } from "./do";
-import { Sandbox } from "./sandbox-do";
 import { getRepos, addRepo, getRepoGoals, setRepoGoals } from "./storage";
 import { Agent } from "./agent";
 import { handleSlackEvent } from "./slack";
@@ -10,27 +9,11 @@ function json(data: unknown): Response {
   return new Response(JSON.stringify(data), { headers: { "content-type": "application/json" } });
 }
 
-// Get sandbox DO stub
-function sandboxStub(env: Env) {
-  const id = env.SANDBOX_DO.idFromName("agent");
-  return env.SANDBOX_DO.get(id);
-}
-
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     
-    // Forward sandbox endpoints to container via DO
-    if (
-      url.pathname === "/health" ||
-      url.pathname === "/execute" ||
-      url.pathname.startsWith("/codex/")
-    ) {
-      const stub = sandboxStub(env);
-      return stub.fetch(request);
-    }
-    
-    // Main worker routes
+    // Main worker routes only
     if (url.pathname === "/slack/events") {
       return handleSlackEvent(request, env);
     }
@@ -85,4 +68,4 @@ export default {
   }
 };
 
-export { AgentDO, Sandbox };
+export { AgentDO };
