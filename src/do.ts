@@ -258,3 +258,11 @@ function json(data: unknown, status = 200): Response {
     headers: { "content-type": "application/json" }
   });
 }
+
+// Legacy Durable Object export kept so wrangler versions upload does not fail
+// for existing scripts that still reference class `Sandbox`.
+export class Sandbox {
+  async fetch(): Promise<Response> {
+    return new Response("Sandbox Durable Object has been retired", { status: 410 });
+  }
+}
