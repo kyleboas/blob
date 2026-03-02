@@ -1,10 +1,11 @@
-import { getSandbox, proxyToSandbox, type Sandbox } from "@cloudflare/sandbox";
+import { getSandbox, proxyToSandbox, Sandbox as SandboxDO, type Sandbox as SandboxType } from "@cloudflare/sandbox";
 import { WorkerEntrypoint } from "cloudflare:workers";
 
-export { Sandbox } from "@cloudflare/sandbox";
+export class Sandbox extends SandboxDO {}
 
 interface Env {
-  Sandbox: DurableObjectNamespace<Sandbox>;
+  // binding name must match wrangler durable_objects.bindings.name
+  Sandbox: DurableObjectNamespace<SandboxType>;
 }
 
 export default class SandboxWorker extends WorkerEntrypoint<Env> {
