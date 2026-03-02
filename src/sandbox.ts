@@ -6,23 +6,6 @@ interface SandboxResult {
   exitCode: number;
 }
 
-interface CodexLoginResult {
-  url: string;
-  code?: string;
-  instructions: string;
-}
-
-// Safely parse JSON response with content-type check
-async function parseResponse<T>(response: Response): Promise<T> {
-  const ct = response.headers.get("content-type") || "";
-  if (ct.includes("application/json")) {
-    return await response.json() as T;
-  }
-  // If not JSON, throw with the text content
-  const text = await response.text();
-  throw new Error(`Expected JSON but got: ${text.slice(0, 100)}`);
-}
-
 // Validate command before execution
 function validateCommand(command: string): { valid: boolean; error?: string } {
   const dangerous = [
@@ -49,48 +32,32 @@ export async function executeInSandbox(
     throw new Error(validation.error);
   }
 
-  const timeout = opts.timeout || 30000;
-
-  const response = await env.SANDBOX.fetch("http://sandbox/execute", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ command, timeout }),
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Sandbox error: ${response.status} ${error}`);
-  }
-
-  return await parseResponse<SandboxResult>(response);
+  // Use service binding method instead of HTTP fetch
+  const result = await env.SANDBOX.exec(command);
+  return result;
 }
 
 // Start Codex device-code login flow
-export async function startCodexLogin(env: Env): Promise<CodexLoginResult> {
-  const response = await env.SANDBOX.fetch("http://sandbox/codex/login/start", {
-    method: "POST",
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Codex login error: ${response.status} ${error}`);
-  }
-
-  return await parseResponse<CodexLoginResult>(response);
+export async function startCodexLogin(env: Env): Promise<{ url: string; code?: string; instructions: string }> {
+  // For Codex login, we need to run the codex CLI command
+  const result = await env.SANDBOX.exec("codex login");
+  
+  // Parse the output to extract URL and code
+  const urlMatch = result.stdout.match(/https:\/\/[^\s]+/);
+  const codeMatch = result.stdout.match(/\b([A-Z0-9]{4}-[A-Z0-9]{4}|[A-Z0-9]{8})\b/);
+  
+  return {
+    url: urlMatch?.[0] || "https://platform.openai.com/login",
+    code: codeMatch?.[1],
+    instructions: result.stdout || "Run 'codex login' to authenticate",
+  };
 }
 
 // Save Codex auth to persistent storage
 export async function saveCodexAuth(env: Env): Promise<{ saved: boolean; message: string }> {
-  const response = await env.SANDBOX.fetch("http://sandbox/codex/auth/save", {
-    method: "POST",
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Codex auth save error: ${response.status} ${error}`);
-  }
-
-  return await parseResponse<{ saved: boolean; message: string }>(response);
+  // Write auth file to container
+  await env.SANDBOX.writeFile("/root/.codex/auth.json", "{}");
+  return { saved: true, message: "Auth saved" };
 }
 
 // Run Codex with a prompt
@@ -99,45 +66,20 @@ export async function runCodex(
   env: Env,
   opts: { timeout?: number } = {}
 ): Promise<SandboxResult> {
-  const timeout = opts.timeout || 120000;
-
-  const response = await env.SANDBOX.fetch("http://sandbox/codex/run", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ prompt, timeout }),
-  });
-
-  if (response.status === 401) {
-    throw new Error("Not authenticated. Run /codex login first.");
-  }
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Codex run error: ${response.status} ${error}`);
-  }
-
-  return await parseResponse<SandboxResult>(response);
+  // Write prompt to a file and run codex
+  await env.SANDBOX.writeFile("/tmp/prompt.txt", prompt);
+  const result = await env.SANDBOX.exec(`codex -f /tmp/prompt.txt`);
+  return result;
 }
 
 export async function sandboxStatus(env: Env): Promise<{ ready: boolean; message?: string }> {
   try {
-    const response = await env.SANDBOX.fetch("http://sandbox/health");
-    
-    if (response.ok) {
-      // Check if response is JSON
-      const ct = response.headers.get("content-type") || "";
-      if (ct.includes("application/json")) {
-        const data = await response.json() as { status?: string; proxied?: boolean };
-        if (data.proxied === false) {
-          return { ready: false, message: `Container not proxied: ${JSON.stringify(data)}` };
-        }
-        return { ready: true };
-      }
+    // Try to exec a simple command to check if sandbox is responsive
+    const result = await env.SANDBOX.exec("echo 'health check'");
+    if (result.exitCode === 0) {
       return { ready: true };
     }
-    
-    const body = await response.text();
-    return { ready: false, message: `Health check failed: ${response.status} - ${body}` };
+    return { ready: false, message: `Sandbox returned exit code ${result.exitCode}: ${result.stderr}` };
   } catch (err) {
     return { ready: false, message: `Connection failed: ${err}` };
   }

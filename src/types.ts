@@ -1,11 +1,17 @@
-// types.ts - Two-worker setup with service binding
+// types.ts - Service binding interface for sandbox worker
+
+export interface SandboxService {
+  exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  writeFile(path: string, content: string): Promise<void>;
+  readFile(path: string): Promise<string>;
+}
 
 export interface Env {
   // Main agent DO
   AGENT_DO: DurableObjectNamespace;
   
-  // Service binding to sandbox worker (contains the container)
-  SANDBOX: Fetcher;
+  // Service binding to sandbox worker (WorkerEntrypoint methods)
+  SANDBOX: SandboxService;
   
   // R2 Bucket
   REPO_STORE: R2Bucket;
