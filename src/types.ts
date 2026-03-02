@@ -6,7 +6,10 @@ export interface Env {
 
   // Workers AI binding - no config needed
   AI?: {
-    run: (model: string, inputs: { messages: Array<{ role: string; content: string }>; max_tokens: number }) => Promise<{ response?: string }>;
+    run: (
+      model: string,
+      inputs: { messages: Array<{ role: string; content: string }>; max_tokens: number }
+    ) => Promise<{ response?: string }>;
   };
 
   REPO_STORE?: R2Bucket;

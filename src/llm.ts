@@ -1,9 +1,15 @@
 import type { Env } from "./types";
-import { DEFAULT_MODEL, getModelCatalogDescription } from "./models";
+import { DEFAULT_MODEL, getCatalog } from "./models";
 import { executeInSandbox, writeFileInSandbox, readFileInSandbox } from "./sandbox";
 
-// Cache for model catalog description (refreshed every 5 minutes)
-let catalogCache: { description: string; timestamp: number } | null = null;
+interface CatalogModel {
+  name: string;
+  description: string;
+  maxTokens: number;
+}
+
+// Cache for model catalog (refreshed every 5 minutes)
+let catalogCache: { catalog: Record<string, CatalogModel>; timestamp: number } | null = null;
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 interface LLMResponse {
@@ -12,13 +18,64 @@ interface LLMResponse {
   modelSwitched: boolean;
 }
 
-async function getCachedCatalogDescription(env: Env): Promise<string> {
+async function getCachedCatalog(env: Env): Promise<Record<string, CatalogModel>> {
   if (catalogCache && Date.now() - catalogCache.timestamp < CACHE_TTL) {
-    return catalogCache.description;
+    return catalogCache.catalog;
   }
-  const description = await getModelCatalogDescription(env);
-  catalogCache = { description, timestamp: Date.now() };
-  return description;
+  const catalog = await getCatalog(env);
+  catalogCache = { catalog, timestamp: Date.now() };
+  return catalog;
+}
+
+function isDifficultTask(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  const difficultKeywords = [
+    "architecture",
+    "refactor",
+    "root cause",
+    "debug",
+    "performance",
+    "optimize",
+    "security",
+    "migration",
+    "multi-file",
+    "design a",
+    "complex"
+  ];
+
+  const hasKeyword = difficultKeywords.some(keyword => normalized.includes(keyword));
+  const isLongPrompt = normalized.length > 600;
+
+  return hasKeyword || isLongPrompt;
+}
+
+function pickModel(catalog: Record<string, CatalogModel>, userMessage: string): { modelId: string; modelName: string; maxTokens: number } {
+  const entries = Object.entries(catalog);
+  if (entries.length === 0) {
+    return {
+      modelId: DEFAULT_MODEL,
+      modelName: DEFAULT_MODEL,
+      maxTokens: 4096
+    };
+  }
+
+  const mainModelId = catalog[DEFAULT_MODEL] ? DEFAULT_MODEL : entries[0][0];
+  const codexEntry = entries.find(([id, info]) => {
+    const haystack = `${id} ${info.name} ${info.description}`.toLowerCase();
+    return haystack.includes("codex");
+  });
+
+  if (codexEntry && isDifficultTask(userMessage)) {
+    const [modelId, info] = codexEntry;
+    return { modelId, modelName: info.name, maxTokens: info.maxTokens };
+  }
+
+  const main = catalog[mainModelId];
+  return {
+    modelId: mainModelId,
+    modelName: main.name,
+    maxTokens: main.maxTokens
+  };
 }
 
 export async function callLLMWithModelSelection(
@@ -27,43 +84,15 @@ export async function callLLMWithModelSelection(
   opts: { maxTokens?: number } = {}
 ): Promise<LLMResponse> {
   const userMessage = messages.find(m => m.role === "user")?.content ?? "";
-  
-  // Get catalog description from cache
-  const catalogDesc = await getCachedCatalogDescription(env);
-  
-  // First call: let the model pick which model to use
-  const modelPickerMessages = [
-    { 
-      role: "system", 
-      content: `You are a model selector. Available models:\n${catalogDesc}\n\nRespond with ONLY the model ID that would be best for this task. Default: ${DEFAULT_MODEL}` 
-    },
-    { role: "user", content: userMessage }
-  ];
+  const catalog = await getCachedCatalog(env);
+  const selection = pickModel(catalog, userMessage);
 
-  const selectedModelId = await callLLMRaw(
-    modelPickerMessages, 
-    DEFAULT_MODEL, 
-    100, 
-    env
-  );
-
-  // Validate the selection
-  const validModels = catalogDesc.split("\n").map(line => line.split(":")[0].replace("- ", "").trim());
-  const modelId = validModels.includes(selectedModelId.trim()) ? selectedModelId.trim() : DEFAULT_MODEL;
-  
-  // Extract model info from cached catalog
-  const modelLine = catalogDesc.split("\n").find(line => line.includes(modelId));
-  const modelName = modelLine ? modelLine.split(":")[1]?.split("-")[0].trim() : modelId;
-  const maxTokensMatch = modelLine?.match(/max (\d+) tokens/);
-  const maxTokens = maxTokensMatch ? parseInt(maxTokensMatch[1]) : 4096;
-  
-  // Second call: actually process the request with selected model
-  const response = await callLLMRaw(messages, modelId, opts.maxTokens ?? maxTokens, env);
+  const response = await callLLMRaw(messages, selection.modelId, opts.maxTokens ?? selection.maxTokens, env);
 
   return {
     content: response,
-    modelUsed: modelName,
-    modelSwitched: modelId !== DEFAULT_MODEL
+    modelUsed: selection.modelName,
+    modelSwitched: selection.modelId !== DEFAULT_MODEL
   };
 }
 
@@ -110,11 +139,11 @@ async function callLLMRaw(
   }
 
   const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-  
+
   if (!data.choices || data.choices.length === 0) {
     throw new Error("No choices in LLM response");
   }
-  
+
   return data.choices[0]?.message?.content ?? "";
 }
 
