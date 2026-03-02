@@ -14,7 +14,7 @@ class_name = "Sandbox"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["Sandbox"] 
+new_sqlite_classes = ["Sandbox"]
 
 [observability.logs]
 enabled = true
