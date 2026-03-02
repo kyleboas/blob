@@ -31,5 +31,8 @@ RUN npm install -g @openai/codex
 COPY restore-auth.py /restore-auth.py
 RUN chmod +x /restore-auth.py
 
-# ✅ IMPORTANT: do NOT override CMD.
+# Provide the module the base image expects
+COPY sandbox/index.ts /workspace/index.ts
+
+# ✅ DO NOT override CMD.
 # The base cloudflare/sandbox image provides the /api/* server on port 3000.
