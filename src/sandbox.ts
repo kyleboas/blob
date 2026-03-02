@@ -12,6 +12,17 @@ interface CodexLoginResult {
   instructions: string;
 }
 
+// Safely parse JSON response with content-type check
+async function parseResponse<T>(response: Response): Promise<T> {
+  const ct = response.headers.get("content-type") || "";
+  if (ct.includes("application/json")) {
+    return await response.json() as T;
+  }
+  // If not JSON, throw with the text content
+  const text = await response.text();
+  throw new Error(`Expected JSON but got: ${text.slice(0, 100)}`);
+}
+
 // Validate command before execution
 function validateCommand(command: string): { valid: boolean; error?: string } {
   const dangerous = [
@@ -51,7 +62,7 @@ export async function executeInSandbox(
     throw new Error(`Sandbox error: ${response.status} ${error}`);
   }
 
-  return await response.json() as SandboxResult;
+  return await parseResponse<SandboxResult>(response);
 }
 
 // Start Codex device-code login flow
@@ -65,7 +76,7 @@ export async function startCodexLogin(env: Env): Promise<CodexLoginResult> {
     throw new Error(`Codex login error: ${response.status} ${error}`);
   }
 
-  return await response.json() as CodexLoginResult;
+  return await parseResponse<CodexLoginResult>(response);
 }
 
 // Save Codex auth to persistent storage
@@ -79,7 +90,7 @@ export async function saveCodexAuth(env: Env): Promise<{ saved: boolean; message
     throw new Error(`Codex auth save error: ${response.status} ${error}`);
   }
 
-  return await response.json() as { saved: boolean; message: string };
+  return await parseResponse<{ saved: boolean; message: string }>(response);
 }
 
 // Run Codex with a prompt
@@ -105,7 +116,7 @@ export async function runCodex(
     throw new Error(`Codex run error: ${response.status} ${error}`);
   }
 
-  return await response.json() as SandboxResult;
+  return await parseResponse<SandboxResult>(response);
 }
 
 export async function sandboxStatus(env: Env): Promise<{ ready: boolean; message?: string }> {
@@ -113,6 +124,15 @@ export async function sandboxStatus(env: Env): Promise<{ ready: boolean; message
     const response = await env.SANDBOX.fetch("http://sandbox/health");
     
     if (response.ok) {
+      // Check if response is JSON
+      const ct = response.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        const data = await response.json() as { status?: string; proxied?: boolean };
+        if (data.proxied === false) {
+          return { ready: false, message: `Container not proxied: ${JSON.stringify(data)}` };
+        }
+        return { ready: true };
+      }
       return { ready: true };
     }
     

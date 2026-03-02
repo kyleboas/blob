@@ -19,8 +19,19 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
     const proxied = await proxyToSandbox(request, this.env);
     if (proxied) return proxied;
 
-    // Fallback response (useful health check)
-    return new Response("blob-sandbox", { status: 200 });
+    // Fallback response (useful health check) — return JSON so callers can safely resp.json()
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        service: "blob-sandbox",
+        proxied: false,
+        hint: "Request was not routed to the container via proxyToSandbox()",
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
   }
 
   // Optional: expose RPC-ish helpers if your main worker calls them via service binding
