@@ -11,6 +11,10 @@ class_name = "AgentDO"
 tag = "v1"
 new_sqlite_classes = ["AgentDO"]
 
+# Preserve migration history for previously published Worker versions.
+[[migrations]]
+tag = "v2"
+
 [[r2_buckets]]
 binding = "REPO_STORE"
 bucket_name = "blob-repo-store"
