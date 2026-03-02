@@ -12,7 +12,7 @@ wrangler secret put GITHUB_TOKEN
 wrangler secret put AI_GATEWAY_TOKEN  
 wrangler secret put AI_GATEWAY_BASE_URL
 
-# Deploy (single worker: includes Sandbox DO + container)
+# Deploy sandbox worker (root wrangler.toml targets blob-sandbox)
 wrangler deploy
 ```
 
@@ -37,16 +37,19 @@ Runs automatically every 5 minutes.
 
 ## Codex OAuth login (Slack)
 
-To make `login with codex` (or `login to codex`) work end-to-end, deploy the **single `blob-agent` worker** with its Sandbox DO + container binding, and point Slack at that worker.
+To make `login with codex` (or `login to codex`) work end-to-end, deploy both workers: `blob-sandbox` (container+DO) and `blob-agent` (Slack/app routes), and point Slack at `blob-agent`.
 
-### 1) Deploy the single worker
+### 1) Deploy both workers
 
 ```bash
-# blob-agent includes Slack routes, Sandbox DO, and the container config
+# Deploy sandbox worker (container + Sandbox DO)
 wrangler deploy
+
+# Deploy app worker (Slack routes + service binding to blob-sandbox)
+wrangler deploy -c wrangler.agent.toml
 ```
 
-In Cloudflare dashboard, this should appear as one Worker (`blob-agent`) with Durable Object bindings (`AGENT_DO`, `SANDBOX_DO`) plus a container named `sandbox`.
+In Cloudflare dashboard, this should appear as two Workers: `blob-sandbox` (Sandbox DO + container) and `blob-agent` (app routes + service binding to `blob-sandbox`).
 
 ### 2) Configure required secrets
 
@@ -104,7 +107,7 @@ curl -i https://<your-main-worker>/repos
 curl -i https://<your-main-worker>/health
 
 # if login fails, tail logs for blob-agent
-wrangler tail blob-agent
+wrangler tail blob-agent -c wrangler.agent.toml
 ```
 
 If you still only get “simulated login” text, your Slack event likely bypassed the Codex command path and fell through to generic chat. Verify the request reaches `/slack/events` and the message text is one of the login phrases above.
