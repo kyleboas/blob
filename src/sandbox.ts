@@ -7,6 +7,11 @@ interface SandboxResult {
 }
 
 const SANDBOX_STARTUP_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+const SANDBOX_STARTUP_RETRYABLE_MESSAGES = [
+  "container is not running",
+  "container crashed while checking for ports",
+  "consider calling start()",
+];
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -19,6 +24,12 @@ function parseHttpStatus(err: unknown): number | undefined {
     return undefined;
   }
   return Number.parseInt(statusMatch[1], 10);
+}
+
+
+function isRetryableSandboxStartupError(err: unknown): boolean {
+  const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return SANDBOX_STARTUP_RETRYABLE_MESSAGES.some((fragment) => message.includes(fragment));
 }
 
 function formatSandboxError(err: unknown): string {
@@ -36,7 +47,7 @@ async function execWithRetry(env: Env, command: string, attempts = 3): Promise<S
     } catch (err) {
       lastError = err;
       const status = parseHttpStatus(err);
-      const canRetry = status !== undefined && SANDBOX_STARTUP_RETRYABLE_STATUS.has(status) && attempt < attempts;
+      const canRetry = attempt < attempts && ((status !== undefined && SANDBOX_STARTUP_RETRYABLE_STATUS.has(status)) || isRetryableSandboxStartupError(err));
       if (!canRetry) {
         throw err;
       }
