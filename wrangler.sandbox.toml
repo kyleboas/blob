@@ -10,7 +10,7 @@ image = "./sandbox/Dockerfile"
 
 [[durable_objects.bindings]]
 name = "Sandbox"
-class_name = "Sandbox" 
+class_name = "Sandbox"
 
 [[migrations]]
 tag = "v1"
