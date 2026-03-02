@@ -9,4 +9,4 @@ name = "sandbox"
 image = "./sandbox/Dockerfile"
 
 [observability.logs]
-enabled = true
+enabled = true 
