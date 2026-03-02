@@ -44,9 +44,13 @@ RUN chmod +x /server.py
 COPY restore-auth.py /restore-auth.py
 RUN chmod +x /restore-auth.py
 
+# Entrypoint script for verbose startup
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 EXPOSE 3000
 
 ENV PORT=3000
 
-# Restore auth (non-fatal) then start server
-CMD ["sh", "-c", "python3 /restore-auth.py || true; exec python3 /server.py"]
+# Use entrypoint for verbose startup logging
+CMD ["/entrypoint.sh"]
