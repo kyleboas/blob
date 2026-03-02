@@ -17,7 +17,11 @@ new_sqlite_classes = ["AgentDO"]
 
 [[migrations]]
 tag = "v2"
-new_classes = ["Sandbox"]
+deleted_classes = ["Sandbox"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["Sandbox"]
 
 [[r2_buckets]]
 binding = "REPO_STORE"
