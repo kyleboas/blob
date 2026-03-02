@@ -4,9 +4,8 @@ compatibility_date = "2026-02-19"
 compatibility_flags = ["nodejs_compat"]
 
 # Container binding - this worker runs the actual container
-[[containers]]
+[containers]
 name = "sandbox"
-class_name = "Sandbox"
 image = "./sandbox/Dockerfile"
 
 [observability.logs]
