@@ -4,13 +4,19 @@ compatibility_date = "2026-02-19"
 compatibility_flags = ["nodejs_compat"]
 
 [[containers]]
-name = "sandbox"
 class_name = "Sandbox"
 image = "./sandbox/Dockerfile"
+# optional but nice:
+# instance_type = "lite"
+# max_instances = 1
 
 [[durable_objects.bindings]]
 name = "Sandbox"
 class_name = "Sandbox"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Sandbox"]
 
 [observability.logs]
 enabled = true
