@@ -20,10 +20,9 @@ new_sqlite_classes = ["AgentDO"]
 binding = "REPO_STORE"
 bucket_name = "blob-repo-store"
 
-# Service binding to sandbox worker
 [[services]]
 binding = "SANDBOX"
-service = "blob-agent-sandbox"
+service = "blob-sandbox"
 environment = "production"
 
 [ai] 

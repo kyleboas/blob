@@ -1,4 +1,4 @@
-name = "blob-agent-sandbox"
+name = "blob-sandbox"
 main = "src/sandbox-worker.ts"
 compatibility_date = "2026-02-19"
 compatibility_flags = ["nodejs_compat"]
@@ -15,10 +15,6 @@ class_name = "Sandbox"
 [[migrations]]
 tag = "v1"
 new_classes = ["Sandbox"]
-
-[[migrations]]
-tag = "v2"
-deleted_classes = ["AgentDO"]
 
 [observability.logs]
 enabled = true
