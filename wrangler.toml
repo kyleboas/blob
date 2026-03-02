@@ -7,10 +7,6 @@ compatibility_flags = ["nodejs_compat"]
 name = "AGENT_DO"
 class_name = "AgentDO"
 
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["AgentDO"]
-
 [[r2_buckets]]
 binding = "REPO_STORE"
 bucket_name = "blob-repo-store"
@@ -21,7 +17,7 @@ binding = "SANDBOX"
 service = "blob-agent-sandbox"
 environment = "production"
 
-[ai] 
+[ai]
 binding = "AI"
 
 [observability.logs]
