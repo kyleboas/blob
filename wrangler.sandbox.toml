@@ -16,5 +16,9 @@ class_name = "Sandbox"
 tag = "v1"
 new_classes = ["Sandbox"]
 
+[[migrations]]
+tag = "v2"
+deleted_classes = ["AgentDO"]
+
 [observability.logs]
 enabled = true
