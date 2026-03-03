@@ -49,7 +49,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: '4'
-          command: vectorize create pi-memory --dimensions=384 --metric=cosine
+          command: vectorize create blob-vectors --dimensions=384 --metric=cosine
         continue-on-error: true
 
       - name: Deploy to Cloudflare
