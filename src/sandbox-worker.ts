@@ -24,7 +24,11 @@ export class Sandbox extends SandboxDO {
     try {
       console.log("[alarm] fired", new Date().toISOString());
       // super.alarm expects a context; Cloudflare doesn't pass one to your override.
-      await withTimeout((super as any).alarm({ isRetry: false }), 30_000, "alarm super.alarm()");
+      await withTimeout(
+        (super.alarm as unknown as (arg: any) => Promise<void>)({ isRetry: false }),
+        30_000,
+        "alarm super.alarm()"
+      );
     } catch (err: unknown) {
       const error = err instanceof Error ? err : new Error(String(err));
       console.error("[alarm] failed", {
