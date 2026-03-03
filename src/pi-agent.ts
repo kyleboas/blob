@@ -23,9 +23,8 @@ const SYSTEM_PROMPT = `You are a helpful coding assistant. You have 4 core tools
 3. edit(path, oldText, newText) - Replace text in file
 4. bash(command) - Execute shell command
 
-You can also write and load extensions:
-5. extension(name, content) - Write a bash extension to .blob/extensions/
-6. load(name) - Load an extension via source command
+You also have persistent memory:
+5. memory(cmd, key, value?) - Memory operations: set, get, list, delete
 
 Extensions are bash scripts that add new capabilities. Write them to extend your abilities.
 
@@ -151,6 +150,8 @@ export class PiAgent {
         return await this.toolExtension(toolCall.args.name, toolCall.args.content);
       case "load":
         return await this.toolLoad(toolCall.args.name);
+      case "memory":
+        return await this.toolMemory(toolCall.args.cmd, toolCall.args.key, toolCall.args.value);
       default:
         return { output: "", error: `Unknown tool: ${toolCall.tool}` };
     }
@@ -228,6 +229,40 @@ export class PiAgent {
       this.loadedExtensions.add(name);
       
       return { output: result.stdout };
+    } catch (e) {
+      return { output: "", error: String(e) };
+    }
+  }
+
+  // Persistent memory via Cloudflare KV
+  private async toolMemory(cmd: string, key?: string, value?: string): Promise<ToolResult> {
+    const prefix = `pi:${this.repo}:`;
+    
+    try {
+      switch (cmd) {
+        case "set":
+          if (!key) return { output: "", error: "Key required" };
+          await this.env.PI_MEMORY.put(`${prefix}${key}`, value || "");
+          return { output: `Set ${key}` };
+          
+        case "get":
+          if (!key) return { output: "", error: "Key required" };
+          const val = await this.env.PI_MEMORY.get(`${prefix}${key}`);
+          return { output: val || "" };
+          
+        case "list":
+          const keys = await this.env.PI_MEMORY.list({ prefix });
+          const keyList = keys.keys.map(k => k.name.replace(prefix, "")).join("\n");
+          return { output: keyList || "No memory keys" };
+          
+        case "delete":
+          if (!key) return { output: "", error: "Key required" };
+          await this.env.PI_MEMORY.delete(`${prefix}${key}`);
+          return { output: `Deleted ${key}` };
+          
+        default:
+          return { output: "", error: `Unknown memory command: ${cmd}` };
+      }
     } catch (e) {
       return { output: "", error: String(e) };
     }

@@ -20,6 +20,11 @@ binding = "SANDBOX"
 service = "blob-sandbox"
 environment = "production"
 
+# Persistent memory for PiAgent
+[[kv_namespaces]]
+binding = "PI_MEMORY"
+id = "your-kv-namespace-id"
+
 [ai]
 binding = "AI"
 

@@ -10,13 +10,16 @@ export interface SandboxService {
 export interface Env {
   // Main agent DO
   AGENT_DO: DurableObjectNamespace;
-  
+
   // Service binding to sandbox worker (WorkerEntrypoint methods)
   SANDBOX: SandboxService;
-  
+
   // R2 Bucket
   REPO_STORE: R2Bucket;
-  
+
+  // Persistent memory for PiAgent
+  PI_MEMORY: KVNamespace;
+
   // Workers AI binding
   AI?: {
     run: (
@@ -24,7 +27,7 @@ export interface Env {
       inputs: { messages: Array<{ role: string; content: string }>; max_tokens: number }
     ) => Promise<{ response?: string }>;
   };
-  
+
   // Secrets / vars
   GITHUB_TOKEN?: string;
   AI_GATEWAY_TOKEN?: string;
