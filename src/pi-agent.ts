@@ -215,7 +215,11 @@ Be concise. Don't ask for confirmation. Just do it.${guidelines ? `\n\n${guideli
       });
     }
 
-    return "Reached maximum iterations. Task may be incomplete.";
+    // Max iterations reached - ask LLM to summarize what was accomplished
+    this.messages.push({ role: "user", content: "Please provide your final answer now. Do not call any more tools." });
+    const finalResponse = await this.callLLM();
+    this.messages.push({ role: "assistant", content: finalResponse });
+    return finalResponse || "Reached maximum iterations. Task may be incomplete.";
   }
 
   private async autoLoadExtensions(): Promise<void> {
