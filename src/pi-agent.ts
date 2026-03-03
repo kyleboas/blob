@@ -1,4 +1,4 @@
-// pi-agent.ts - Minimal Pi-style agent with 4 tools: read, write, edit, bash
+// pi-agent.ts - Minimal Pi-style agent with 4 tools + extension system
 // Inspired by https://github.com/badlogic/pi-mono/ and https://lucumr.pocoo.org/2026/1/31/pi/
 
 import type { Env } from "./types";
@@ -13,13 +13,21 @@ interface PiMessage {
   content: string;
 }
 
-// System prompt - minimal, like Pi
-const SYSTEM_PROMPT = `You are a helpful coding assistant. You have 4 tools:
+const EXTENSIONS_DIR = "/workspace/.blob/extensions";
+
+// System prompt - minimal, like Pi, with extension support
+const SYSTEM_PROMPT = `You are a helpful coding assistant. You have 4 core tools:
 
 1. read(path) - Read file contents
 2. write(path, content) - Write file (overwrites)
 3. edit(path, oldText, newText) - Replace text in file
 4. bash(command) - Execute shell command
+
+You can also write and load extensions:
+5. extension(name, content) - Write a bash extension to .blob/extensions/
+6. load(name) - Load an extension via source command
+
+Extensions are bash scripts that add new capabilities. Write them to extend your abilities.
 
 When you need to use a tool, output:
 TOOL: tool_name
@@ -30,6 +38,7 @@ Be concise. Don't ask for confirmation. Just do it.`;
 
 export class PiAgent {
   private messages: PiMessage[] = [];
+  private loadedExtensions: Set<string> = new Set();
   
   constructor(
     private env: Env,
@@ -39,6 +48,9 @@ export class PiAgent {
   }
 
   async run(userMessage: string): Promise<string> {
+    // Auto-load existing extensions
+    await this.autoLoadExtensions();
+    
     this.messages.push({ role: "user", content: userMessage });
     
     let iterations = 0;
@@ -70,6 +82,23 @@ export class PiAgent {
     }
     
     return "Reached maximum iterations. Task may be incomplete.";
+  }
+
+  private async autoLoadExtensions(): Promise<void> {
+    try {
+      // List extensions directory
+      const result = await this.env.SANDBOX.exec(`ls -1 ${EXTENSIONS_DIR}/*.sh 2>/dev/null || echo "No extensions"`);
+      const files = result.stdout.split("\n").filter(f => f.endsWith(".sh"));
+      
+      for (const file of files) {
+        const name = file.replace(".sh", "").split("/").pop();
+        if (name && !this.loadedExtensions.has(name)) {
+          await this.toolLoad(name);
+        }
+      }
+    } catch {
+      // No extensions yet
+    }
   }
 
   private async callLLM(): Promise<string> {
@@ -118,6 +147,10 @@ export class PiAgent {
         return await this.toolEdit(toolCall.args.path, toolCall.args.oldText, toolCall.args.newText);
       case "bash":
         return await this.toolBash(toolCall.args.command);
+      case "extension":
+        return await this.toolExtension(toolCall.args.name, toolCall.args.content);
+      case "load":
+        return await this.toolLoad(toolCall.args.name);
       default:
         return { output: "", error: `Unknown tool: ${toolCall.tool}` };
     }
@@ -162,6 +195,39 @@ export class PiAgent {
         output: result.stdout,
         error: result.stderr || undefined
       };
+    } catch (e) {
+      return { output: "", error: String(e) };
+    }
+  }
+
+  private async toolExtension(name: string, content: string): Promise<ToolResult> {
+    try {
+      // Ensure extensions dir exists
+      await this.env.SANDBOX.exec(`mkdir -p ${EXTENSIONS_DIR}`);
+      
+      // Write extension
+      const extPath = `${EXTENSIONS_DIR}/${name}.sh`;
+      await this.env.SANDBOX.writeFile(extPath, content);
+      
+      // Auto-load it
+      await this.toolLoad(name);
+      
+      return { output: `Extension ${name} written and loaded` };
+    } catch (e) {
+      return { output: "", error: String(e) };
+    }
+  }
+
+  private async toolLoad(name: string): Promise<ToolResult> {
+    try {
+      const extPath = `${EXTENSIONS_DIR}/${name}.sh`;
+      
+      // Source the extension in bash
+      const result = await this.env.SANDBOX.exec(`source ${extPath} && echo "Extension ${name} loaded"`);
+      
+      this.loadedExtensions.add(name);
+      
+      return { output: result.stdout };
     } catch (e) {
       return { output: "", error: String(e) };
     }
