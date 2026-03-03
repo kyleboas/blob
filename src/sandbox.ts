@@ -184,7 +184,18 @@ export async function startCodexLogin(env: Env): Promise<{ url: string; code?: s
 
 // Save Codex auth to persistent storage
 export async function saveCodexAuth(env: Env): Promise<{ saved: boolean; message: string }> {
-  await writeFileWithRetry(env, "/root/.codex/auth.json", "{}");
+  const copy = await execWithRetry(
+    env,
+    "mkdir -p /workspace/.codex-auth && cp /root/.codex/auth.json /workspace/.codex-auth/auth.json",
+  );
+
+  if (copy.exitCode !== 0) {
+    return {
+      saved: false,
+      message: copy.stderr || "Failed to save auth",
+    };
+  }
+
   return { saved: true, message: "Auth saved" };
 }
 
@@ -193,6 +204,133 @@ export async function readSandboxFile(path: string, env: Env): Promise<string> {
 }
 
 // Run Codex with a prompt
+
+export async function ensureRepoReady(repo: string, env: Env): Promise<SandboxResult> {
+  const safeRepo = repo.replace(/[^a-zA-Z0-9._\/-]/g, "");
+  if (!safeRepo.includes("/")) {
+    throw new Error(`Repository must be in owner/repo format. Received: ${repo}`);
+  }
+
+  const command = [
+    "set -e",
+    "mkdir -p /workspace",
+    "cd /workspace",
+    `if [ ! -d ${safeRepo}/.git ]; then git clone https://github.com/${safeRepo}.git ${safeRepo}; fi`,
+    `cd ${safeRepo}`,
+    "git fetch --all --prune",
+    "git checkout -f main || git checkout -f master || true",
+    "git pull --ff-only || true",
+    "git config user.name 'blob-agent'",
+    "git config user.email 'blob-agent@local'",
+  ].join(" && ");
+
+  return execWithRetry(env, command);
+}
+
+
+export interface RepoFinalizeResult {
+  changed: boolean;
+  committed: boolean;
+  pushed: boolean;
+  branch?: string;
+  commit?: string;
+  message: string;
+}
+
+export async function finalizeRepoChanges(
+  repo: string,
+  env: Env,
+  opts: { commitMessage?: string } = {},
+): Promise<RepoFinalizeResult> {
+  const safeRepo = repo.replace(/[^a-zA-Z0-9._\/-]/g, "");
+  if (!safeRepo.includes("/")) {
+    throw new Error(`Repository must be in owner/repo format. Received: ${repo}`);
+  }
+
+  const cleanMsg = (opts.commitMessage ?? "blob: autonomous update")
+    .replace(/[^a-zA-Z0-9 .,_:-]/g, " ")
+    .trim()
+    .slice(0, 120) || "blob: autonomous update";
+
+  const status = await execWithRetry(
+    env,
+    `cd /workspace/${safeRepo} && git status --porcelain`,
+  );
+
+  if (!status.stdout.trim()) {
+    return {
+      changed: false,
+      committed: false,
+      pushed: false,
+      message: "No file changes produced by autonomous run",
+    };
+  }
+
+  const branchName = `blob/auto-${Date.now()}`;
+  const commitStep = await execWithRetry(
+    env,
+    [
+      `cd /workspace/${safeRepo}`,
+      `git checkout -B ${branchName}`,
+      "git add -A",
+      `git commit -m "${cleanMsg}"`,
+      "git rev-parse HEAD",
+    ].join(" && "),
+  );
+
+  if (commitStep.exitCode !== 0) {
+    return {
+      changed: true,
+      committed: false,
+      pushed: false,
+      branch: branchName,
+      message: commitStep.stderr || commitStep.stdout || "Commit failed",
+    };
+  }
+
+  const commitSha = commitStep.stdout.trim().split("\n").pop() || "";
+
+  if (!env.GITHUB_TOKEN) {
+    return {
+      changed: true,
+      committed: true,
+      pushed: false,
+      branch: branchName,
+      commit: commitSha,
+      message: "Committed locally. Skipped push because GITHUB_TOKEN is not configured",
+    };
+  }
+
+  const push = await execWithRetry(
+    env,
+    [
+      `cd /workspace/${safeRepo}`,
+      "export GIT_ASKPASS=/usr/local/bin/blob-git-askpass",
+      `git push -u origin ${branchName}`,
+    ].join(" && "),
+  );
+
+  if (push.exitCode !== 0) {
+    return {
+      changed: true,
+      committed: true,
+      pushed: false,
+      branch: branchName,
+      commit: commitSha,
+      message: push.stderr || push.stdout || "Push failed",
+    };
+  }
+
+  return {
+    changed: true,
+    committed: true,
+    pushed: true,
+    branch: branchName,
+    commit: commitSha,
+    message: `Pushed ${branchName}`,
+  };
+}
+
 export async function runCodex(
   prompt: string,
   env: Env,

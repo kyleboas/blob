@@ -34,4 +34,11 @@ export interface Env {
   SLACK_BOT_TOKEN?: string;
   CLOUDFLARE_API_TOKEN?: string;
   ACCOUNT_ID?: string;
+
+  // Optional memory bindings for Pi tooling. Some deployments use BLOB_* names,
+  // others use PI_* names.
+  PI_MEMORY?: KVNamespace;
+  BLOB_MEMORY?: KVNamespace;
+  PI_VECTORS?: VectorizeIndex;
+  BLOB_VECTORS?: VectorizeIndex;
 }

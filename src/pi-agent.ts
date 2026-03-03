@@ -415,19 +415,33 @@ Be concise. Don't ask for confirmation. Just do it.${guidelines ? `\n\n${guideli
     }
   }
 
+  private getMemoryStore(): KVNamespace | null {
+    return this.env.PI_MEMORY ?? this.env.BLOB_MEMORY ?? null;
+  }
+
+  private getVectorStore(): VectorizeIndex | null {
+    return this.env.PI_VECTORS ?? this.env.BLOB_VECTORS ?? null;
+  }
+
   // Persistent memory: KV for exact lookup, Vectorize for semantic search
   private async toolMemory(cmd: string, key?: string, value?: string): Promise<ToolResult> {
     const prefix = `pi:${this.repo}:`;
+    const memory = this.getMemoryStore();
+    const vectors = this.getVectorStore();
+
+    if (!memory) {
+      return { output: "", error: "KV memory binding not available" };
+    }
 
     try {
       switch (cmd) {
         case "set": {
           if (!key) return { output: "", error: "Key required" };
-          await this.env.PI_MEMORY.put(`${prefix}${key}`, value || "");
-          if (value && this.env.PI_VECTORS) {
+          await memory.put(`${prefix}${key}`, value || "");
+          if (value && vectors) {
             const vector = await this.embed(`${key}: ${value}`);
             if (vector) {
-              await this.env.PI_VECTORS.upsert([{
+              await vectors.upsert([{
                 id: `${this.repo}:${key}`,
                 values: vector,
                 metadata: { repo: this.repo, key, text: value, ts: Date.now() },
@@ -439,37 +453,37 @@ Be concise. Don't ask for confirmation. Just do it.${guidelines ? `\n\n${guideli
 
         case "get": {
           if (!key) return { output: "", error: "Key required" };
-          const val = await this.env.PI_MEMORY.get(`${prefix}${key}`);
+          const val = await memory.get(`${prefix}${key}`);
           return { output: val || "" };
         }
 
         case "list": {
-          const keys = await this.env.PI_MEMORY.list({ prefix });
-          const keyList = keys.keys.map(k => k.name.replace(prefix, "")).join("\n");
+          const keys = await memory.list({ prefix });
+          const keyList = keys.keys.map((k: { name: string }) => k.name.replace(prefix, "")).join("\n");
           return { output: keyList || "No memory keys" };
         }
 
         case "delete": {
           if (!key) return { output: "", error: "Key required" };
-          await this.env.PI_MEMORY.delete(`${prefix}${key}`);
-          if (this.env.PI_VECTORS) {
-            await this.env.PI_VECTORS.deleteByIds([`${this.repo}:${key}`]);
+          await memory.delete(`${prefix}${key}`);
+          if (vectors) {
+            await vectors.deleteByIds([`${this.repo}:${key}`]);
           }
           return { output: `Deleted ${key}` };
         }
 
         case "search": {
           if (!key) return { output: "", error: "Query required" };
-          if (!this.env.PI_VECTORS) return { output: "", error: "Vectorize not available" };
+          if (!vectors) return { output: "", error: "Vectorize not available" };
           const vector = await this.embed(key);
           if (!vector) return { output: "", error: "Failed to embed query" };
-          const results = await this.env.PI_VECTORS.query(vector, {
+          const results = await vectors.query(vector, {
             topK: 5,
             filter: { repo: this.repo },
             returnMetadata: "all",
           });
           if (!results.matches.length) return { output: "No relevant memories found" };
-          const lines = results.matches.map(m => {
+          const lines = results.matches.map((m: VectorizeMatch) => {
             const meta = m.metadata as { key: string; text: string; ts: number } | undefined;
             const score = m.score.toFixed(3);
             return `[${score}] ${meta?.key ?? m.id}: ${meta?.text ?? ""}`;
