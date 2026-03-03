@@ -142,7 +142,7 @@ Be concise. Don't ask for confirmation. Just do it.${guidelines ? `\n\n${guideli
         command: { type: "string", description: "Shell command to execute" },
       },
       promptSnippet: "bash(command) - Execute shell command",
-      promptGuidelines: "For real-time data (weather, time, etc.), use bash to fetch it (e.g., curl wttr.in for weather). Do not say you lack real-time access.",
+      promptGuidelines: "For real-time data (weather, time, etc.), use bash to fetch it (e.g., curl wttr.in for weather). Do not say you lack real-time access. If a fetch fails or requires authentication, answer from your training knowledge and note it may not be current — do not retry with different URLs.",
       handler: async (args) => this.toolBash(args.command as string),
     });
 
