@@ -22,12 +22,12 @@ environment = "production"
 
 # Persistent memory for PiAgent
 [[kv_namespaces]]
-binding = "PI_MEMORY"
-id = "your-kv-namespace-id"
+binding = "BLOB_MEMORY"
+id = "blob-memory"
 
 [[vectorize]]
-binding = "PI_VECTORS"
-index_name = "pi-memory"
+binding = "BLOB_VECTORS"
+index_name = "blob-vectors"
 
 [ai]
 binding = "AI"
