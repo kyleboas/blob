@@ -2,6 +2,7 @@
 // Inspired by https://github.com/badlogic/pi-mono/ and https://lucumr.pocoo.org/2026/1/31/pi/
 
 import type { Env } from "./types";
+import { DEFAULT_MODEL } from "./models";
 
 interface ToolResult {
   output: string;
@@ -247,6 +248,7 @@ Be concise. Don't ask for confirmation. Just do it.${guidelines ? `\n\n${guideli
           "cf-aig-cache-ttl": "3600", // Cache identical requests for 1 hour
         },
         body: JSON.stringify({
+          model: DEFAULT_MODEL,
           messages: this.messages,
           tools: this.buildToolsParam(),
         }),
