@@ -67,7 +67,9 @@ export class PiAgent {
       .map(t => t.promptGuidelines!)
       .join("\n\n");
 
-    return `You are a helpful coding assistant.
+    return `You are a helpful coding assistant working in an isolated sandbox container.
+All files live under /workspace/${this.repo}/. Always use relative paths with the file tools (e.g. src/index.ts, not /workspace/${this.repo}/src/index.ts).
+Shell commands run inside the container with /workspace/${this.repo} as the working directory.
 
 Available tools:
 ${toolLines}
@@ -232,6 +234,47 @@ Be concise. Don't ask for confirmation. Just do it.${guidelines ? `\n\n${guideli
   }
 
   private async callLLM(): Promise<string> {
+    // Use AI Gateway when configured (OpenAI-compatible, supports tools natively)
+    if (this.env.AI_GATEWAY_BASE_URL && this.env.AI_GATEWAY_TOKEN) {
+      const baseUrl = this.env.AI_GATEWAY_BASE_URL.replace(/\/$/, '');
+      const url = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "Authorization": `Bearer ${this.env.AI_GATEWAY_TOKEN}`,
+        },
+        body: JSON.stringify({
+          messages: this.messages,
+          tools: this.buildToolsParam(),
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`LLM error: ${response.status} ${text}`);
+      }
+
+      const data = await response.json() as {
+        choices?: Array<{
+          message?: {
+            content?: string;
+            tool_calls?: Array<{ function: { name: string; arguments: string } }>;
+          };
+        }>;
+      };
+
+      const msg = data.choices?.[0]?.message;
+      // Native tool call - convert to text format for uniform parsing
+      if (msg?.tool_calls?.length) {
+        const call = msg.tool_calls[0].function;
+        return `TOOL: ${call.name}\nARG: ${call.arguments}`;
+      }
+      return msg?.content ?? "";
+    }
+
+    // Fallback: Workers AI direct endpoint
     const response = await fetch(
       `https://api.cloudflare.com/client/v4/accounts/${this.env.ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`,
       {
@@ -260,7 +303,7 @@ Be concise. Don't ask for confirmation. Just do it.${guidelines ? `\n\n${guideli
       return `TOOL: ${call.name}\nARG: ${JSON.stringify(call.arguments)}`;
     }
 
-    return data.result?.response ?? "No response from LLM";
+    return data.result?.response ?? "";
   }
 
   private parseToolCall(response: string): { tool: string; args: Record<string, unknown> } | null {
