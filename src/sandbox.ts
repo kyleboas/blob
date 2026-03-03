@@ -192,6 +192,10 @@ export async function readSandboxFile(path: string, env: Env): Promise<string> {
   return readFileWithRetry(env, path);
 }
 
+export async function writeSandboxFile(path: string, content: string, env: Env): Promise<void> {
+  return writeFileWithRetry(env, path, content);
+}
+
 // Run Codex with a prompt
 export async function runCodex(
   prompt: string,

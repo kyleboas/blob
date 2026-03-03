@@ -17,6 +17,24 @@ interface LLMResponse {
   modelSwitched: boolean;
 }
 
+export interface ToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+export type ChatMessage =
+  | { role: "system" | "user"; content: string }
+  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
+  | { role: "tool"; tool_call_id: string; content: string };
+
+export interface ModelSelection {
+  modelId: string;
+  modelName: string;
+  maxTokens: number;
+  modelSwitched: boolean;
+}
+
 async function getCachedCatalog(env: Env): Promise<Record<string, CatalogModel>> {
   if (catalogCache && Date.now() - catalogCache.timestamp < CACHE_TTL) {
     return catalogCache.catalog;
@@ -144,6 +162,60 @@ async function callLLMRaw(
   }
   
   return data.choices[0]?.message?.content ?? "";
+}
+
+export async function getModelSelection(userMessage: string, env: Env): Promise<ModelSelection> {
+  // On a cold worker, skip the catalog DO fetch for non-difficult messages — they
+  // route to the default model anyway, and the round-trip adds ~100-200 ms latency.
+  if (!isDifficultTask(userMessage) && !catalogCache) {
+    return { modelId: DEFAULT_MODEL, modelName: DEFAULT_MODEL, maxTokens: 4096, modelSwitched: false };
+  }
+  const catalog = await getCachedCatalog(env);
+  const selection = pickModel(catalog, userMessage);
+  return { ...selection, modelSwitched: selection.modelId !== DEFAULT_MODEL };
+}
+
+export async function callLLMStep(
+  messages: ChatMessage[],
+  tools: object[],
+  modelId: string,
+  maxTokens: number,
+  env: Env,
+): Promise<{ content: string | null; tool_calls?: ToolCall[] }> {
+  if (!env.AI_GATEWAY_BASE_URL || !env.AI_GATEWAY_TOKEN) {
+    // Workers AI fallback — no tool support, flatten messages to simple format
+    const ai = (env as any).AI as { run: (model: string, inputs: { messages: Array<{ role: string; content: string }>; max_tokens: number }) => Promise<{ response?: string }> };
+    if (!ai) throw new Error("Neither AI Gateway nor Workers AI available");
+    const flat = messages
+      .filter(m => m.role !== "tool")
+      .map(m => ({ role: m.role === "assistant" ? "assistant" : m.role, content: (m as any).content ?? "" }));
+    const result = await ai.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", { messages: flat, max_tokens: maxTokens });
+    return { content: result.response ?? "" };
+  }
+
+  const baseUrl = env.AI_GATEWAY_BASE_URL.replace(/\/$/, "");
+  const url = baseUrl.endsWith("/chat/completions") ? baseUrl : `${baseUrl}/chat/completions`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${env.AI_GATEWAY_TOKEN}`,
+    },
+    body: JSON.stringify({ model: modelId, messages, tools, max_tokens: maxTokens }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`LLM error: ${response.status} ${text}`);
+  }
+
+  const data = await response.json() as {
+    choices?: Array<{ message?: { content?: string | null; tool_calls?: ToolCall[] } }>;
+  };
+  if (!data.choices?.length) throw new Error("No choices in LLM response");
+  const msg = data.choices[0].message;
+  return { content: msg?.content ?? null, tool_calls: msg?.tool_calls };
 }
 
 // Simple call without model selection
