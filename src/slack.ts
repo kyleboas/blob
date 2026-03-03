@@ -1,8 +1,147 @@
 import type { Env } from "./types";
 import { getRepos } from "./storage";
-import { callLLMWithModelSelection, callLLM } from "./llm";
+import { callLLMWithModelSelection, callLLM, callLLMStep, getModelSelection, type ToolCall, type ChatMessage } from "./llm";
 import { getCronJobs, addCronJob, deleteCronJob } from "./cron";
-import { startCodexLogin, saveCodexAuth, runCodex, sandboxStatus, executeInSandbox } from "./sandbox";
+import { startCodexLogin, saveCodexAuth, runCodex, sandboxStatus, executeInSandbox, readSandboxFile, writeSandboxFile } from "./sandbox";
+
+const TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "bash",
+      description: "Execute a bash command in the sandbox. Use for real-time data (date, curl, etc.) or file system operations.",
+      parameters: {
+        type: "object",
+        properties: {
+          command: { type: "string", description: "The bash command to run" },
+        },
+        required: ["command"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "read",
+      description: "Read the contents of a file from the sandbox filesystem.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Absolute file path to read" },
+        },
+        required: ["path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "write",
+      description: "Write content to a file in the sandbox filesystem.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Absolute file path to write" },
+          content: { type: "string", description: "Content to write to the file" },
+        },
+        required: ["path", "content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "edit",
+      description: "Edit a file by replacing a specific string with new text.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Absolute file path to edit" },
+          old: { type: "string", description: "Exact text to find and replace" },
+          new: { type: "string", description: "Replacement text" },
+        },
+        required: ["path", "old", "new"],
+      },
+    },
+  },
+];
+
+async function executeTool(toolCall: ToolCall, env: Env): Promise<string> {
+  const { name, arguments: argsStr } = toolCall.function;
+  let args: Record<string, string>;
+  try {
+    args = JSON.parse(argsStr);
+  } catch {
+    return `Error: Could not parse tool arguments: ${argsStr}`;
+  }
+
+  try {
+    switch (name) {
+      case "bash": {
+        const result = await executeInSandbox(args.command, env);
+        return (result.stdout || result.stderr || "(no output)").slice(0, 4000);
+      }
+      case "read": {
+        const content = await readSandboxFile(args.path, env);
+        return content.slice(0, 4000);
+      }
+      case "write": {
+        await writeSandboxFile(args.path, args.content, env);
+        return `Written ${args.path}`;
+      }
+      case "edit": {
+        const content = await readSandboxFile(args.path, env);
+        if (!content.includes(args.old)) {
+          return `Error: Text not found in ${args.path}`;
+        }
+        await writeSandboxFile(args.path, content.replace(args.old, args.new), env);
+        return `Edited ${args.path}`;
+      }
+      default:
+        return `Unknown tool: ${name}`;
+    }
+  } catch (err) {
+    return `Error: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+const MAX_TOOL_ITERATIONS = 5;
+
+async function runChatWithTools(
+  systemPrompt: string,
+  userText: string,
+  env: Env,
+): Promise<{ content: string; modelUsed: string; modelSwitched: boolean }> {
+  const selection = await getModelSelection(userText, env);
+  const messages: ChatMessage[] = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userText },
+  ];
+
+  for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
+    const step = await callLLMStep(messages, TOOLS, selection.modelId, selection.maxTokens, env);
+
+    if (!step.tool_calls?.length) {
+      return {
+        content: step.content ?? "",
+        modelUsed: selection.modelName,
+        modelSwitched: selection.modelSwitched,
+      };
+    }
+
+    messages.push({ role: "assistant", content: step.content ?? null, tool_calls: step.tool_calls });
+    for (const tc of step.tool_calls) {
+      const result = await executeTool(tc, env);
+      messages.push({ role: "tool", tool_call_id: tc.id, content: result });
+    }
+  }
+
+  return {
+    content: "I reached the maximum number of tool uses. Please try a more specific request.",
+    modelUsed: selection.modelName,
+    modelSwitched: selection.modelSwitched,
+  };
+}
 
 // Track in-flight events to prevent race conditions
 const inFlightEvents = new Set<string>();
@@ -317,13 +456,10 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
     // Build system prompt
     const systemPrompt = `You are Blob, a helpful AI assistant. You can chat, answer questions, help with coding, and manage repositories: ${reposContext}.
 
-Be concise and helpful. Answer questions directly based on your knowledge.`;
+You have tools available: bash (run shell commands), read (read files), write (write files), edit (find-and-replace in files). Use them when needed — for example, run "date" for the current time or "curl" for live data. Be concise and helpful.`;
 
     try {
-      const result = await callLLMWithModelSelection([
-        { role: "system", content: systemPrompt },
-        { role: "user", content: originalText }
-      ], env, { maxTokens: 2000 });
+      const result = await runChatWithTools(systemPrompt, originalText, env);
 
       const prefix = result.modelSwitched ? `🤖 (using ${result.modelUsed})\n` : "";
       await postToSlack(channel, prefix + result.content, env);
