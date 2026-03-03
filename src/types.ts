@@ -24,9 +24,14 @@ export interface Env {
   AI?: {
     run: (
       model: string,
-      inputs: { messages: Array<{ role: string; content: string }>; max_tokens: number }
-    ) => Promise<{ response?: string }>;
+      inputs:
+        | { messages: Array<{ role: string; content: string }>; max_tokens: number }
+        | { text: string | string[] }
+    ) => Promise<{ response?: string } | { data: number[][] }>;
   };
+
+  // Vectorize index for semantic memory
+  PI_VECTORS?: VectorizeIndex;
 
   // Secrets / vars
   GITHUB_TOKEN?: string;
