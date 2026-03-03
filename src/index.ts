@@ -92,8 +92,4 @@ export default {
   }
 };
 
-// Keep this export in the main bundle so CI `wrangler versions upload` remains compatible
-// even when connected builds override the target worker name to `blob-sandbox`.
-export class Sandbox extends SandboxDO {}
-
 export { AgentDO };

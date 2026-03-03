@@ -17,9 +17,6 @@ export interface Env {
   // R2 Bucket
   REPO_STORE: R2Bucket;
 
-  // Persistent memory for PiAgent
-  PI_MEMORY: KVNamespace;
-
   // Workers AI binding
   AI?: {
     run: (
@@ -29,9 +26,6 @@ export interface Env {
         | { text: string | string[] }
     ) => Promise<{ response?: string } | { data: number[][] }>;
   };
-
-  // Vectorize index for semantic memory
-  PI_VECTORS?: VectorizeIndex;
 
   // Secrets / vars
   GITHUB_TOKEN?: string;
