@@ -7,8 +7,36 @@ import {
 } from "@cloudflare/sandbox";
 import { WorkerEntrypoint } from "cloudflare:workers";
 
+function withTimeout<T>(p: Promise<T>, ms: number, label = "timeout"): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} after ${ms}ms`)), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); },
+    );
+  });
+}
+
 // Wrangler "class_name = Sandbox" will look for this exact export.
-export class Sandbox extends SandboxDO {}
+export class Sandbox extends SandboxDO {
+  async alarm(): Promise<void> {
+    const startedAt = Date.now();
+    try {
+      console.log("[alarm] fired", new Date().toISOString());
+      await withTimeout(super.alarm(), 30_000, "alarm super.alarm()");
+    } catch (err: unknown) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      console.error("[alarm] failed", {
+        msg: error.message,
+        stack: error.stack,
+        name: error.name,
+      });
+      throw error;
+    } finally {
+      console.log("[alarm] done", { ms: Date.now() - startedAt });
+    }
+  }
+}
 
 interface Env {
   Sandbox: DurableObjectNamespace<SandboxType>;
