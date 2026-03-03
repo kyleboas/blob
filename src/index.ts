@@ -15,31 +15,31 @@ function json(data: unknown, status = 200): Response {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    
+
     // Sandbox health check
     if (url.pathname === "/sandbox/health") {
       try {
         // Test RPC method
         const result = await executeInSandbox("echo 'sandbox is alive'", env);
-        return json({ 
-          ok: true, 
+        return json({
+          ok: true,
           sandbox: "connected",
           execResult: result.stdout
         });
       } catch (e) {
-        return json({ 
-          ok: false, 
-          sandbox: "error", 
-          error: String(e) 
+        return json({
+          ok: false,
+          sandbox: "error",
+          error: String(e)
         }, 503);
       }
     }
-    
+
     // Main worker routes only
     if (url.pathname === "/slack/events") {
-      return handleSlackEvent(request, env);
+      return handleSlackEvent(request, env, ctx);
     }
     
     if (url.pathname === "/repos" && request.method === "GET") {
