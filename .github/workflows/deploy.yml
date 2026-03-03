@@ -62,23 +62,40 @@ jobs:
           # Ensure wrangler v4 is available for the run steps
           npx --yes wrangler@4 --version
 
-          # --- KV: prod namespace ---
-          PROD_ID="$(npx --yes wrangler@4 kv namespace list --json \
-            | jq -r '.[] | select(.title=="blob-memory") | .id' | head -n1 || true)"
+          API_BASE="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces"
 
-          if [ -z "${PROD_ID:-}" ] || [ "${PROD_ID}" = "null" ]; then
-            echo "Creating KV namespace: blob-memory"
-            PROD_ID="$(npx --yes wrangler@4 kv namespace create blob-memory --json | jq -r '.id')"
-          fi
+          ensure_namespace() {
+            local namespace_title="$1"
+            local namespace_id
 
-          # --- KV: preview namespace (separate namespace name) ---
-          PREVIEW_ID="$(npx --yes wrangler@4 kv namespace list --json \
-            | jq -r '.[] | select(.title=="blob-memory-preview") | .id' | head -n1 || true)"
+            namespace_id="$(curl -fsS \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              "${API_BASE}?per_page=100" \
+              | jq -r --arg title "${namespace_title}" '.result[] | select(.title==$title) | .id' \
+              | head -n1 || true)"
 
-          if [ -z "${PREVIEW_ID:-}" ] || [ "${PREVIEW_ID}" = "null" ]; then
-            echo "Creating KV namespace: blob-memory-preview"
-            PREVIEW_ID="$(npx --yes wrangler@4 kv namespace create blob-memory-preview --json | jq -r '.id')"
-          fi
+            if [ -z "${namespace_id:-}" ] || [ "${namespace_id}" = "null" ]; then
+              echo "Creating KV namespace: ${namespace_title}"
+              namespace_id="$(curl -fsS -X POST \
+                -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+                -H "Content-Type: application/json" \
+                "${API_BASE}" \
+                --data "$(jq -cn --arg title "${namespace_title}" '{title:$title}')" \
+                | jq -r '.result.id')"
+            fi
+
+            if [ -z "${namespace_id:-}" ] || [ "${namespace_id}" = "null" ]; then
+              echo "Failed to ensure namespace '${namespace_title}'" >&2
+              exit 1
+            fi
+
+            printf '%s\n' "${namespace_id}"
+          }
+
+          # --- KV: prod + preview namespaces ---
+          PROD_ID="$(ensure_namespace blob-memory)"
+          PREVIEW_ID="$(ensure_namespace blob-memory-preview)"
 
           echo "KV PROD_ID=${PROD_ID}"
           echo "KV PREVIEW_ID=${PREVIEW_ID}"
