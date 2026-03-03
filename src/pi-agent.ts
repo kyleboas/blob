@@ -244,6 +244,7 @@ Be concise. Don't ask for confirmation. Just do it.${guidelines ? `\n\n${guideli
         headers: {
           "content-type": "application/json",
           "Authorization": `Bearer ${this.env.AI_GATEWAY_TOKEN}`,
+          "cf-aig-cache-ttl": "3600", // Cache identical requests for 1 hour
         },
         body: JSON.stringify({
           messages: this.messages,
