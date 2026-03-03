@@ -24,7 +24,9 @@ const SYSTEM_PROMPT = `You are a helpful coding assistant. You have 4 core tools
 4. bash(command) - Execute shell command
 
 You also have persistent memory:
-5. memory(cmd, key, value?) - Memory operations: set, get, list, delete
+5. memory(cmd, key, value?) - Memory operations: set, get, list, delete, search
+   - set/get/list/delete: exact key-value operations
+   - search: semantic search, key is the natural language query (e.g. memory("search", "auth token setup"))
 
 Extensions are bash scripts that add new capabilities. Write them to extend your abilities.
 
@@ -234,32 +236,81 @@ export class PiAgent {
     }
   }
 
-  // Persistent memory via Cloudflare KV
+  // Generate embedding via Workers AI (bge-small-en-v1.5 = 384 dims, free tier)
+  private async embed(text: string): Promise<number[] | null> {
+    if (!this.env.AI) return null;
+    try {
+      const result = await this.env.AI.run("@cf/baai/bge-small-en-v1.5", { text }) as { data: number[][] };
+      return result.data?.[0] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Persistent memory: KV for exact lookup, Vectorize for semantic search
   private async toolMemory(cmd: string, key?: string, value?: string): Promise<ToolResult> {
     const prefix = `pi:${this.repo}:`;
-    
+
     try {
       switch (cmd) {
-        case "set":
+        case "set": {
           if (!key) return { output: "", error: "Key required" };
           await this.env.PI_MEMORY.put(`${prefix}${key}`, value || "");
+          // Also embed and upsert into Vectorize for semantic recall
+          if (value && this.env.PI_VECTORS) {
+            const vector = await this.embed(`${key}: ${value}`);
+            if (vector) {
+              await this.env.PI_VECTORS.upsert([{
+                id: `${this.repo}:${key}`,
+                values: vector,
+                metadata: { repo: this.repo, key, text: value, ts: Date.now() },
+              }]);
+            }
+          }
           return { output: `Set ${key}` };
-          
-        case "get":
+        }
+
+        case "get": {
           if (!key) return { output: "", error: "Key required" };
           const val = await this.env.PI_MEMORY.get(`${prefix}${key}`);
           return { output: val || "" };
-          
-        case "list":
+        }
+
+        case "list": {
           const keys = await this.env.PI_MEMORY.list({ prefix });
           const keyList = keys.keys.map(k => k.name.replace(prefix, "")).join("\n");
           return { output: keyList || "No memory keys" };
-          
-        case "delete":
+        }
+
+        case "delete": {
           if (!key) return { output: "", error: "Key required" };
           await this.env.PI_MEMORY.delete(`${prefix}${key}`);
+          if (this.env.PI_VECTORS) {
+            await this.env.PI_VECTORS.deleteByIds([`${this.repo}:${key}`]);
+          }
           return { output: `Deleted ${key}` };
-          
+        }
+
+        case "search": {
+          // key is reused as the search query here
+          if (!key) return { output: "", error: "Query required" };
+          if (!this.env.PI_VECTORS) return { output: "", error: "Vectorize not available" };
+          const vector = await this.embed(key);
+          if (!vector) return { output: "", error: "Failed to embed query" };
+          const results = await this.env.PI_VECTORS.query(vector, {
+            topK: 5,
+            filter: { repo: this.repo },
+            returnMetadata: "all",
+          });
+          if (!results.matches.length) return { output: "No relevant memories found" };
+          const lines = results.matches.map(m => {
+            const meta = m.metadata as { key: string; text: string; ts: number } | undefined;
+            const score = m.score.toFixed(3);
+            return `[${score}] ${meta?.key ?? m.id}: ${meta?.text ?? ""}`;
+          });
+          return { output: lines.join("\n") };
+        }
+
         default:
           return { output: "", error: `Unknown memory command: ${cmd}` };
       }
