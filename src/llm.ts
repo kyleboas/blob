@@ -124,6 +124,7 @@ async function callLLMRaw(
     headers: {
       "content-type": "application/json",
       "Authorization": `Bearer ${env.AI_GATEWAY_TOKEN}`,
+      "cf-aig-cache-ttl": "3600", // Cache identical requests for 1 hour
     },
     body: JSON.stringify({
       model: modelId,

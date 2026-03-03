@@ -95,7 +95,7 @@ export class AgentDO {
       this.data.messages.push({ role, content, timestamp: Date.now() });
 
       // Compact messages if too many
-      if (this.data.messages.length > 50) {
+      if (this.data.messages.length > 25) {
         await this.compactMessages();
       } else if (this.data.messages.length > 100) {
         this.data.messages = this.data.messages.slice(-100);
