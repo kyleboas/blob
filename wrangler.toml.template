@@ -20,10 +20,10 @@ binding = "SANDBOX"
 service = "blob-sandbox"
 environment = "production"
 
-# Persistent memory for PiAgent
 [[kv_namespaces]]
 binding = "BLOB_MEMORY"
-id = "blob-memory"
+id = "__BLOB_MEMORY_ID__"
+preview_id = "__BLOB_MEMORY_PREVIEW_ID__"
 
 [[vectorize]]
 binding = "BLOB_VECTORS"
