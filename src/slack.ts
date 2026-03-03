@@ -1,8 +1,8 @@
 import type { Env } from "./types";
 import { getRepos } from "./storage";
-import { callLLMWithModelSelection, callLLM, callLLMStep, getModelSelection, type ToolCall, type ChatMessage } from "./llm";
+import { callLLMStep, getModelSelection, type ToolCall, type ChatMessage } from "./llm";
 import { getCronJobs, addCronJob, deleteCronJob } from "./cron";
-import { startCodexLogin, saveCodexAuth, runCodex, sandboxStatus, executeInSandbox, readSandboxFile, writeSandboxFile } from "./sandbox";
+import { executeInSandbox, readSandboxFile, writeSandboxFile } from "./sandbox";
 
 const TOOLS = [
   {
@@ -64,6 +64,43 @@ const TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "list_cron",
+      description: "List all scheduled cron jobs.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "add_cron",
+      description: "Create a new scheduled cron job.",
+      parameters: {
+        type: "object",
+        properties: {
+          schedule: { type: "string", description: "Human schedule like 'every 5 minutes' or a cron expression" },
+          task: { type: "string", description: "Description of what to do" },
+        },
+        required: ["schedule", "task"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_cron",
+      description: "Delete a scheduled cron job by keyword match.",
+      parameters: {
+        type: "object",
+        properties: {
+          search: { type: "string", description: "Keyword that appears in the job description" },
+        },
+        required: ["search"],
+      },
+    },
+  },
 ];
 
 async function executeTool(toolCall: ToolCall, env: Env): Promise<string> {
@@ -96,6 +133,22 @@ async function executeTool(toolCall: ToolCall, env: Env): Promise<string> {
         }
         await writeSandboxFile(args.path, content.replace(args.old, args.new), env);
         return `Edited ${args.path}`;
+      }
+      case "list_cron": {
+        const jobs = await getCronJobs(env);
+        if (!jobs.length) return "No cron jobs configured.";
+        return jobs.map(j => `• ${j.id}: ${j.schedule} → ${j.task}`).join("\n");
+      }
+      case "add_cron": {
+        const ok = await addCronJob(env, args.schedule, args.task);
+        return ok ? `Cron job added: "${args.schedule}" → "${args.task}"` : "Failed to add cron job";
+      }
+      case "delete_cron": {
+        const jobs = await getCronJobs(env);
+        const job = jobs.find(j => j.task.toLowerCase().includes(args.search.toLowerCase()));
+        if (!job) return `No job matching "${args.search}" found`;
+        await deleteCronJob(env, job.id);
+        return `Deleted: ${job.task}`;
       }
       default:
         return `Unknown tool: ${name}`;
@@ -145,55 +198,6 @@ async function runChatWithTools(
 
 // Track in-flight events to prevent race conditions
 const inFlightEvents = new Set<string>();
-
-interface IntentResult {
-  intent: "list_cron" | "add_cron" | "delete_cron" | "codex_login" | "codex_run" | "chat";
-  schedule?: string;
-  task?: string;
-  search?: string;
-  prompt?: string;
-}
-
-const codexLoginRegex = /^(login to codex|login with codex|codex login|codex auth|connect openai)$/i;
-const codexRunRegex = /^(run codex|codex run|use codex)[,:]?\s*/i;
-
-async function classifyIntent(text: string, env: Env): Promise<IntentResult> {
-  const prompt = `You are an intent classifier for a Slack bot. Analyze the message and extract the user's intent.
-
-Possible intents:
-- "list_cron": User wants to see their scheduled cron jobs (e.g., "show my jobs", "what tasks do I have", "list my cron jobs")
-- "add_cron": User wants to create a new scheduled task (e.g., "remind me every 5 minutes to check email", "add a job to run tests daily")
-- "delete_cron": User wants to remove a scheduled task (e.g., "delete the email reminder", "remove my test job")
-- "codex_login": User wants to login to Codex/OpenAI (e.g., "login to codex", "codex auth", "connect openai")
-- "codex_run": User wants to run Codex (e.g., "run codex", "use codex to fix this", "codex: refactor this code")
-- "chat": General conversation, not a specific command
-
-For "add_cron", extract:
-- schedule: The time pattern (e.g., "every 5 minutes", "daily at 9am", "hourly")
-- task: What to do (e.g., "check email", "run tests", "backup database")
-
-For "delete_cron", extract:
-- search: Keywords to find the job to delete (e.g., "email", "test", "backup")
-
-For "codex_run", extract:
-- prompt: The task for Codex (e.g., "fix this bug", "refactor the auth module")
-
-Respond with ONLY a JSON object in this format:
-{"intent": "list_cron|add_cron|delete_cron|codex_login|codex_run|chat", "schedule": "...", "task": "...", "search": "...", "prompt": "..."}
-
-Message: "${text}"`;
-
-  try {
-    const response = await callLLM([{ role: "user", content: prompt }], env, { maxTokens: 200 });
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]) as IntentResult;
-    }
-  } catch {
-    // Fallback to chat if parsing fails
-  }
-  return { intent: "chat" };
-}
 
 export async function handleSlackEvent(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const body = await request.json() as {
@@ -247,200 +251,19 @@ async function processMessage(
   event: { type: string; text: string; channel: string; user?: string; bot_id?: string; ts?: string },
   env: Env,
 ): Promise<void> {
-  const channel = event.channel;
-  const originalText = event.text;
-  const lowerText = originalText.toLowerCase().trim();
-
-  // Fast-path regex detection for common commands (before LLM classification)
-  if (codexLoginRegex.test(lowerText)) {
-    const status = await sandboxStatus(env);
-    if (!status.ready) {
-      await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
-      return;
-    }
-    try {
-      const login = await startCodexLogin(env);
-      await postToSlack(channel,
-        `🔐 **Codex Login Required**\n\n` +
-        `1. Open: ${login.url}\n` +
-        `2. Enter code: \`${login.code || "see instructions"}\`\n` +
-        `3. Complete login on your device\n` +
-        `4. Reply here with "done" to save credentials`,
-        env
-      );
-    } catch (err) {
-      await postToSlack(channel, `❌ Codex login failed: ${err}`, env);
-    }
-    return;
-  }
-
-  if (codexRunRegex.test(originalText)) {
-    const status = await sandboxStatus(env);
-    if (!status.ready) {
-      await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
-      return;
-    }
-    const prompt = originalText.replace(codexRunRegex, "");
-    await postToSlack(channel, `🤖 Running Codex: "${prompt}"...`, env);
-    try {
-      const result = await runCodex(prompt, env);
-      const output = result.stdout || result.stderr || "No output";
-      await postToSlack(channel,
-        `✅ Codex completed (exit: ${result.exitCode})\n\n` +
-        "```\n" + output.slice(0, 3000) + "\n```",
-        env
-      );
-    } catch (err) {
-      const errMsg = String(err);
-      if (errMsg.includes("Not authenticated")) {
-        await postToSlack(channel, `❌ Not logged in to Codex.\n\nRun "login to codex" first to authenticate.`, env);
-      } else {
-        await postToSlack(channel, `❌ Codex error: ${errMsg}`, env);
-      }
-    }
-    return;
-  }
-
-  // Check for "done" after login (save auth)
-  if (lowerText === "done") {
-    try {
-      const status = await sandboxStatus(env);
-      if (status.ready) {
-        const saved = await saveCodexAuth(env);
-        if (saved.saved) {
-          await postToSlack(channel, `✅ ${saved.message}. You can now run Codex!`, env);
-          return;
-        }
-      }
-    } catch {
-      // Not a "done" for Codex, continue to chat
-    }
-  }
-
-  // Classify intent using LLM for other commands
-  const intent = await classifyIntent(originalText, env);
-
-  if (intent.intent === "codex_login") {
-    const status = await sandboxStatus(env);
-    if (!status.ready) {
-      await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
-      return;
-    }
-    try {
-      const login = await startCodexLogin(env);
-      await postToSlack(channel,
-        `🔐 **Codex Login Required**\n\n` +
-        `1. Open: ${login.url}\n` +
-        `2. Enter code: \`${login.code || "see instructions"}\`\n` +
-        `3. Complete login on your device\n` +
-        `4. Reply here with "done" to save credentials`,
-        env
-      );
-    } catch (err) {
-      await postToSlack(channel, `❌ Codex login failed: ${err}`, env);
-    }
-    return;
-  }
-
-  if (intent.intent === "codex_run") {
-    const status = await sandboxStatus(env);
-    if (!status.ready) {
-      await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
-      return;
-    }
-    const prompt = intent.prompt?.trim() || originalText;
-    await postToSlack(channel, `🤖 Running Codex: "${prompt}"...`, env);
-    try {
-      const result = await runCodex(prompt, env);
-      const output = result.stdout || result.stderr || "No output";
-      await postToSlack(channel,
-        `✅ Codex completed (exit: ${result.exitCode})\n\n` +
-        "```\n" + output.slice(0, 3000) + "\n```",
-        env
-      );
-    } catch (err) {
-      const errMsg = String(err);
-      if (errMsg.includes("Not authenticated")) {
-        await postToSlack(channel, `❌ Not logged in to Codex.\n\nRun "login to codex" first to authenticate.`, env);
-      } else {
-        await postToSlack(channel, `❌ Codex error: ${errMsg}`, env);
-      }
-    }
-    return;
-  }
-
-  if (intent.intent === "list_cron") {
-    const jobs = await getCronJobs(env);
-    if (jobs.length === 0) {
-      await postToSlack(channel, "No cron jobs configured. Try: 'remind me every 5 minutes to check email'", env);
-    } else {
-      const list = jobs.map(j => `• ${j.schedule}: ${j.task}`).join("\n");
-      await postToSlack(channel, `Your cron jobs:\n${list}`, env);
-    }
-    return;
-  }
-
-  if (intent.intent === "add_cron" && intent.schedule && intent.task) {
-    const result = await addCronJob(env, intent.schedule, intent.task);
-    if (result) {
-      await postToSlack(channel, `✅ Cron job added: "${intent.schedule}" → "${intent.task}"`, env);
-    } else {
-      await postToSlack(channel, "❌ Failed to add cron job", env);
-    }
-    return;
-  }
-
-  if (intent.intent === "delete_cron") {
-    const jobs = await getCronJobs(env);
-    if (jobs.length === 0) {
-      await postToSlack(channel, "No cron jobs to delete", env);
-    } else if (intent.search) {
-      const job = jobs.find(j => j.task.toLowerCase().includes(intent.search!.toLowerCase()));
-      if (job) {
-        await deleteCronJob(env, job.id);
-        await postToSlack(channel, `✅ Deleted cron job: ${job.task}`, env);
-      } else {
-        await postToSlack(channel, `❌ No job matching "${intent.search}" found.`, env);
-      }
-    } else {
-      await postToSlack(channel, "Which job would you like to delete? Try: 'delete my email reminder job'", env);
-    }
-    return;
-  }
-
-  // Check for weather queries - handle directly
-  const weatherMatch = originalText.match(/weather\s+(?:in\s+)?([a-zA-Z\s]+)/i);
-  if (weatherMatch) {
-    const location = weatherMatch[1].trim();
-    const status = await sandboxStatus(env);
-    if (!status.ready) {
-      await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
-      return;
-    }
-    await postToSlack(channel, `🌤️ Checking weather in ${location}...`, env);
-    try {
-      const result = await executeInSandbox(`curl -s "wttr.in/${encodeURIComponent(location)}?format=3"`, env);
-      const weather = result.stdout.trim() || result.stderr.trim() || "Could not fetch weather";
-      await postToSlack(channel, `Weather in ${location}: ${weather}`, env);
-    } catch (err) {
-      await postToSlack(channel, `❌ Failed to get weather: ${err}`, env);
-    }
-    return;
-  }
-
-  // General chat with tools
   const repos = await getRepos(env);
-  const reposContext = repos.join(", ");
-  const systemPrompt = `You are Blob, a helpful AI assistant. You can chat, answer questions, help with coding, and manage repositories: ${reposContext}.
+  const systemPrompt = `You are Blob, a helpful AI assistant. Repos: ${repos.join(", ")}.
 
-You have tools available: bash (run shell commands), read (read files), write (write files), edit (find-and-replace in files). Use them when needed — for example, run "date" for the current time or "curl" for live data. Be concise and helpful.`;
+Tools: bash, read, write, edit, list_cron, add_cron, delete_cron.
+For any coding task (writing, fixing, or refactoring code), use bash to run: codex "<task>"
+Use tools whenever you need real data or to take action. Be concise.`;
 
   try {
-    const result = await runChatWithTools(systemPrompt, originalText, env);
-    const prefix = result.modelSwitched ? `🤖 (using ${result.modelUsed})\n` : "";
-    await postToSlack(channel, prefix + result.content, env);
+    const result = await runChatWithTools(systemPrompt, event.text, env);
+    const prefix = result.modelSwitched ? `[${result.modelUsed}] ` : "";
+    await postToSlack(event.channel, prefix + result.content, env);
   } catch {
-    await postToSlack(channel, "Sorry, I encountered an error processing your message.", env);
+    await postToSlack(event.channel, "Sorry, I encountered an error processing your message.", env);
   }
 }
 

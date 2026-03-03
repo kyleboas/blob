@@ -165,6 +165,11 @@ async function callLLMRaw(
 }
 
 export async function getModelSelection(userMessage: string, env: Env): Promise<ModelSelection> {
+  // On a cold worker, skip the catalog DO fetch for non-difficult messages — they
+  // route to the default model anyway, and the round-trip adds ~100-200 ms latency.
+  if (!isDifficultTask(userMessage) && !catalogCache) {
+    return { modelId: DEFAULT_MODEL, modelName: DEFAULT_MODEL, maxTokens: 4096, modelSwitched: false };
+  }
   const catalog = await getCachedCatalog(env);
   const selection = pickModel(catalog, userMessage);
   return { ...selection, modelSwitched: selection.modelId !== DEFAULT_MODEL };
