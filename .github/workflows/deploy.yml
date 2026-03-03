@@ -1,29 +1,25 @@
-name: Deploy Sandbox Worker
+name: Deploy
 
 on:
   push:
     branches: [main]
-    paths:
-      - 'sandbox/**'
-      - 'src/sandbox-worker.ts'
-      - 'wrangler.sandbox.toml'
   workflow_dispatch:
 
 jobs:
-  deploy:
+  deploy-sandbox:
     runs-on: ubuntu-latest
-    name: Deploy blob-agent-sandbox
+    name: Deploy blob-sandbox
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          
+
       - name: Install dependencies
         run: npm ci
-        
+
       - name: Deploy to Cloudflare
         uses: cloudflare/wrangler-action@v3
         with:
@@ -31,3 +27,35 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: '4'
           command: deploy -c wrangler.sandbox.toml
+
+  deploy-agent:
+    runs-on: ubuntu-latest
+    name: Deploy blob-agent
+    needs: deploy-sandbox
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create Vectorize index (idempotent)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4'
+          command: vectorize create pi-memory --dimensions=384 --metric=cosine
+        continue-on-error: true
+
+      - name: Deploy to Cloudflare
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4'
+          command: deploy -c wrangler.toml
