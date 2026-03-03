@@ -12,7 +12,7 @@ This PRD describes the work required to close that gap and make `blob` fully aut
 
 1. The scheduled agent (`Agent.run()`) must invoke the full `PiAgent` tool loop rather than the current stub `plan()` → `commit()` flow.
 2. The agent must be able to clone a git repo, make file changes, commit, and open a GitHub PR — all within a single sandbox session.
-3. A GitHub Actions workflow must deploy the Cloudflare Worker automatically when a PR is merged to `main`.
+3. Merging a PR to `main` must automatically deploy the updated Worker via Cloudflare's native GitHub integration (no GitHub Actions workflow required).
 4. `PiAgent` must use OpenAI-compatible structured JSON tool calls (not text-format parsing) for all 7 core Pi tools plus git/GitHub tools.
 5. `blob` itself must be registered as a default self-improvement target in the Durable Object.
 6. A `CLAUDE.md` file must exist in the repo to guide the agent when it works on itself.
@@ -43,10 +43,9 @@ This PRD describes the work required to close that gap and make `blob` fully aut
 8. The system must open a draft PR from that branch targeting `main`, with a summary of changes in the PR body.
 9. The system must NOT push directly to `main`.
 
-### 4.3 CI/CD Pipeline
-10. The system must include a `.github/workflows/deploy.yml` that triggers on merge to `main`.
-11. The deploy workflow must run `npm ci` and `wrangler deploy` using `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` GitHub Actions secrets.
-12. A sanitized `wrangler.toml` (with no secrets, only structure) must be committed to the repo so the deploy workflow can use it.
+### 4.3 Deploy Configuration
+10. A sanitized `wrangler.toml` (with no secrets, only structure) must be committed to the repo so Cloudflare's native GitHub integration can use it to build and deploy on merge to `main`.
+11. The `.gitignore` entry for `wrangler.toml` must be removed or scoped so the sanitized config is tracked by git.
 
 ### 4.4 Structured Tool Calls
 13. The system must use OpenAI-compatible JSON schema tool definitions for all `PiAgent` tools (replacing the current `TOOL: name\nARG: {...}` text-format parsing).
@@ -95,7 +94,7 @@ The `github` tool must populate the PR body with: the goal that was being pursue
 ## 7. Technical Considerations
 
 - **Structured tool calls**: The AI Gateway / Workers AI binding must support `tools` + `tool_choice` in the request payload. Verify this against the Cloudflare AI Gateway OpenAI-compatibility docs before implementation.
-- **`wrangler.toml` in git**: Currently gitignored. A sanitized version (no account IDs, no secrets — those go in GitHub Actions secrets) must be created and committed. The `.gitignore` entry must be updated or made more specific.
+- **`wrangler.toml` in git**: Currently gitignored. A sanitized version (no account IDs, no secrets — Cloudflare's dashboard integration supplies those) must be created and committed. The `.gitignore` entry must be updated or made more specific.
 - **GitHub API calls from sandbox**: The sandbox container has outbound HTTP access. The `github` tool makes REST calls to `https://api.github.com` using `GITHUB_TOKEN`.
 - **`GITHUB_TOKEN` scope**: Must have `repo` and `pull_request` scopes to push branches and open PRs.
 - **`PiAgent` system prompt update**: Must include instructions for the git/github tools and the PR-first workflow (never push to main, always open a PR).
@@ -105,7 +104,7 @@ The `github` tool must populate the PR body with: the goal that was being pursue
 ## 8. Success Metrics
 
 1. A cron-triggered run on `kyleboas/blob` produces a committed branch and an open GitHub PR — with zero human input.
-2. Merging that PR to `main` triggers `wrangler deploy` and the updated Worker is live within 5 minutes.
+2. Merging that PR to `main` triggers Cloudflare's native GitHub integration and the updated Worker is live within 5 minutes.
 3. All 10 tool types (`bash`, `read`, `write`, `edit`, `grep`, `find`, `ls`, `git`, `github`, `memory`) execute via structured JSON tool calls with no text-parsing fallback needed in normal operation.
 4. Zero `TODO` comments remain in `agent.ts` after implementation.
 5. A Slack message like "work on kyleboas/blob" triggers the same full-autonomy loop as the cron job.

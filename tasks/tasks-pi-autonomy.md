@@ -13,14 +13,13 @@
 - `wrangler.agent.toml` - Reference config for building sanitized `wrangler.toml` in task 5
 - `wrangler.toml` - Sanitized config to be created and committed (currently gitignored) in task 5
 - `.gitignore` - Updated to stop ignoring `wrangler.toml` in task 5
-- `.github/workflows/deploy.yml` - CI/CD deploy workflow created in task 5
 - `CLAUDE.md` - Self-description file for agent; created in task 6
 
 ### Notes
 
 - No test framework is currently configured. Verify correctness via end-to-end runs against the deployed Worker.
 - The sandbox has outbound HTTP so GitHub REST API calls work from within tools.
-- `GITHUB_TOKEN`, `CLOUDFLARE_API_TOKEN`, and `CLOUDFLARE_ACCOUNT_ID` must be set as GitHub Actions secrets before CI/CD works — document this in `CLAUDE.md`.
+- Cloudflare's native GitHub integration handles deployment automatically on merge to `main` — no GitHub Actions workflow is needed. Secrets are configured in the Cloudflare dashboard.
 - The existing `blob-git-askpass` credential helper in the Dockerfile already handles `GITHUB_TOKEN` auth for git clone/push.
 
 ## Instructions for Completing Tasks
@@ -65,11 +64,10 @@ Example:
   - [ ] 4.3 In `src/pi-agent.ts`, add an `ls` tool with arguments `path` (string, default `.`), `flags` (string, optional e.g. `-la`); handler runs `ls` in the sandbox
   - [ ] 4.4 Update the `PiAgent` system prompt to list `grep`, `find`, and `ls` as the preferred tools for exploration (over running bare `bash` find/grep commands)
 
-- [ ] 5.0 Add CI/CD pipeline and commit sanitized wrangler.toml
-  - [ ] 5.1 Create `.github/workflows/deploy.yml` that triggers on `push` to `main`; steps: checkout, `npm ci`, `wrangler deploy --env production` using `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets
-  - [ ] 5.2 Create a sanitized `wrangler.toml` by copying `wrangler.agent.toml`, removing any account IDs or secret values, and adding a comment header explaining that secrets are injected via environment variables or GitHub Actions secrets
-  - [ ] 5.3 In `.gitignore`, change the `wrangler.toml` entry to `wrangler.*.local.toml` (or remove it entirely) so the sanitized `wrangler.toml` is tracked by git
-  - [ ] 5.4 Verify `wrangler.toml` is now tracked by running `git status` and confirming it appears as a new file, then stage it
+- [ ] 5.0 Commit sanitized wrangler.toml for Cloudflare's native GitHub integration
+  - [ ] 5.1 Create a sanitized `wrangler.toml` by copying `wrangler.agent.toml`, removing any account IDs or secret values, and adding a comment header noting that secrets are configured in the Cloudflare dashboard
+  - [ ] 5.2 In `.gitignore`, change the `wrangler.toml` entry to `wrangler.*.local.toml` (or remove it entirely) so the sanitized `wrangler.toml` is tracked by git
+  - [ ] 5.3 Verify `wrangler.toml` is now tracked by running `git status` and confirming it appears as a new file, then stage it
 
 - [ ] 6.0 Register self-targeting goal and write CLAUDE.md
   - [ ] 6.1 In `src/do.ts`, in the Durable Object's initialisation logic (first-run or empty state check), seed `kyleboas/blob` as a default repo with the goal: `"Find TODOs, open issues, or incomplete features in this codebase. Pick one, implement it, and open a draft PR."`
