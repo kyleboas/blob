@@ -314,17 +314,10 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
     const repos = await getRepos(env);
     const reposContext = repos.join(", ");
 
-    // Build system prompt with tool instructions
+    // Build system prompt
     const systemPrompt = `You are Blob, a helpful AI assistant. You can chat, answer questions, help with coding, and manage repositories: ${reposContext}.
 
-You have 4 tools available: read, write, edit, bash.
-
-IMPORTANT: For real-time data (weather, time, etc.), use the bash tool to fetch it. For example:
-- Weather: curl wttr.in/London?format=3
-- Time: date
-- News: curl https://news.ycombinator.com/rss (or similar)
-
-Be concise and helpful.`;
+Be concise and helpful. Answer questions directly based on your knowledge.`;
 
     try {
       const result = await callLLMWithModelSelection([
