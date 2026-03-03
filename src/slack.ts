@@ -1,8 +1,9 @@
 import type { Env } from "./types";
 import { getRepos } from "./storage";
-import { callLLMWithModelSelection, callLLM } from "./llm";
+import { callLLM } from "./llm";
 import { getCronJobs, addCronJob, deleteCronJob } from "./cron";
 import { startCodexLogin, saveCodexAuth, runCodex, sandboxStatus, executeInSandbox } from "./sandbox";
+import { PiAgent } from "./pi-agent";
 
 // Track in-flight events to prevent race conditions
 const inFlightEvents = new Set<string>();
@@ -310,30 +311,18 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
       return new Response("OK");
     }
 
-    // Get repos for context
+    // Get repos for context - use first as default repo for PiAgent
     const repos = await getRepos(env);
-    const reposContext = repos.join(", ");
+    const defaultRepo = repos[0] || "blob";
 
-    // Build system prompt with tool instructions
-    const systemPrompt = `You are Blob, a helpful AI assistant. You can chat, answer questions, help with coding, and manage repositories: ${reposContext}.
-
-You have 4 tools available: read, write, edit, bash.
-
-IMPORTANT: For real-time data (weather, time, etc.), use the bash tool to fetch it. For example:
-- Weather: curl wttr.in/London?format=3
-- Time: date
-- News: curl https://news.ycombinator.com/rss (or similar)
-
-Be concise and helpful.`;
+    // Use PiAgent which has an agentic loop that actually executes tool calls.
+    // callLLMWithModelSelection is a plain single-shot LLM call that never passes
+    // tool definitions to the API, so the LLM cannot use bash/read/write/edit.
+    const agent = new PiAgent(env, defaultRepo);
 
     try {
-      const result = await callLLMWithModelSelection([
-        { role: "system", content: systemPrompt },
-        { role: "user", content: originalText }
-      ], env, { maxTokens: 2000 });
-
-      const prefix = result.modelSwitched ? `🤖 (using ${result.modelUsed})\n` : "";
-      await postToSlack(channel, prefix + result.content, env);
+      const response = await agent.run(originalText);
+      await postToSlack(channel, response, env);
     } catch {
       await postToSlack(channel, "Sorry, I encountered an error processing your message.", env);
     }
