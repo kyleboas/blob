@@ -317,8 +317,10 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
       const agent = new PiAgent(env, repo);
       const response = await agent.run(originalText);
       await postToSlack(channel, response, env);
-    } catch {
-      await postToSlack(channel, "Sorry, I encountered an error processing your message.", env);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error && err.stack ? `\n\`\`\`\n${err.stack}\n\`\`\`` : "";
+      await postToSlack(channel, `❌ Error processing message: ${message}${stack}`, env);
     }
   }
 
