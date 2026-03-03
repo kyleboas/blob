@@ -13,84 +13,215 @@ interface PiMessage {
   content: string;
 }
 
+// Parameter schema for a single tool argument
+interface ToolParam {
+  type: string;
+  description: string;
+}
+
+// A registered tool: schema + prompt hints + execution handler
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  parameters: Record<string, ToolParam>;
+  required?: string[];
+  /** One-liner injected into the "Available tools" section of the system prompt */
+  promptSnippet?: string;
+  /** Tool-specific guidelines appended to the system prompt */
+  promptGuidelines?: string;
+  handler: (args: Record<string, unknown>) => Promise<ToolResult>;
+}
+
 const EXTENSIONS_DIR = "/workspace/.blob/extensions";
 
-// System prompt - minimal, like Pi, with extension support
-const SYSTEM_PROMPT = `You are a helpful coding assistant. You have 4 core tools:
+export class PiAgent {
+  private messages: PiMessage[] = [];
+  private loadedExtensions: Set<string> = new Set();
+  private toolRegistry = new Map<string, ToolDefinition>();
 
-1. read(path) - Read file contents
-2. write(path, content) - Write file (overwrites)
-3. edit(path, oldText, newText) - Replace text in file
-4. bash(command) - Execute shell command
+  constructor(
+    private env: Env,
+    private repo: string
+  ) {
+    this.registerBuiltinTools();
+    this.messages.push({ role: "system", content: this.buildSystemPrompt() });
+  }
 
-You also have persistent memory:
-5. memory(cmd, key, value?) - Memory operations: set, get, list, delete, search
-   - set/get/list/delete: exact key-value operations
-   - search: semantic search, key is the natural language query (e.g. memory("search", "auth token setup"))
+  /** Register a tool and refresh the system prompt so the LLM sees it immediately */
+  registerTool(def: ToolDefinition): void {
+    this.toolRegistry.set(def.name, def);
+    const sysIdx = this.messages.findIndex(m => m.role === "system");
+    if (sysIdx !== -1) {
+      this.messages[sysIdx] = { role: "system", content: this.buildSystemPrompt() };
+    }
+  }
 
-Extensions are bash scripts that add new capabilities. Write them to extend your abilities.
+  /** Build system prompt dynamically from the tool registry (like Pi's buildSystemPrompt) */
+  private buildSystemPrompt(): string {
+    const toolLines = Array.from(this.toolRegistry.values())
+      .map(t => `- ${t.promptSnippet ?? `${t.name}: ${t.description}`}`)
+      .join("\n");
+
+    const guidelines = Array.from(this.toolRegistry.values())
+      .filter(t => t.promptGuidelines)
+      .map(t => t.promptGuidelines!)
+      .join("\n\n");
+
+    return `You are a helpful coding assistant working in an isolated sandbox container.
+All files live under /workspace/${this.repo}/. Always use relative paths with the file tools (e.g. src/index.ts, not /workspace/${this.repo}/src/index.ts).
+Shell commands run inside the container with /workspace/${this.repo} as the working directory.
+
+Available tools:
+${toolLines}
 
 When you need to use a tool, output:
 TOOL: tool_name
 ARG: argument (JSON)
 
 Then wait for the result. Continue until the task is complete.
-Be concise. Don't ask for confirmation. Just do it.`;
+Be concise. Don't ask for confirmation. Just do it.${guidelines ? `\n\n${guidelines}` : ""}`;
+  }
 
-export class PiAgent {
-  private messages: PiMessage[] = [];
-  private loadedExtensions: Set<string> = new Set();
-  
-  constructor(
-    private env: Env,
-    private repo: string
-  ) {
-    this.messages.push({ role: "system", content: SYSTEM_PROMPT });
+  /** Build the OpenAI-compatible tools array passed to the LLM API */
+  private buildToolsParam(): Array<{ type: "function"; function: { name: string; description: string; parameters: object } }> {
+    return Array.from(this.toolRegistry.values()).map(t => ({
+      type: "function" as const,
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: {
+          type: "object",
+          properties: Object.fromEntries(
+            Object.entries(t.parameters).map(([k, v]) => [k, { type: v.type, description: v.description }])
+          ),
+          required: t.required ?? Object.keys(t.parameters),
+        },
+      },
+    }));
+  }
+
+  private registerBuiltinTools(): void {
+    this.toolRegistry.set("read", {
+      name: "read",
+      description: "Read file contents",
+      parameters: {
+        path: { type: "string", description: "File path relative to workspace" },
+      },
+      promptSnippet: "read(path) - Read file contents",
+      handler: async (args) => this.toolRead(args.path as string),
+    });
+
+    this.toolRegistry.set("write", {
+      name: "write",
+      description: "Create or overwrite a file",
+      parameters: {
+        path: { type: "string", description: "File path relative to workspace" },
+        content: { type: "string", description: "File content to write" },
+      },
+      promptSnippet: "write(path, content) - Write file (overwrites)",
+      handler: async (args) => this.toolWrite(args.path as string, args.content as string),
+    });
+
+    this.toolRegistry.set("edit", {
+      name: "edit",
+      description: "Replace text in a file",
+      parameters: {
+        path: { type: "string", description: "File path relative to workspace" },
+        oldText: { type: "string", description: "Exact text to replace" },
+        newText: { type: "string", description: "Replacement text" },
+      },
+      promptSnippet: "edit(path, oldText, newText) - Replace text in file",
+      handler: async (args) => this.toolEdit(args.path as string, args.oldText as string, args.newText as string),
+    });
+
+    this.toolRegistry.set("bash", {
+      name: "bash",
+      description: "Execute a shell command in the workspace",
+      parameters: {
+        command: { type: "string", description: "Shell command to execute" },
+      },
+      promptSnippet: "bash(command) - Execute shell command",
+      promptGuidelines: "For real-time data (weather, time, etc.), use bash to fetch it (e.g., curl wttr.in for weather). Do not say you lack real-time access.",
+      handler: async (args) => this.toolBash(args.command as string),
+    });
+
+    this.toolRegistry.set("memory", {
+      name: "memory",
+      description: "Persistent memory with semantic search",
+      parameters: {
+        cmd: { type: "string", description: "Command: set, get, list, delete, search" },
+        key: { type: "string", description: "Key or search query" },
+        value: { type: "string", description: "Value to store (for set)" },
+      },
+      required: ["cmd", "key"],
+      promptSnippet: "memory(cmd, key, value?) - Memory ops: set/get/list/delete/search (search uses key as query)",
+      handler: async (args) => this.toolMemory(args.cmd as string, args.key as string, args.value as string | undefined),
+    });
+
+    this.toolRegistry.set("extension", {
+      name: "extension",
+      description: "Write a bash script to add new capabilities, then load it",
+      parameters: {
+        name: { type: "string", description: "Extension name (no .sh suffix)" },
+        content: { type: "string", description: "Bash script content" },
+      },
+      promptSnippet: "extension(name, content) - Create and load a bash extension to add new capabilities",
+      handler: async (args) => this.toolExtension(args.name as string, args.content as string),
+    });
+
+    this.toolRegistry.set("load", {
+      name: "load",
+      description: "Load an existing bash extension by name",
+      parameters: {
+        name: { type: "string", description: "Extension name to load (no .sh suffix)" },
+      },
+      promptSnippet: "load(name) - Load an existing extension",
+      handler: async (args) => this.toolLoad(args.name as string),
+    });
   }
 
   async run(userMessage: string): Promise<string> {
     // Auto-load existing extensions
     await this.autoLoadExtensions();
-    
+
     this.messages.push({ role: "user", content: userMessage });
-    
+
     let iterations = 0;
     const maxIterations = 10;
-    
+
     while (iterations < maxIterations) {
       iterations++;
-      
-      // Single LLM call
+
+      // Single LLM call - passes both system prompt snippets and structured tools param
       const response = await this.callLLM();
-      
+
       // Check if response contains tool calls
       const toolCall = this.parseToolCall(response);
-      
+
       if (!toolCall) {
         // No tool call - return final response
         this.messages.push({ role: "assistant", content: response });
         return response;
       }
-      
-      // Execute tool
+
+      // Execute tool via registry
       const result = await this.executeTool(toolCall);
-      
+
       // Add tool result to context
-      this.messages.push({ 
-        role: "assistant", 
-        content: `TOOL: ${toolCall.tool}\nARG: ${JSON.stringify(toolCall.args)}\n\nRESULT: ${result.output}${result.error ? `\nERROR: ${result.error}` : ''}` 
+      this.messages.push({
+        role: "assistant",
+        content: `TOOL: ${toolCall.tool}\nARG: ${JSON.stringify(toolCall.args)}\n\nRESULT: ${result.output}${result.error ? `\nERROR: ${result.error}` : ""}`,
       });
     }
-    
+
     return "Reached maximum iterations. Task may be incomplete.";
   }
 
   private async autoLoadExtensions(): Promise<void> {
     try {
-      // List extensions directory
       const result = await this.env.SANDBOX.exec(`ls -1 ${EXTENSIONS_DIR}/*.sh 2>/dev/null || echo "No extensions"`);
       const files = result.stdout.split("\n").filter(f => f.endsWith(".sh"));
-      
+
       for (const file of files) {
         const name = file.replace(".sh", "").split("/").pop();
         if (name && !this.loadedExtensions.has(name)) {
@@ -103,30 +234,87 @@ export class PiAgent {
   }
 
   private async callLLM(): Promise<string> {
-    const response = await fetch("https://api.cloudflare.com/client/v4/accounts/" + this.env.ACCOUNT_ID + "/ai/run/@cf/meta/llama-3.1-8b-instruct", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${this.env.CLOUDFLARE_API_TOKEN}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        messages: this.messages
-      })
-    });
-    
-    const data = await response.json() as { result?: { response?: string } };
-    return data.result?.response || "No response from LLM";
+    // Use AI Gateway when configured (OpenAI-compatible, supports tools natively)
+    if (this.env.AI_GATEWAY_BASE_URL && this.env.AI_GATEWAY_TOKEN) {
+      const baseUrl = this.env.AI_GATEWAY_BASE_URL.replace(/\/$/, '');
+      const url = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "Authorization": `Bearer ${this.env.AI_GATEWAY_TOKEN}`,
+        },
+        body: JSON.stringify({
+          messages: this.messages,
+          tools: this.buildToolsParam(),
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`LLM error: ${response.status} ${text}`);
+      }
+
+      const data = await response.json() as {
+        choices?: Array<{
+          message?: {
+            content?: string;
+            tool_calls?: Array<{ function: { name: string; arguments: string } }>;
+          };
+        }>;
+      };
+
+      const msg = data.choices?.[0]?.message;
+      // Native tool call - convert to text format for uniform parsing
+      if (msg?.tool_calls?.length) {
+        const call = msg.tool_calls[0].function;
+        return `TOOL: ${call.name}\nARG: ${call.arguments}`;
+      }
+      return msg?.content ?? "";
+    }
+
+    // Fallback: Workers AI direct endpoint
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${this.env.ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${this.env.CLOUDFLARE_API_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messages: this.messages,
+          tools: this.buildToolsParam(),
+        }),
+      }
+    );
+
+    const data = await response.json() as {
+      result?: {
+        response?: string;
+        tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>;
+      };
+    };
+
+    // Native tool call from LLM - convert to text format for uniform parsing
+    if (data.result?.tool_calls?.length) {
+      const call = data.result.tool_calls[0];
+      return `TOOL: ${call.name}\nARG: ${JSON.stringify(call.arguments)}`;
+    }
+
+    return data.result?.response ?? "";
   }
 
-  private parseToolCall(response: string): { tool: string; args: any } | null {
+  private parseToolCall(response: string): { tool: string; args: Record<string, unknown> } | null {
     const toolMatch = response.match(/TOOL:\s*(\w+)/);
     const argMatch = response.match(/ARG:\s*(.+)/s);
-    
+
     if (!toolMatch) return null;
-    
+
     const tool = toolMatch[1];
-    let args = {};
-    
+    let args: Record<string, unknown> = {};
+
     if (argMatch) {
       try {
         args = JSON.parse(argMatch[1].trim());
@@ -134,29 +322,16 @@ export class PiAgent {
         args = { raw: argMatch[1].trim() };
       }
     }
-    
+
     return { tool, args };
   }
 
-  private async executeTool(toolCall: { tool: string; args: any }): Promise<ToolResult> {
-    switch (toolCall.tool) {
-      case "read":
-        return await this.toolRead(toolCall.args.path);
-      case "write":
-        return await this.toolWrite(toolCall.args.path, toolCall.args.content);
-      case "edit":
-        return await this.toolEdit(toolCall.args.path, toolCall.args.oldText, toolCall.args.newText);
-      case "bash":
-        return await this.toolBash(toolCall.args.command);
-      case "extension":
-        return await this.toolExtension(toolCall.args.name, toolCall.args.content);
-      case "load":
-        return await this.toolLoad(toolCall.args.name);
-      case "memory":
-        return await this.toolMemory(toolCall.args.cmd, toolCall.args.key, toolCall.args.value);
-      default:
-        return { output: "", error: `Unknown tool: ${toolCall.tool}` };
+  private async executeTool(toolCall: { tool: string; args: Record<string, unknown> }): Promise<ToolResult> {
+    const def = this.toolRegistry.get(toolCall.tool);
+    if (!def) {
+      return { output: "", error: `Unknown tool: ${toolCall.tool}` };
     }
+    return def.handler(toolCall.args);
   }
 
   private async toolRead(path: string): Promise<ToolResult> {
@@ -194,9 +369,9 @@ export class PiAgent {
   private async toolBash(command: string): Promise<ToolResult> {
     try {
       const result = await this.env.SANDBOX.exec(`cd /workspace/${this.repo} && ${command}`);
-      return { 
+      return {
         output: result.stdout,
-        error: result.stderr || undefined
+        error: result.stderr || undefined,
       };
     } catch (e) {
       return { output: "", error: String(e) };
@@ -205,16 +380,10 @@ export class PiAgent {
 
   private async toolExtension(name: string, content: string): Promise<ToolResult> {
     try {
-      // Ensure extensions dir exists
       await this.env.SANDBOX.exec(`mkdir -p ${EXTENSIONS_DIR}`);
-      
-      // Write extension
       const extPath = `${EXTENSIONS_DIR}/${name}.sh`;
       await this.env.SANDBOX.writeFile(extPath, content);
-      
-      // Auto-load it
       await this.toolLoad(name);
-      
       return { output: `Extension ${name} written and loaded` };
     } catch (e) {
       return { output: "", error: String(e) };
@@ -224,12 +393,8 @@ export class PiAgent {
   private async toolLoad(name: string): Promise<ToolResult> {
     try {
       const extPath = `${EXTENSIONS_DIR}/${name}.sh`;
-      
-      // Source the extension in bash
       const result = await this.env.SANDBOX.exec(`source ${extPath} && echo "Extension ${name} loaded"`);
-      
       this.loadedExtensions.add(name);
-      
       return { output: result.stdout };
     } catch (e) {
       return { output: "", error: String(e) };
@@ -256,7 +421,6 @@ export class PiAgent {
         case "set": {
           if (!key) return { output: "", error: "Key required" };
           await this.env.PI_MEMORY.put(`${prefix}${key}`, value || "");
-          // Also embed and upsert into Vectorize for semantic recall
           if (value && this.env.PI_VECTORS) {
             const vector = await this.embed(`${key}: ${value}`);
             if (vector) {
@@ -292,7 +456,6 @@ export class PiAgent {
         }
 
         case "search": {
-          // key is reused as the search query here
           if (!key) return { output: "", error: "Query required" };
           if (!this.env.PI_VECTORS) return { output: "", error: "Vectorize not available" };
           const vector = await this.embed(key);
