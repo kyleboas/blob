@@ -1,6 +1,6 @@
-import type { Env } from "./types";
-import { DEFAULT_MODEL } from "./models";
-import { appendWorkspaceState, editTool, executeInSandbox, readTool, writeTool } from "./sandbox";
+import type { Env } from "../core/types";
+import { DEFAULT_MODEL } from "../core/models";
+import { appendWorkspaceState, editTool, executeInSandbox, readTool, writeTool } from "../integrations/sandbox";
 
 interface PiMessage {
   role: "system" | "user" | "assistant";

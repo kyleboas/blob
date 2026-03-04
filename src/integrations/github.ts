@@ -1,6 +1,6 @@
-import type { Env } from "./types";
-import { getSecretPatterns } from "./safety";
-import { logEvent } from "./observability";
+import type { Env } from "../core/types";
+import { getSecretPatterns } from "../core/safety";
+import { logEvent } from "../core/observability";
 
 export interface RepoConfig {
   scope: string;

@@ -12,8 +12,8 @@ import {
   reconcileMemory,
   validateIngestion,
   writeMemoryItem,
-} from "../memory-system";
-import type { Env } from "../types";
+} from "../core/memory-system";
+import type { Env } from "../core/types";
 
 class FakeR2Object {
   constructor(private readonly value: string) {}

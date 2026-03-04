@@ -7,7 +7,7 @@ import {
   resolveTargetRepo,
   scanDiffForSecrets,
   type RepoConfig,
-} from "../github";
+} from "../integrations/github";
 
 test("buildPrIdempotencyKey uses branch+commit", () => {
   assert.equal(buildPrIdempotencyKey("feat/test", "abc123"), "feat/test:abc123");

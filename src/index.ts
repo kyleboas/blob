@@ -1,8 +1,8 @@
-import type { Env } from "./types";
-import { AgentDO } from "./do";
-import { handleSlackEvent } from "./slack";
-import { dispatchCronTask } from "./cron-jobs";
-import { createLogRef, logEvent } from "./observability";
+import type { Env } from "./core/types";
+import { AgentDO } from "./agent/do";
+import { handleSlackEvent } from "./integrations/slack";
+import { dispatchCronTask } from "./jobs/cron-jobs";
+import { createLogRef, logEvent } from "./core/observability";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {

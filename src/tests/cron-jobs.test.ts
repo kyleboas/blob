@@ -7,8 +7,8 @@ import {
   postCronAlertWithFallback,
   runCronTask,
   type CronOutcomeRecord,
-} from "../cron-jobs";
-import type { Env } from "../types";
+} from "../jobs/cron-jobs";
+import type { Env } from "../core/types";
 
 class FakeObject {
   constructor(private body: string) {}
