@@ -68,20 +68,20 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 3.6 Add a safe guard to avoid repeated clone/update in a single job (bootstrap once per run).
   - [x] 3.7 Add tests for bootstrap decision logic (mock bash exec; verify commands issued).
 
-- [ ] 4.0 Add robust tool calling (structured tool calls preferred; fallback parsing supported)
-  - [ ] 4.1 Define tool schemas for the 4 tools in `PiAgent`:
+- [x] 4.0 Add robust tool calling (structured tool calls preferred; fallback parsing supported)
+  - [x] 4.1 Define tool schemas for the 4 tools in `PiAgent`:
     - `read({ path })`
     - `write({ path, content })`
     - `edit({ path, oldText, newText })`
     - `bash({ command })`
-  - [ ] 4.2 Update LLM call wrapper to send tool definitions to the model/provider when supported (so real tool calls can be returned).
-  - [ ] 4.3 Implement structured tool-call handling:
+  - [x] 4.2 Update LLM call wrapper to send tool definitions to the model/provider when supported (so real tool calls can be returned).
+  - [x] 4.3 Implement structured tool-call handling:
     - If response includes tool calls, execute them directly (do not rely on regex parsing).
     - Convert tool results into model-visible tool result messages.
-  - [ ] 4.4 Keep and harden fallback parsing (`TOOL:` / `ARG:`) for providers/models that do not return tool calls.
-  - [ ] 4.5 Ensure the agent loop always logs tool calls into a tool ledger (name, args summary, ok/fail, duration, error summary).
-  - [ ] 4.6 Wire tool ledger emission to Slack based on verbosity setting (Minimal suppresses per-tool posts; Verbose posts them).
-  - [ ] 4.7 Add unit tests:
+  - [x] 4.4 Keep and harden fallback parsing (`TOOL:` / `ARG:`) for providers/models that do not return tool calls.
+  - [x] 4.5 Ensure the agent loop always logs tool calls into a tool ledger (name, args summary, ok/fail, duration, error summary).
+  - [x] 4.6 Wire tool ledger emission to Slack based on verbosity setting (Minimal suppresses per-tool posts; Verbose posts them).
+  - [x] 4.7 Add unit tests:
     - Fallback parser correctness
     - Structured tool-call flow (mocked provider response)
     - Tool ledger entries created for each call

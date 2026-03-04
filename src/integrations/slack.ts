@@ -88,9 +88,10 @@ async function setConversationVerbosity(conversationDO: DurableObjectStub | null
   }
 }
 
-function formatToolLedger(entry: { tool: string; ok: boolean; durationMs: number; error?: string }): string {
+function formatToolLedger(entry: { tool: string; argsSummary?: string; ok: boolean; durationMs: number; error?: string }): string {
   const status = entry.ok ? "ok" : "fail";
-  const base = `tool ${entry.tool}: ${status} (${entry.durationMs}ms)`;
+  const suffix = entry.argsSummary ? ` [${entry.argsSummary}]` : "";
+  const base = `tool ${entry.tool}: ${status} (${entry.durationMs}ms)${suffix}`;
   if (entry.ok || !entry.error) return base;
   return `${base} — ${entry.error.slice(0, 120)}`;
 }

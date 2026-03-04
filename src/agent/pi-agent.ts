@@ -13,6 +13,19 @@ interface ToolCall {
   args: Record<string, unknown>;
 }
 
+interface LLMToolCall {
+  id?: string;
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+interface LLMResponse {
+  content: string;
+  toolCalls: LLMToolCall[];
+}
+
 interface ToolResult {
   output: string;
   error?: string;
@@ -22,7 +35,7 @@ interface RunOptions {
   sandboxId?: string;
   critical?: boolean;
   onProgress?: (message: string) => Promise<void> | void;
-  onToolLedger?: (entry: { tool: ToolCall["tool"]; ok: boolean; durationMs: number; error?: string }) => Promise<void> | void;
+  onToolLedger?: (entry: { tool: ToolCall["tool"]; argsSummary: string; ok: boolean; durationMs: number; error?: string }) => Promise<void> | void;
   verbosity?: "minimal" | "verbose";
   conversationHistory?: Array<{ role: string; content: string }>;
 }
@@ -46,8 +59,8 @@ function isTransientError(error: string): boolean {
 }
 
 function parseToolCall(response: string): ToolCall | null {
-  const toolMatch = response.match(/TOOL:\s*(\w+)/);
-  const argMatch = response.match(/ARG:\s*(.+)/s);
+  const toolMatch = response.match(/^\s*TOOL:\s*(\w+)\s*$/im);
+  const argMatch = response.match(/^\s*ARG:\s*([\s\S]+)$/im);
   if (!toolMatch) return null;
 
   const tool = toolMatch[1] as ToolCall["tool"];
@@ -65,6 +78,73 @@ function parseToolCall(response: string): ToolCall | null {
   }
 
   return { tool, args };
+}
+
+function parseStructuredToolCall(call: LLMToolCall): ToolCall | null {
+  const tool = call.function.name as ToolCall["tool"];
+  if (!tool || !["read", "write", "edit", "bash"].includes(tool)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(call.function.arguments || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { tool, args: {} };
+    }
+    return { tool, args: parsed as Record<string, unknown> };
+  } catch {
+    return { tool, args: {} };
+  }
+}
+
+const TOOL_SCHEMAS = [
+  {
+    type: "function",
+    function: {
+      name: "read",
+      description: "Read a UTF-8 text file from the repository workspace.",
+      parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "write",
+      description: "Write UTF-8 text content to a file in the repository workspace.",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string" }, content: { type: "string" } },
+        required: ["path", "content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "edit",
+      description: "Replace exact oldText with newText in a file in the repository workspace.",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string" }, oldText: { type: "string" }, newText: { type: "string" } },
+        required: ["path", "oldText", "newText"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "bash",
+      description: "Run a shell command in the repository workspace.",
+      parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+    },
+  },
+] as const;
+
+function summarizeArgs(args: Record<string, unknown>): string {
+  const parts = Object.entries(args)
+    .slice(0, 3)
+    .map(([key, value]) => `${key}=${summarizeText(String(value), 80)}`);
+  return parts.join(", ");
 }
 
 function shellQuote(value: string): string {
@@ -159,7 +239,7 @@ Stop when done and provide a concise summary.`;
     }
   }
 
-  private async callLLM(): Promise<string> {
+  private async callLLM(): Promise<LLMResponse> {
     if (this.env.AI_GATEWAY_BASE_URL && this.env.AI_GATEWAY_TOKEN) {
       const baseUrl = this.env.AI_GATEWAY_BASE_URL.replace(/\/$/, "");
       const url = baseUrl.endsWith("/chat/completions") ? baseUrl : `${baseUrl}/chat/completions`;
@@ -169,20 +249,17 @@ Stop when done and provide a concise summary.`;
           "content-type": "application/json",
           Authorization: `Bearer ${this.env.AI_GATEWAY_TOKEN}`,
         },
-        body: JSON.stringify({ model: DEFAULT_MODEL, messages: this.messages }),
+        body: JSON.stringify({ model: DEFAULT_MODEL, messages: this.messages, tools: TOOL_SCHEMAS }),
       });
       if (!response.ok) {
         throw new Error(`LLM error: ${response.status} ${await response.text()}`);
       }
-      const data = await response.json() as {
-        choices?: Array<{ message?: { content?: string; tool_calls?: Array<{ function: { name: string; arguments: string } }> } }>;
-      };
+      const data = await response.json() as { choices?: Array<{ message?: { content?: string; tool_calls?: LLMToolCall[] } }> };
       const msg = data.choices?.[0]?.message;
-      if (msg?.tool_calls?.length) {
-        const call = msg.tool_calls[0].function;
-        return `TOOL: ${call.name}\nARG: ${call.arguments}`;
-      }
-      return msg?.content ?? "";
+      return {
+        content: msg?.content ?? "",
+        toolCalls: msg?.tool_calls ?? [],
+      };
     }
 
     throw new Error("AI gateway is required");
@@ -306,11 +383,12 @@ Stop when done and provide a concise summary.`;
         await opts.onProgress(`Progress update: ${modelCalls} model calls used.`);
       }
 
-      const response = await this.callLLM();
+      const llmResponse = await this.callLLM();
+      const responseText = llmResponse.content || "";
       usage.inputTokens += estimateTokens(JSON.stringify(this.messages));
-      usage.outputTokens += estimateTokens(response);
+      usage.outputTokens += estimateTokens(responseText);
 
-      if (!(await this.consumeDailyBudget(estimateTokens(response), opts.critical ?? false))) {
+      if (!(await this.consumeDailyBudget(estimateTokens(responseText), opts.critical ?? false))) {
         return "⏸️ Daily token ceiling reached; paused non-critical job.";
       }
 
@@ -322,14 +400,15 @@ Stop when done and provide a concise summary.`;
         return "Paused due to token budget limit.";
       }
 
-      const toolCall = parseToolCall(response);
+      const structuredToolCall = llmResponse.toolCalls.length > 0 ? parseStructuredToolCall(llmResponse.toolCalls[0]) : null;
+      const toolCall = structuredToolCall ?? parseToolCall(responseText);
       if (!toolCall) {
-        this.messages.push({ role: "assistant", content: response });
-        await appendWorkspaceState("context", JSON.stringify({ role: "assistant", content: response }), this.env, sandboxId);
-        return response;
+        this.messages.push({ role: "assistant", content: responseText });
+        await appendWorkspaceState("context", JSON.stringify({ role: "assistant", content: responseText }), this.env, sandboxId);
+        return responseText;
       }
 
-      this.messages.push({ role: "assistant", content: response });
+      this.messages.push({ role: "assistant", content: responseText || `TOOL: ${toolCall.tool}` });
 
       if (!bootstrapAttempted) {
         bootstrapAttempted = true;
@@ -356,6 +435,7 @@ Stop when done and provide a concise summary.`;
       if (opts.onToolLedger) {
         await opts.onToolLedger({
           tool: toolCall.tool,
+          argsSummary: summarizeArgs(toolCall.args),
           ok: !result.error,
           durationMs: toolDurationMs,
           error: result.error ?? undefined,
@@ -390,6 +470,9 @@ Stop when done and provide a concise summary.`;
 
 export const __piAgentTestUtils = {
   parseToolCall,
+  parseStructuredToolCall,
+  summarizeArgs,
+  TOOL_SCHEMAS,
   isTransientError,
   buildBootstrapScript,
 };
