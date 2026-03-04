@@ -1,4 +1,5 @@
 import { assertTransition, shouldForcePause, type JobStatus } from "./job-model";
+import { type CronOutcomeRecord, detectCronAlerts, buildCronAlert, postCronAlertWithFallback } from "./cron-jobs";
 
 interface CronJob {
   id: string;
@@ -18,6 +19,7 @@ interface BlobState {
   cronJobs?: CronJob[];
   migratedFromChannel?: boolean;
   lastDailySummaryDate?: string;
+  cronOutcomes?: Record<string, CronOutcomeRecord>;
 }
 
 const DEFAULT_CATALOG: Record<string, { name: string; description: string; maxTokens: number }> = {
@@ -35,7 +37,7 @@ const DEFAULT_CATALOG: Record<string, { name: string; description: string; maxTo
 
 export class AgentDO {
   private state: DurableObjectState;
-  private env: { SLACK_BOT_TOKEN?: string; SLACK_SUMMARY_CHANNEL?: string };
+  private env: { SLACK_BOT_TOKEN?: string; SLACK_SUMMARY_CHANNEL?: string; REPO_STORE?: R2Bucket; CRON_FAIL_THRESHOLD?: string; CRON_STALL_MULTIPLIER?: string; AGENT_DO?: DurableObjectNamespace };
   private data: BlobState = {
     repos: ["kyleboas/blob"],
     goals: {},
@@ -45,7 +47,7 @@ export class AgentDO {
   };
   private initialized = false;
 
-  constructor(state: DurableObjectState, env: { SLACK_BOT_TOKEN?: string; SLACK_SUMMARY_CHANNEL?: string }) {
+  constructor(state: DurableObjectState, env: { SLACK_BOT_TOKEN?: string; SLACK_SUMMARY_CHANNEL?: string; REPO_STORE?: R2Bucket; CRON_FAIL_THRESHOLD?: string; CRON_STALL_MULTIPLIER?: string; AGENT_DO?: DurableObjectNamespace }) {
     this.state = state;
     this.env = env;
   }
@@ -125,6 +127,8 @@ export class AgentDO {
       this.data.lastDailySummaryDate = today;
       await this.save();
     }
+
+    await this.checkCronHealthAlerts();
 
     await this.state.storage.setAlarm(Date.now() + 10 * 60 * 1000);
   }
@@ -265,6 +269,36 @@ export class AgentDO {
       return json({ created: job });
     }
 
+
+    if (url.pathname === "/cron/outcome" && request.method === "POST") {
+      const outcome = (await request.json()) as {
+        jobName: string;
+        status: "success" | "failure" | "running";
+        durationMs?: number;
+        outputSummary?: string;
+        lastError?: string;
+      };
+      const existing = this.data.cronOutcomes?.[outcome.jobName];
+      const now = Date.now();
+      const next: CronOutcomeRecord = {
+        jobName: outcome.jobName as CronOutcomeRecord["jobName"],
+        status: outcome.status,
+        lastRunAt: now,
+        lastSuccessAt: outcome.status === "success" ? now : existing?.lastSuccessAt,
+        lastError: outcome.lastError,
+        consecutiveFailures: outcome.status === "failure" ? (existing?.consecutiveFailures ?? 0) + 1 : 0,
+        durationMs: outcome.durationMs,
+        outputSummary: outcome.outputSummary,
+      };
+      this.data.cronOutcomes = { ...(this.data.cronOutcomes || {}), [outcome.jobName]: next };
+      await this.save();
+      return json({ saved: true, outcome: next });
+    }
+
+    if (url.pathname === "/cron/outcomes" && request.method === "GET") {
+      return json({ outcomes: this.data.cronOutcomes || {} });
+    }
+
     if (url.pathname === "/cron/delete" && request.method === "POST") {
       const { id } = (await request.json()) as { id: string };
       this.data.cronJobs = (this.data.cronJobs || []).filter((j) => j.id !== id);
@@ -279,6 +313,30 @@ export class AgentDO {
     await this.state.storage.put("data", this.data);
   }
 
+
+
+  private async checkCronHealthAlerts(): Promise<void> {
+    if (!this.data.cronOutcomes || !this.env.REPO_STORE) return;
+    const failThreshold = Number(this.env.CRON_FAIL_THRESHOLD || "3");
+    const stallMultiplier = Number(this.env.CRON_STALL_MULTIPLIER || "2");
+    const alerts = detectCronAlerts(this.data.cronOutcomes, Date.now(), { failThreshold, stallMultiplier });
+    for (const alert of alerts) {
+      const message = buildCronAlert({
+        jobName: alert.jobName,
+        status: "failure",
+        durationMs: alert.durationMs ?? 0,
+        outputSummary: alert.outputSummary ?? "",
+        lastError: alert.lastError,
+        sessionId: "heartbeat",
+      }, alert);
+      const alertEnv = {
+        REPO_STORE: this.env.REPO_STORE,
+        SLACK_BOT_TOKEN: this.env.SLACK_BOT_TOKEN,
+        SLACK_SUMMARY_CHANNEL: this.env.SLACK_SUMMARY_CHANNEL,
+      };
+      await postCronAlertWithFallback(alertEnv, message);
+    }
+  }
 
 
   private async postDailySummary(date: string): Promise<void> {

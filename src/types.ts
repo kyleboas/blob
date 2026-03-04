@@ -31,4 +31,7 @@ export interface Env {
   SLACK_SUMMARY_CHANNEL?: string;
   CLOUDFLARE_API_TOKEN?: string;
   ACCOUNT_ID?: string;
+
+  CRON_FAIL_THRESHOLD?: string;
+  CRON_STALL_MULTIPLIER?: string;
 }

@@ -5,6 +5,7 @@ import { Agent } from "./agent";
 import { handleSlackEvent } from "./slack";
 import { executeInSandbox } from "./sandbox";
 import { triggerCatalogUpdate } from "./memory";
+import { dispatchCronTask } from "./cron-jobs";
 import { Sandbox as SandboxDO } from "@cloudflare/sandbox";
 
 function json(data: unknown, status = 200): Response {
@@ -77,13 +78,19 @@ export default {
 
   async scheduled(event: ScheduledEvent, env: Env): Promise<void> {
     const cron = event.cron;
-    
+
+    const cronOutcome = await dispatchCronTask(cron, env);
+    if (cronOutcome) {
+      console.log("Cron outcome", cronOutcome);
+      return;
+    }
+
     if (cron === "0 0 * * 0") {
       const result = await triggerCatalogUpdate(env);
       console.log("Catalog update:", result);
       return;
     }
-    
+
     const repos = await getRepos(env);
     for (const repo of repos) {
       const goals = await getRepoGoals(env, repo);
