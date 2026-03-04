@@ -219,11 +219,12 @@ Stop when done and provide a concise summary.`;
         return response;
       }
 
+      this.messages.push({ role: "assistant", content: response });
       const result = await this.executeToolWithRetry(toolCall, sandboxId);
       if (result.error) {
         consecutiveFailures += 1;
         this.messages.push({
-          role: "assistant",
+          role: "user",
           content: `TOOL_FAILURE: ${toolCall.tool}\nARG: ${JSON.stringify(toolCall.args)}\nERROR: ${result.error}`,
         });
         if (consecutiveFailures >= maxConsecutiveFailures) {
@@ -232,7 +233,7 @@ Stop when done and provide a concise summary.`;
       } else {
         consecutiveFailures = 0;
         this.messages.push({
-          role: "assistant",
+          role: "user",
           content: `TOOL: ${toolCall.tool}\nARG: ${JSON.stringify(toolCall.args)}\nRESULT: ${result.output}`,
         });
       }
