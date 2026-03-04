@@ -34,3 +34,12 @@ binding = "AI"
 
 [observability.logs]
 enabled = true
+
+[[triggers.crons]]
+cron = "*/15 * * * *"
+
+[[triggers.crons]]
+cron = "0 */6 * * *"
+
+[[triggers.crons]]
+cron = "30 */6 * * *"

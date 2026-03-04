@@ -148,20 +148,20 @@ Update this file after completing each sub-task.
 
 ### Phase 5: Cron + Alerts
 
-- [ ] 12.0 Cron jobs
-  - [ ] 12.1 Add cron triggers to `wrangler.toml` and implement dispatcher in Worker fetch/scheduled handler (PRD 4.9.4–4.9.5)
-  - [ ] 12.2 Implement cron execution pattern: create isolated sandbox session → run task → store results to R2 → post Slack summary → record outcome in DO state (status, duration, last_run_at, last_error, output_summary) (PRD 4.9.5)
-  - [ ] 12.3 Implement `content-scan` cron: read scan targets from `config/scan-targets.json` in R2, run scan, persist findings to R2 memory items, post Slack summary (PRD 4.9.6)
-  - [ ] 12.4 Implement `memory-compaction` cron: invoke compaction logic from task 9.2 (PRD 4.9.6)
-  - [ ] 12.5 Implement `memory-reconciliation` cron: invoke reconciliation logic from task 9.3 (PRD 4.9.6)
-  - [ ] 12.6 Add tests for: cron dispatcher routing, isolated session creation, outcome recording
-- [ ] 13.0 Fallback alerts
-  - [ ] 13.1 Implement cron outcome tracking in DO state: job_name, status (success | failure | running), last_run_at, last_success_at, last_error, consecutive_failures (PRD 4.10.1)
-  - [ ] 13.2 Implement immediate Slack alert on cron failure (configurable per job) (PRD 4.10.2)
-  - [ ] 13.3 Implement heartbeat detection: consecutive failures ≥ N (default 3, env var `CRON_FAIL_THRESHOLD`) and stall detection (no run within 2× expected cadence, env var `CRON_STALL_MULTIPLIER`) (PRD 4.10.3)
-  - [ ] 13.4 Implement Slack alert payload: job name, last error summary, last success timestamp, suggested next action (PRD 4.10.4)
-  - [ ] 13.5 Implement R2 fallback logging at `alerts/YYYY-MM-DD.jsonl` if Slack posting fails (PRD 4.10.5)
-  - [ ] 13.6 Add tests for: threshold detection, stall detection, alert payload construction, R2 fallback on Slack failure
+- [x] 12.0 Cron jobs
+  - [x] 12.1 Add cron triggers to `wrangler.toml` and implement dispatcher in Worker fetch/scheduled handler (PRD 4.9.4–4.9.5)
+  - [x] 12.2 Implement cron execution pattern: create isolated sandbox session → run task → store results to R2 → post Slack summary → record outcome in DO state (status, duration, last_run_at, last_error, output_summary) (PRD 4.9.5)
+  - [x] 12.3 Implement `content-scan` cron: read scan targets from `config/scan-targets.json` in R2, run scan, persist findings to R2 memory items, post Slack summary (PRD 4.9.6)
+  - [x] 12.4 Implement `memory-compaction` cron: invoke compaction logic from task 9.2 (PRD 4.9.6)
+  - [x] 12.5 Implement `memory-reconciliation` cron: invoke reconciliation logic from task 9.3 (PRD 4.9.6)
+  - [x] 12.6 Add tests for: cron dispatcher routing, isolated session creation, outcome recording
+- [x] 13.0 Fallback alerts
+  - [x] 13.1 Implement cron outcome tracking in DO state: job_name, status (success | failure | running), last_run_at, last_success_at, last_error, consecutive_failures (PRD 4.10.1)
+  - [x] 13.2 Implement immediate Slack alert on cron failure (configurable per job) (PRD 4.10.2)
+  - [x] 13.3 Implement heartbeat detection: consecutive failures ≥ N (default 3, env var `CRON_FAIL_THRESHOLD`) and stall detection (no run within 2× expected cadence, env var `CRON_STALL_MULTIPLIER`) (PRD 4.10.3)
+  - [x] 13.4 Implement Slack alert payload: job name, last error summary, last success timestamp, suggested next action (PRD 4.10.4)
+  - [x] 13.5 Implement R2 fallback logging at `alerts/YYYY-MM-DD.jsonl` if Slack posting fails (PRD 4.10.5)
+  - [x] 13.6 Add tests for: threshold detection, stall detection, alert payload construction, R2 fallback on Slack failure
 
 ### Phase 6: Observability + Safety
 

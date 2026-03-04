@@ -1,0 +1,9 @@
+{
+  "sources": [
+    {
+      "name": "blob-readme",
+      "type": "http",
+      "url": "https://raw.githubusercontent.com/kyleboas/blob/main/README.md"
+    }
+  ]
+}
