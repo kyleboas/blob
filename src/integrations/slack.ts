@@ -17,6 +17,16 @@ interface IntentResult {
   search?: string;
 }
 
+type Verbosity = "minimal" | "verbose";
+
+function getExactKeywordCommand(text: string): "settings" | "status" | "selftest" | "set minimal" | "set verbose" | null {
+  const normalized = text.trim().toLowerCase();
+  if (["settings", "status", "selftest", "set minimal", "set verbose"].includes(normalized)) {
+    return normalized as ReturnType<typeof getExactKeywordCommand>;
+  }
+  return null;
+}
+
 async function classifyIntent(text: string, env: Env): Promise<IntentResult> {
   const prompt = `You are an intent classifier for a Slack bot. Analyze the message and extract the user's intent.
 
@@ -52,6 +62,37 @@ Message: "${text}"`;
   }
 
   return { intent: "chat", needsSandbox: false };
+}
+
+async function getConversationVerbosity(conversationDO: DurableObjectStub | null): Promise<Verbosity> {
+  if (!conversationDO) return "minimal";
+  try {
+    const res = await conversationDO.fetch("http://do/settings/verbosity");
+    const data = await res.json() as { verbosity?: Verbosity };
+    return data.verbosity === "verbose" ? "verbose" : "minimal";
+  } catch {
+    return "minimal";
+  }
+}
+
+async function setConversationVerbosity(conversationDO: DurableObjectStub | null, verbosity: Verbosity): Promise<Verbosity> {
+  if (!conversationDO) return verbosity;
+  try {
+    await conversationDO.fetch("http://do/settings/verbosity", {
+      method: "POST",
+      body: JSON.stringify({ verbosity }),
+    });
+    return verbosity;
+  } catch {
+    return verbosity;
+  }
+}
+
+function formatToolLedger(entry: { tool: string; ok: boolean; durationMs: number; error?: string }): string {
+  const status = entry.ok ? "ok" : "fail";
+  const base = `tool ${entry.tool}: ${status} (${entry.durationMs}ms)`;
+  if (entry.ok || !entry.error) return base;
+  return `${base} — ${entry.error.slice(0, 120)}`;
 }
 
 function formatSlackError(message: string, logRef: string): string {
@@ -163,6 +204,36 @@ async function processSlackEvent(body: {
       });
     }
 
+    const key = deriveRoutingKey(body);
+    const conversationDO = env.AGENT_DO ? env.AGENT_DO.get(env.AGENT_DO.idFromName(key)) : null;
+    const keywordCommand = getExactKeywordCommand(originalText);
+    if (keywordCommand) {
+      if (keywordCommand === "settings") {
+        const verbosity = await getConversationVerbosity(conversationDO);
+        await postToSlack(
+          channel,
+          `Current mode: ${verbosity}. Use "set minimal" for concise updates or "set verbose" for tool-by-tool updates.`,
+          env,
+        );
+        return;
+      }
+      if (keywordCommand === "set minimal" || keywordCommand === "set verbose") {
+        const verbosity = keywordCommand === "set verbose" ? "verbose" : "minimal";
+        await setConversationVerbosity(conversationDO, verbosity);
+        await postToSlack(channel, `Got it — verbosity is now ${verbosity}.`, env);
+        return;
+      }
+      if (keywordCommand === "status") {
+        const verbosity = await getConversationVerbosity(conversationDO);
+        await postToSlack(channel, `Status: ready. Current verbosity is ${verbosity}.`, env);
+        return;
+      }
+      if (keywordCommand === "selftest") {
+        await postToSlack(channel, "Self-test command received. Full self-test workflow is handled in the sandbox pipeline.", env);
+        return;
+      }
+    }
+
     const intent = await classifyIntent(originalText, env);
 
     if (intent.intent === "list_cron") {
@@ -204,9 +275,6 @@ async function processSlackEvent(body: {
       return;
     }
 
-    const key = deriveRoutingKey(body);
-    const conversationDO = env.AGENT_DO ? env.AGENT_DO.get(env.AGENT_DO.idFromName(key)) : null;
-
     // Fetch conversation history from the Durable Object
     let conversationHistory: Array<{ role: string; content: string }> = [];
     if (conversationDO) {
@@ -224,9 +292,17 @@ async function processSlackEvent(body: {
         const repos = await getRepos(env);
         const repo = repos[0] ?? "default";
         const agent = new PiAgent(env, repo);
+        const verbosity = await getConversationVerbosity(conversationDO);
+        if (verbosity === "minimal") {
+          await postToSlack(channel, "Working…", env);
+        }
         const response = await agent.run(originalText, {
           conversationHistory,
-          onProgress: (msg: string) => postToSlack(channel, msg, env),
+          verbosity,
+          onProgress: verbosity === "verbose" ? (msg: string) => postToSlack(channel, msg, env) : undefined,
+          onToolLedger: verbosity === "verbose"
+            ? (entry) => postToSlack(channel, formatToolLedger(entry), env)
+            : undefined,
         });
         // Store the exchange in the DO
         if (conversationDO) {

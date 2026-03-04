@@ -31,22 +31,22 @@ Update the file after completing each sub-task, not just after completing an ent
 
 ## Tasks
 
-- [ ] 0.0 Create feature branch
-  - [ ] 0.1 Create and checkout a new branch for this feature (e.g., `git checkout -b feature/tooling-memory-reliability`)
+- [x] 0.0 Create feature branch
+  - [x] 0.1 Create and checkout a new branch for this feature (e.g., `git checkout -b feature/tooling-memory-reliability`)
 
-- [ ] 1.0 Implement Slack message keyword commands and verbosity defaults
-  - [ ] 1.1 Update Slack message handling to detect exact keyword commands (case-insensitive, trimmed): `settings`, `status`, `selftest`.
-  - [ ] 1.2 Add detection for exact keyword commands: `set minimal` and `set verbose`.
-  - [ ] 1.3 Implement `settings` response (plain English): show current mode and how to change it (`set minimal`, `set verbose`).
-  - [ ] 1.4 Store verbosity setting per conversation in Durable Object state (default to `minimal` if unset).
-  - [ ] 1.5 Implement Minimal mode Slack output behavior:
+- [x] 1.0 Implement Slack message keyword commands and verbosity defaults
+  - [x] 1.1 Update Slack message handling to detect exact keyword commands (case-insensitive, trimmed): `settings`, `status`, `selftest`.
+  - [x] 1.2 Add detection for exact keyword commands: `set minimal` and `set verbose`.
+  - [x] 1.3 Implement `settings` response (plain English): show current mode and how to change it (`set minimal`, `set verbose`).
+  - [x] 1.4 Store verbosity setting per conversation in Durable Object state (default to `minimal` if unset).
+  - [x] 1.5 Implement Minimal mode Slack output behavior:
     - Only short “working…” if needed + final response
     - No per-tool ledger messages
-  - [ ] 1.6 Implement Verbose mode Slack output behavior:
+  - [x] 1.6 Implement Verbose mode Slack output behavior:
     - Emit a one-line tool ledger entry per tool call
     - Include short error summary on failures
-  - [ ] 1.7 Ensure keyword commands do not trigger when extra text is present (e.g., `status please` treated as normal chat).
-  - [ ] 1.8 Add/extend tests for keyword parsing and settings persistence (mock DO).
+  - [x] 1.7 Ensure keyword commands do not trigger when extra text is present (e.g., `status please` treated as normal chat).
+  - [x] 1.8 Add/extend tests for keyword parsing and settings persistence (mock DO).
 
 - [ ] 2.0 Align workspace paths across agent + sandbox tools (`/workspace/<repoDir>`)
   - [ ] 2.1 Refactor `src/integrations/sandbox.ts` to accept a `workspaceRoot` (or `repoDir`) for `readTool/writeTool/editTool/executeInSandbox`.
