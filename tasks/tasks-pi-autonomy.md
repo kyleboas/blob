@@ -180,18 +180,18 @@ Update this file after completing each sub-task.
 
 ### Phase 7: Cleanup + Documentation
 
-- [ ] 17.0 Delete legacy code
-  - [ ] 17.1 Remove all files/modules listed in `/tasks/legacy-delete-plan.md`
-  - [ ] 17.2 Remove unused dependencies from `package.json`
-  - [ ] 17.3 Remove obsolete config files and scripts
-  - [ ] 17.4 Verify no dangling imports or references remain — build must pass clean
-- [ ] 18.0 Documentation
-  - [ ] 18.1 Write `README.md`: project overview, prerequisites, setup steps, env var reference, deployment
-  - [ ] 18.2 Write `docs/architecture.md`: request flow diagram, module boundaries, DO keying rules, memory architecture, scheduling model, cost control
-  - [ ] 18.3 Write `docs/cron-jobs.md`: how to add/remove/configure cron jobs and scan targets
-  - [ ] 18.4 Write `docs/runbook.md`: common failure modes, how to read alerts, how to debug with `wrangler tail`, how to manually trigger cron jobs
+- [x] 17.0 Delete legacy code
+  - [x] 17.1 Remove all files/modules listed in `/tasks/legacy-delete-plan.md`
+  - [x] 17.2 Remove unused dependencies from `package.json`
+  - [x] 17.3 Remove obsolete config files and scripts
+  - [x] 17.4 Verify no dangling imports or references remain — build must pass clean
+- [x] 18.0 Documentation
+  - [x] 18.1 Write `README.md`: project overview, prerequisites, setup steps, env var reference, deployment
+  - [x] 18.2 Write `docs/architecture.md`: request flow diagram, module boundaries, DO keying rules, memory architecture, scheduling model, cost control
+  - [x] 18.3 Write `docs/cron-jobs.md`: how to add/remove/configure cron jobs and scan targets
+  - [x] 18.4 Write `docs/runbook.md`: common failure modes, how to read alerts, how to debug with `wrangler tail`, how to manually trigger cron jobs
 - [ ] 19.0 Final validation
-  - [ ] 19.1 Run full test suite — all tests pass
+  - [x] 19.1 Run full test suite — all tests pass
   - [ ] 19.2 Build and deploy to staging — no errors
   - [ ] 19.3 Manual smoke test checklist:
     - [ ] 19.3.1 Slack message → Blob responds with tool usage
@@ -202,4 +202,4 @@ Update this file after completing each sub-task.
     - [ ] 19.3.6 Simulate cron failure 3× → Slack alert fires with correct payload
     - [ ] 19.3.7 Hit daily token ceiling → non-critical jobs pause → Slack notification
     - [ ] 19.3.8 Push with embedded secret → push blocked → Slack notification
-  - [ ] 19.4 Verify no legacy code remains: grep for known legacy module names, confirm zero matches
+  - [x] 19.4 Verify no legacy code remains: grep for known legacy module names, confirm zero matches

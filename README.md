@@ -1,113 +1,77 @@
-# Blob - Autonomous Coding Agent
+# Blob Pi Autonomy Worker
 
-Fully autonomous agent that works on GitHub repositories.
+Blob is a Slack-driven autonomous coding worker built on Cloudflare Workers + Durable Objects + Cloudflare Sandbox.
+
+## Overview
+
+The runtime flow is:
+
+1. Slack event is received at `/slack/events`.
+2. Signature is validated and Slack is acknowledged quickly.
+3. Conversation is deterministically routed to a Durable Object.
+4. The DO manages job lifecycle and heartbeat-driven execution.
+5. Pi agent executes work in Sandbox using only `read`, `write`, `edit`, and `bash` tools.
+6. Results, memory, and status are persisted and reported to Slack.
+
+## Prerequisites
+
+- Node.js 20+
+- npm
+- Wrangler 4+
+- Cloudflare account with Workers, Durable Objects, R2, AI, and Sandbox support
+- Slack app + bot token
 
 ## Setup
 
 ```bash
-wrangler kv:namespace create CONFIG
-# Copy the ID into wrangler.toml
-
-wrangler secret put GITHUB_TOKEN
-wrangler secret put AI_GATEWAY_TOKEN  
-wrangler secret put AI_GATEWAY_BASE_URL
-
-# Deploy sandbox worker (root wrangler.toml targets blob-sandbox)
-wrangler deploy
+npm install
+npm run typecheck
+npm test
 ```
 
-## API
+Deploy sandbox worker:
 
 ```bash
-# List repos
-curl https://blob.your-account.workers.dev/repos
-
-# Add repo
-curl -X POST https://blob.your-account.workers.dev/repos -d '{"repo":"owner/repo"}'
-
-# Set goals
-curl -X POST https://blob.your-account.workers.dev/repos/owner/repo/goals -d '{"goals":["fix bugs"]}'
-
-# Run now
-curl -X POST https://blob.your-account.workers.dev/run
+wrangler deploy -c wrangler.sandbox.toml
 ```
 
-Runs automatically every 5 minutes.
-
-
-## Codex OAuth login (Slack)
-
-To make `login with codex` (or `login to codex`) work end-to-end, deploy both workers: `blob-sandbox` (container+DO) and `blob-agent` (Slack/app routes), and point Slack at `blob-agent`.
-
-### 1) Deploy both workers
+Deploy agent worker:
 
 ```bash
-# Deploy sandbox worker (container + Sandbox DO)
-wrangler deploy
-
-# Deploy app worker (Slack routes + service binding to blob-sandbox)
 wrangler deploy -c wrangler.agent.toml
 ```
 
-In Cloudflare dashboard, this should appear as two Workers: `blob-sandbox` (Sandbox DO + container) and `blob-agent` (app routes + service binding to `blob-sandbox`).
+## Environment variables and secrets
 
-### 2) Configure required secrets
+Set secrets on the **agent worker** unless noted.
 
-```bash
-# required for Slack replies
-wrangler secret put SLACK_BOT_TOKEN
+- `SLACK_BOT_TOKEN` — required for Slack replies.
+- `SLACK_SIGNING_SECRET` — required for Slack signature verification.
+- `AI_GATEWAY_TOKEN` — required for model calls.
+- `AI_GATEWAY_BASE_URL` — required for model gateway routing.
+- `GITHUB_TOKEN` — required for GitHub API operations.
+- `ACCOUNT_ID` — required for AI/run API calls.
+- `GITHUB_REPO` — optional default repo.
 
-# required for LLM/chat paths used by this bot
-wrangler secret put AI_GATEWAY_TOKEN
-wrangler secret put AI_GATEWAY_BASE_URL
+Operational controls:
 
-# optional but commonly needed for repo actions
-wrangler secret put GITHUB_TOKEN
-```
+- `MAX_JOB_TOKENS` — per-job token budget.
+- `MAX_HEARTBEAT_MODEL_CALLS` — max model calls per heartbeat cycle.
+- `DAILY_TOKEN_CEILING` — daily aggregate cap.
+- `CRON_FAIL_THRESHOLD` — alert threshold for consecutive cron failures.
+- `CRON_STALL_MULTIPLIER` — expected cadence multiplier for stall detection.
 
-### 3) Configure Slack app
+## Slack configuration
 
-- In Slack app settings, enable **Event Subscriptions**.
-- Set Request URL to: `https://<your-main-worker>/slack/events`
-- Subscribe to `message.channels` (and/or the message events you use).
-- Install/reinstall the app to your workspace.
+1. Enable Event Subscriptions in your Slack app.
+2. Set request URL to `https://<worker-domain>/slack/events`.
+3. Subscribe to message events used by your workspace.
+4. Install/reinstall app after scope changes.
 
-### 4) Trigger login from Slack
+## Docs
 
-Send any of these exact messages in a channel where the bot is present:
-- `login with codex`
-- `login to codex`
-- `codex login`
-- `codex auth`
-- `connect openai`
-
-The bot returns a device URL + code. Open the URL, finish OAuth on your device, then reply:
-
-```
-done
-```
-
-That calls `/codex/auth/save`, which persists `~/.codex/auth.json` into `/workspace/.codex-auth/auth.json` in the sandbox container for reuse after restart.
-
-### 5) Run Codex after login
-
-```
-run codex fix failing tests in this repo
-```
-
-If auth is missing, bot replies with not authenticated and asks you to login first.
-
-### 6) Quick health/debug checks
-
-```bash
-# app route sanity
-curl -i https://<your-main-worker>/repos
-
-# sandbox health route (forwarded to Sandbox DO)
-curl -i https://<your-main-worker>/health
-
-# if login fails, tail logs for blob-agent
-wrangler tail blob-agent -c wrangler.agent.toml
-```
-
-If you still only get “simulated login” text, your Slack event likely bypassed the Codex command path and fell through to generic chat. Verify the request reaches `/slack/events` and the message text is one of the login phrases above.
+- `docs/architecture.md`
+- `docs/cron-jobs.md`
+- `docs/runbook.md`
+- `tasks/prd-pi-autonomy.md`
+- `tasks/tasks-pi-autonomy.md`
