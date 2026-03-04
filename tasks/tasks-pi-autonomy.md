@@ -128,23 +128,23 @@ Update this file after completing each sub-task.
 
 ### Phase 4: GitHub + Deploy
 
-- [ ] 10.0 GitHub PR automation
-  - [ ] 10.1 Implement configurable repo/branch settings per channel or team in R2 config or DO state (PRD 4.7.1)
-  - [ ] 10.2 Implement repo operations in Sandbox: clone, checkout base branch, create feature branch (PRD 4.7.1)
-  - [ ] 10.3 Implement pre-push: fetch latest base branch, rebase/merge — on conflict, post Slack message describing conflicts, pause job, await user instruction (retry, force-push, or abort) (PRD 4.7.2)
-  - [ ] 10.4 Implement pre-push secret scan: diff against secret patterns, block push if match found (PRD 4.7.3)
-  - [ ] 10.5 Implement commit + push + PR creation via GitHub API with idempotency key (branch name + commit hash) (PRD 4.7.3–4.7.4)
-  - [ ] 10.6 Post PR link to Slack (PRD 4.7.4)
-  - [ ] 10.7 Implement optional auto-merge: poll/webhook for CI checks → merge on pass → post result; on CI failure, post summary and pause (PRD 4.7.5)
-  - [ ] 10.8 Implement multi-repo support: model or user specifies target repo, ask for clarification in Slack if ambiguous (PRD 4.7.6)
-  - [ ] 10.9 Add tests for: GitHub API wrapper (mocked), idempotency keys, conflict detection flow, secret scan blocking
-- [ ] 11.0 Deploy hooks + status reporting
-  - [ ] 11.1 Implement deploy trigger: configurable mechanism per repo — webhook URL, GitHub Actions dispatch, or Cloudflare Pages deploy hook (PRD 4.8.1)
-  - [ ] 11.2 Implement deploy status polling with configurable timeout (default 10 min) (PRD 4.8.2)
-  - [ ] 11.3 Report deploy status to Slack: success, failure, or timeout (PRD 4.8.2)
-  - [ ] 11.4 If deploy mechanism not configured, skip deploy step and notify Slack that manual deploy is needed (PRD 4.8.3)
-  - [ ] 11.5 Implement idempotency for deploy triggers (keyed on merge SHA) to prevent double-deploy on retries (PRD 4.8.1)
-  - [ ] 11.6 Add tests for: trigger payload generation, idempotency, timeout handling
+- [x] 10.0 GitHub PR automation
+  - [x] 10.1 Implement configurable repo/branch settings per channel or team in R2 config or DO state (PRD 4.7.1)
+  - [x] 10.2 Implement repo operations in Sandbox: clone, checkout base branch, create feature branch (PRD 4.7.1)
+  - [x] 10.3 Implement pre-push: fetch latest base branch, rebase/merge — on conflict, post Slack message describing conflicts, pause job, await user instruction (retry, force-push, or abort) (PRD 4.7.2)
+  - [x] 10.4 Implement pre-push secret scan: diff against secret patterns, block push if match found (PRD 4.7.3)
+  - [x] 10.5 Implement commit + push + PR creation via GitHub API with idempotency key (branch name + commit hash) (PRD 4.7.3–4.7.4)
+  - [x] 10.6 Post PR link to Slack (PRD 4.7.4)
+  - [x] 10.7 Implement optional auto-merge: poll/webhook for CI checks → merge on pass → post result; on CI failure, post summary and pause (PRD 4.7.5)
+  - [x] 10.8 Implement multi-repo support: model or user specifies target repo, ask for clarification in Slack if ambiguous (PRD 4.7.6)
+  - [x] 10.9 Add tests for: GitHub API wrapper (mocked), idempotency keys, conflict detection flow, secret scan blocking
+- [x] 11.0 Deploy hooks + status reporting
+  - [x] 11.1 Implement deploy trigger: configurable mechanism per repo — webhook URL, GitHub Actions dispatch, or Cloudflare Pages deploy hook (PRD 4.8.1)
+  - [x] 11.2 Implement deploy status polling with configurable timeout (default 10 min) (PRD 4.8.2)
+  - [x] 11.3 Report deploy status to Slack: success, failure, or timeout (PRD 4.8.2)
+  - [x] 11.4 If deploy mechanism not configured, skip deploy step and notify Slack that manual deploy is needed (PRD 4.8.3)
+  - [x] 11.5 Implement idempotency for deploy triggers (keyed on merge SHA) to prevent double-deploy on retries (PRD 4.8.1)
+  - [x] 11.6 Add tests for: trigger payload generation, idempotency, timeout handling
 
 ### Phase 5: Cron + Alerts
 
