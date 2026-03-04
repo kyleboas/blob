@@ -102,29 +102,29 @@ Update this file after completing each sub-task.
 
 ### Phase 3: Memory System
 
-- [ ] 7.0 Layered memory: R2 + Vectorize + recall + ingestion
-  - [ ] 7.1 Define memory item schema for R2 at `mem/<id>.json`: id, scope, content, created_at, updated_at, source (thread | cron | compaction), version (PRD 4.6.2)
-  - [ ] 7.2 Implement R2 memory store: create, read, update, delete, list by prefix (PRD 4.6.2)
-  - [ ] 7.3 Implement embeddings helper using Workers AI (PRD 4.6.3)
-  - [ ] 7.4 Implement Vectorize wrapper: upsert (id, embedding, minimal metadata: id/scope/created_at/label), query by embedding, delete (PRD 4.6.3)
-  - [ ] 7.5 Implement recall: embed query → Vectorize nearest-neighbor → R2 fetch → inject as Retrieved Memory block (PRD 4.6.4)
-  - [ ] 7.6 Implement scope-priority retrieval: thread → channel → team, merge and deduplicate by content hash (PRD 4.6.5)
-  - [ ] 7.7 Enforce recall limits: max 10 items, max 4k tokens retrieved per query (configurable) (PRD 4.6.6)
-  - [ ] 7.8 Implement ingestion validation: reject secrets (pattern match), reject duplicates (cosine similarity > 0.95), reject oversized items (> 2k tokens) (PRD 4.6.7)
-  - [ ] 7.9 Implement atomic-as-possible write: R2 first, then Vectorize — if Vectorize fails, mark R2 item as unindexed for later retry (PRD 4.6.8)
-  - [ ] 7.10 Add tests for: recall merging and dedup, scope priority, ingestion validation (secrets, duplicates, size), unindexed item marking
-- [ ] 8.0 Daily learned flush
-  - [ ] 8.1 Implement the dedicated model call for learned extraction: constrained prompt that outputs JSONL with timestamp, scope, category (decision | fact | preference | lesson), content (one sentence), confidence (high | medium | low) (PRD 4.6.9)
-  - [ ] 8.2 Implement JSONL writer for `/workspace/blob_state/daily/YYYY-MM-DD.learned.jsonl` — append-only, create if not exists (PRD 4.6.10)
-  - [ ] 8.3 Apply secret redaction filter to all learned entries before writing (PRD 4.6.11)
-  - [ ] 8.4 Wire: trigger learned flush before every context compaction (PRD 4.6.9)
-  - [ ] 8.5 Implement unconditional upload of daily learned entries to R2 at `daily/YYYY-MM-DD.learned.jsonl` after each flush (PRD 4.6.12)
-  - [ ] 8.6 Add tests for: model prompt output parsing, secret redaction, append behavior, R2 upload
-- [ ] 9.0 Memory compaction + retention + reconciliation
-  - [ ] 9.1 Implement retention thresholds: max 500 items per scope, max 90 days age, max 50MB total in R2 (all configurable) (PRD 4.6.13)
-  - [ ] 9.2 Implement compaction: model call to summarize/merge related items within scope → replace originals in R2 → update Vectorize (delete old, insert new) → log the operation (PRD 4.6.14)
-  - [ ] 9.3 Implement Vectorize/R2 consistency reconciliation: find Vectorize entries pointing to missing R2 objects (delete from Vectorize), find unindexed R2 items (re-index into Vectorize), log all corrections (PRD 4.6.16)
-  - [ ] 9.4 Add tests for: retention threshold detection, compaction replacement logic, reconciliation of orphaned entries
+- [x] 7.0 Layered memory: R2 + Vectorize + recall + ingestion
+  - [x] 7.1 Define memory item schema for R2 at `mem/<id>.json`: id, scope, content, created_at, updated_at, source (thread | cron | compaction), version (PRD 4.6.2)
+  - [x] 7.2 Implement R2 memory store: create, read, update, delete, list by prefix (PRD 4.6.2)
+  - [x] 7.3 Implement embeddings helper using Workers AI (PRD 4.6.3)
+  - [x] 7.4 Implement Vectorize wrapper: upsert (id, embedding, minimal metadata: id/scope/created_at/label), query by embedding, delete (PRD 4.6.3)
+  - [x] 7.5 Implement recall: embed query → Vectorize nearest-neighbor → R2 fetch → inject as Retrieved Memory block (PRD 4.6.4)
+  - [x] 7.6 Implement scope-priority retrieval: thread → channel → team, merge and deduplicate by content hash (PRD 4.6.5)
+  - [x] 7.7 Enforce recall limits: max 10 items, max 4k tokens retrieved per query (configurable) (PRD 4.6.6)
+  - [x] 7.8 Implement ingestion validation: reject secrets (pattern match), reject duplicates (cosine similarity > 0.95), reject oversized items (> 2k tokens) (PRD 4.6.7)
+  - [x] 7.9 Implement atomic-as-possible write: R2 first, then Vectorize — if Vectorize fails, mark R2 item as unindexed for later retry (PRD 4.6.8)
+  - [x] 7.10 Add tests for: recall merging and dedup, scope priority, ingestion validation (secrets, duplicates, size), unindexed item marking
+- [x] 8.0 Daily learned flush
+  - [x] 8.1 Implement the dedicated model call for learned extraction: constrained prompt that outputs JSONL with timestamp, scope, category (decision | fact | preference | lesson), content (one sentence), confidence (high | medium | low) (PRD 4.6.9)
+  - [x] 8.2 Implement JSONL writer for `/workspace/blob_state/daily/YYYY-MM-DD.learned.jsonl` — append-only, create if not exists (PRD 4.6.10)
+  - [x] 8.3 Apply secret redaction filter to all learned entries before writing (PRD 4.6.11)
+  - [x] 8.4 Wire: trigger learned flush before every context compaction (PRD 4.6.9)
+  - [x] 8.5 Implement unconditional upload of daily learned entries to R2 at `daily/YYYY-MM-DD.learned.jsonl` after each flush (PRD 4.6.12)
+  - [x] 8.6 Add tests for: model prompt output parsing, secret redaction, append behavior, R2 upload
+- [x] 9.0 Memory compaction + retention + reconciliation
+  - [x] 9.1 Implement retention thresholds: max 500 items per scope, max 90 days age, max 50MB total in R2 (all configurable) (PRD 4.6.13)
+  - [x] 9.2 Implement compaction: model call to summarize/merge related items within scope → replace originals in R2 → update Vectorize (delete old, insert new) → log the operation (PRD 4.6.14)
+  - [x] 9.3 Implement Vectorize/R2 consistency reconciliation: find Vectorize entries pointing to missing R2 objects (delete from Vectorize), find unindexed R2 items (re-index into Vectorize), log all corrections (PRD 4.6.16)
+  - [x] 9.4 Add tests for: retention threshold detection, compaction replacement logic, reconciliation of orphaned entries
 
 ### Phase 4: GitHub + Deploy
 
