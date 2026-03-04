@@ -21,6 +21,7 @@ interface RunOptions {
   sandboxId?: string;
   critical?: boolean;
   onProgress?: (message: string) => Promise<void> | void;
+  conversationHistory?: Array<{ role: string; content: string }>;
 }
 
 interface BudgetState {
@@ -187,6 +188,13 @@ Stop when done and provide a concise summary.`;
     const usage: BudgetState = { inputTokens: 0, outputTokens: 0, warned: false, halted: false };
     const maxCalls = Number.parseInt(this.env.HEARTBEAT_MODEL_CALL_LIMIT ?? "10", 10);
     const maxConsecutiveFailures = Number.parseInt(this.env.MAX_CONSECUTIVE_TOOL_FAILURES ?? "5", 10);
+
+    // Inject prior conversation history so the agent has context
+    if (opts.conversationHistory?.length) {
+      for (const msg of opts.conversationHistory) {
+        this.messages.push({ role: msg.role as PiMessage["role"], content: msg.content });
+      }
+    }
 
     this.messages.push({ role: "user", content: userMessage });
 
