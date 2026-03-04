@@ -19,14 +19,12 @@ environment = "production"
 [ai] 
 binding = "AI"
 
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["AgentDO"]
+
 [observability.logs]
 enabled = true
 
-[[triggers.crons]]
-cron = "*/15 * * * *"
-
-[[triggers.crons]]
-cron = "0 */6 * * *"
-
-[[triggers.crons]]
-cron = "30 */6 * * *"
+[triggers]
+crons = ["*/15 * * * *", "0 */6 * * *", "30 */6 * * *"]

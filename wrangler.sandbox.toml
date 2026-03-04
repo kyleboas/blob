@@ -1,5 +1,5 @@
 name = "blob-sandbox"
-main = "src/sandbox-worker.ts"
+main = "src/integrations/sandbox-worker.ts"
 compatibility_date = "2026-02-19"
 compatibility_flags = ["nodejs_compat"]
 
