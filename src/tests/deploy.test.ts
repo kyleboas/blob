@@ -6,7 +6,7 @@ import {
   formatDeploySlackMessage,
   pollDeployStatus,
   triggerDeploy,
-} from "./deploy";
+} from "../deploy";
 
 test("buildDeployIdempotencyKey is merge-sha based", () => {
   assert.equal(buildDeployIdempotencyKey("abc123"), "deploy:abc123");

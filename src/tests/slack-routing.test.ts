@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { deriveRoutingKey, verifySlackSignature } from "./slack-routing";
+import { deriveRoutingKey, verifySlackSignature } from "../slack-routing";
 
 async function buildSignedRequest(secret: string, payload: unknown, ts: number): Promise<Request> {
   const body = JSON.stringify(payload);
