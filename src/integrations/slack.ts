@@ -224,7 +224,10 @@ async function processSlackEvent(body: {
         const repos = await getRepos(env);
         const repo = repos[0] ?? "default";
         const agent = new PiAgent(env, repo);
-        const response = await agent.run(originalText, { conversationHistory });
+        const response = await agent.run(originalText, {
+          conversationHistory,
+          onProgress: (msg: string) => postToSlack(channel, msg, env),
+        });
         // Store the exchange in the DO
         if (conversationDO) {
           await conversationDO.fetch("http://do/messages", { method: "POST", body: JSON.stringify({ role: "user", content: originalText }) });

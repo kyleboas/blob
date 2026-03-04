@@ -39,6 +39,7 @@ export interface Env {
   SANDBOX_KEEP_ON_FAILURE?: string;
   TOOL_MAX_FILE_BYTES?: string;
   BASH_TIMEOUT_MS?: string;
+  BASH_MAX_OUTPUT_BYTES?: string;
   JOB_MAX_INPUT_TOKENS?: string;
   JOB_MAX_OUTPUT_TOKENS?: string;
   HEARTBEAT_MODEL_CALL_LIMIT?: string;
