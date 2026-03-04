@@ -1,78 +1,205 @@
-# Tasks: Pi-Method Full Autonomy
+# /tasks/tasks-blob-sandbox-refactor.md
 
 ## Relevant Files
 
-- `src/pi-agent.ts` - Core PiAgent class; tool registry, agent loop, and LLM call — primary file for tasks 1, 2, and 4
-- `src/agent.ts` - Scheduled Agent class; `run()` and `commit()` stubs replaced in task 3
-- `src/index.ts` - Worker entry point; scheduled handler updated in task 3
-- `src/llm.ts` - LLM call layer; `callLLM()` updated to support structured tool call request/response in task 1
-- `src/types.ts` - Shared TypeScript types; new ToolDefinition, ToolCall, and Message types added in task 1
-- `src/slack.ts` - Slack handler; `handleSlackEvent()` updated to use PiAgent in task 3
-- `src/do.ts` - Durable Object; updated to seed default self-targeting repo/goal in task 6
-- `sandbox/Dockerfile` - Sandbox container; verify `gh` CLI or `curl` available for GitHub API calls in task 2
-- `wrangler.agent.toml` - Reference config for building sanitized `wrangler.toml` in task 5
-- `wrangler.toml` - Sanitized config to be created and committed (currently gitignored) in task 5
-- `.gitignore` - Updated to stop ignoring `wrangler.toml` in task 5
-- `.github/workflows/deploy.yml` - CI/CD deploy workflow created in task 5
-- `CLAUDE.md` - Self-description file for agent; created in task 6
+- `src/index.ts` — Worker entrypoint: Slack Events API handler, cron trigger dispatcher, and routing.
+- `src/durable/*` — Durable Object: agent brain, job model, SQLite state, heartbeat alarm.
+- `src/sandbox/*` — Sandbox client, workspace lifecycle (provisioning, teardown, state persistence).
+- `src/tools/*` — `read/write/edit/bash` tool adapters with safety limits and retry logic.
+- `src/agent/*` — Pi-style tool loop, prompt assembly, Retrieved Memory injection, budget enforcement.
+- `src/workspace/state.ts` — Workspace state helpers for `/workspace/blob_state/log.jsonl` and `context.jsonl`.
+- `src/workspace/daily_learned.ts` — Daily learned flush: model-call-based extraction, JSONL writer, R2 upload.
+- `src/memory/*` — R2 memory items, Vectorize index, recall, ingestion validation, compaction, reconciliation.
+- `src/services/*` — R2, Vectorize, embeddings, logging, secret redaction helpers.
+- `src/github/*` — Git operations in Sandbox + GitHub API wrapper (PR, merge, conflict detection).
+- `src/deploy/*` — Deploy trigger + deploy status polling + Slack reporting.
+- `src/scheduler/heartbeat.ts` — Heartbeat alarm: job resumption, health checks, daily summary.
+- `src/scheduler/cron/*` — Cron handlers: compaction, reconciliation, content-scan, others.
+- `src/alerts/*` — Cron failure tracking, stall detection, Slack alerting, R2 fallback logging.
+- `src/cost/*` — Token tracking, per-job budgets, per-heartbeat limits, daily ceiling enforcement.
+- `wrangler*.toml` — Bindings for DO, Sandbox, R2, Vectorize, AI, secrets, cron triggers.
+- `config/scan-targets.json` — R2-hosted scan target definitions (added/removed without code changes).
+- `README.md` / `docs/*` — Architecture diagram, setup guide, happy-path walkthrough.
+- `src/**/*.test.ts` — Unit tests and integration test scaffolding.
 
 ### Notes
 
-- No test framework is currently configured. Verify correctness via end-to-end runs against the deployed Worker.
-- The sandbox has outbound HTTP so GitHub REST API calls work from within tools.
-- `GITHUB_TOKEN`, `CLOUDFLARE_API_TOKEN`, and `CLOUDFLARE_ACCOUNT_ID` must be set as GitHub Actions secrets before CI/CD works — document this in `CLAUDE.md`.
-- The existing `blob-git-askpass` credential helper in the Dockerfile already handles `GITHUB_TOKEN` auth for git clone/push.
+- Unit tests should be placed alongside the code files they test.
+- Use `npx jest [optional/path/to/test/file]` to run tests.
+- PRD reference: `/tasks/prd-blob-sandbox-refactor.md`
 
 ## Instructions for Completing Tasks
 
-IMPORTANT: As you complete each task, check it off by changing `- [ ]` to `- [x]`. Update after each sub-task, not just after completing a full parent task.
+IMPORTANT: As you complete each task, check it off by changing `- [ ]` to `- [x]`.
 
-Example:
-- `- [ ] 1.1 Read file` → `- [x] 1.1 Read file`
+Update this file after completing each sub-task.
+
+-----
 
 ## Tasks
 
+### Phase 0: Setup
+
 - [ ] 0.0 Create feature branch
-  - [ ] 0.1 Confirm branch `claude/pi-autonomy-assessment-8H6Mo` is checked out and up to date with remote
+  - [ ] 0.1 Create and checkout `refactor/blob-sandbox-refactor`
 
-- [ ] 1.0 Migrate PiAgent to structured JSON tool calls
-  - [ ] 1.1 In `src/types.ts`, add TypeScript interfaces: `ToolSchema` (JSON Schema object), `ToolDefinition` (name, description, schema, handler), `ToolCall` (id, name, arguments), `ToolResult` (tool_call_id, content), and update `LLMMessage` to include `tool_calls` and `tool_call_id` fields
-  - [ ] 1.2 In `src/pi-agent.ts`, update `ToolDefinition` to use the new `ToolSchema` interface and remove the `prompt` snippet field (no longer needed for system prompt injection)
-  - [ ] 1.3 Rewrite all 7 existing tool definitions (`read`, `write`, `edit`, `bash`, `memory`, `extension`, `load`) with proper JSON Schema `parameters` blocks (type, properties, required, descriptions)
-  - [ ] 1.4 In `src/llm.ts` (or `PiAgent.callLLM()`), update the AI Gateway request to include a `tools` array (serialized from registered `ToolDefinition`s) and `tool_choice: "auto"` in the request body
-  - [ ] 1.5 In `PiAgent`, replace the text-format tool call parser (`TOOL: name\nARG: {...}`) with a parser that reads `response.choices[0].message.tool_calls[]` from the LLM response
-  - [ ] 1.6 Update the agent loop so that when `tool_calls` is present the agent executes each call and appends a `tool` role message per result, then loops; when `tool_calls` is absent treat the text content as the final answer and stop
-  - [ ] 1.7 Update the system prompt builder in `PiAgent` to remove the hand-written tool-format instructions (the LLM now uses JSON schema tool calling natively)
-  - [ ] 1.8 Manually test via `POST /pi/chat` with a simple message to confirm tool calls round-trip correctly (bash echo, read a file)
+### Phase 1: Audit and Architecture
 
-- [ ] 2.0 Add git and github tools to PiAgent
-  - [ ] 2.1 In `sandbox/Dockerfile`, verify `curl` and `jq` are installed (needed for GitHub REST API calls); add them if missing
-  - [ ] 2.2 In `src/pi-agent.ts`, add a `git` tool with a single `command` string argument; the handler passes the full command to `execWithRetry()` prefixed with `git -C /workspace/<repo>`; valid subcommands: `clone`, `status`, `diff`, `add`, `commit`, `push`, `checkout`
-  - [ ] 2.3 In `src/pi-agent.ts`, add a `github` tool with arguments `owner` (string), `repo` (string), `branch` (string), `title` (string), `body` (string), `draft` (boolean, default true); the handler calls the GitHub REST API (`POST /repos/{owner}/{repo}/pulls`) using `GITHUB_TOKEN` via `curl` in the sandbox
-  - [ ] 2.4 Update the `PiAgent` system prompt to include the PR-first workflow rules: always work on a new branch named `blob/<unix-timestamp>-<kebab-goal-slug>`, never commit directly to `main`, always open a draft PR as the final step
-  - [ ] 2.5 Manually test the `git` tool via `POST /pi/chat` with repo set: confirm clone, status, and a dummy commit+push to a test branch work end-to-end
+- [ ] 1.0 Repository audit: identify and classify legacy code to remove
+  - [ ] 1.1 Map current runtime entrypoints (Worker fetch handler, DO alarm, Sandbox sessions, scheduled triggers)
+  - [ ] 1.2 Identify duplicate/obsolete agent loops and tool implementations
+  - [ ] 1.3 Identify “Workers-only pseudo-tools” or HTTP-template tool layers to delete
+  - [ ] 1.4 Identify unused configs, scripts, dependencies, and dead code not referenced by any entrypoint
+  - [ ] 1.5 Produce `/tasks/legacy-delete-plan.md` with files/modules + rationale for each deletion
+- [ ] 2.0 Define target architecture and module boundaries
+  - [ ] 2.1 Document canonical request flow: Slack → Worker → DO → Sandbox → tools → model loop → Slack response
+  - [ ] 2.2 Document DO keying rules: `team_id:channel_id:thread_ts` for threads, `team_id:channel_id:channel` for top-level, `team_id:user_id:dm` for DMs
+  - [ ] 2.3 Document tool surface: `read/write/edit/bash` only — no other tools
+  - [ ] 2.4 Document scheduling model: DO alarm heartbeat (10 min) + `wrangler.toml` cron triggers for heavy tasks
+  - [ ] 2.5 Document memory architecture: workspace state (ephemeral) → R2 (source of truth) → Vectorize (semantic index) → daily learned flush → compaction
+  - [ ] 2.6 Document cost control model: per-job token budget, per-heartbeat call limit, daily aggregate ceiling, all configurable via env vars
+  - [ ] 2.7 Write architecture diagram and happy-path walkthrough in `docs/architecture.md`
 
-- [ ] 3.0 Wire Agent.run() to PiAgent with clone-fresh-commit-PR flow
-  - [ ] 3.1 In `src/agent.ts`, replace the `plan()` call and `commit()` stub with: instantiate `PiAgent`, register all tools (including `git` and `github`), then call `piAgent.run(systemPrompt, userPrompt)` where the user prompt is built from `repo` + `goals`
-  - [ ] 3.2 In `src/agent.ts`, build a `runPrompt` that instructs the agent to: (1) clone the repo, (2) explore and find something actionable, (3) implement it, (4) commit to a new `blob/` branch, (5) open a draft PR — and return the PR URL as its final message
-  - [ ] 3.3 In `src/agent.ts`, delete the `commit()` method entirely (git operations now happen via the `git` tool inside the PiAgent loop)
-  - [ ] 3.4 In `src/index.ts`, confirm the scheduled handler still calls `new Agent(repo, goals, env).run()` — no changes needed if Agent API is preserved; update if signature changed
-  - [ ] 3.5 In `src/slack.ts`, find the code path that delegates to `PiAgent` for repo analysis and confirm it now goes through the same `Agent.run()` flow, so Slack-triggered and cron-triggered runs are identical
+### Phase 2: Core Infrastructure
 
-- [ ] 4.0 Add grep, find, ls tools to PiAgent
-  - [ ] 4.1 In `src/pi-agent.ts`, add a `grep` tool with arguments `pattern` (string), `path` (string, default `.`), `flags` (string, optional e.g. `-r`, `-n`, `-i`); handler runs `grep` in the sandbox respecting `.gitignore` via `git grep` when inside a repo
-  - [ ] 4.2 In `src/pi-agent.ts`, add a `find` tool with arguments `path` (string), `pattern` (string glob); handler runs `find <path> -name "<pattern>"` in the sandbox, excluding `.git` and `node_modules`
-  - [ ] 4.3 In `src/pi-agent.ts`, add an `ls` tool with arguments `path` (string, default `.`), `flags` (string, optional e.g. `-la`); handler runs `ls` in the sandbox
-  - [ ] 4.4 Update the `PiAgent` system prompt to list `grep`, `find`, and `ls` as the preferred tools for exploration (over running bare `bash` find/grep commands)
+- [ ] 3.0 Slack ingestion and DO routing
+  - [ ] 3.1 Implement Slack signature verification + 3-second ack (PRD 4.2.1)
+  - [ ] 3.2 Implement deterministic DO routing keys per the keying rules in 2.2 (PRD 4.2.2–4.2.3)
+  - [ ] 3.3 Define thread-to-channel state migration behavior (copy-on-first-thread-message vs. lazy lookup) and implement chosen approach (PRD 4.2.4)
+  - [ ] 3.4 Implement Slack posting utilities for progress updates, final summaries, and error messages (PRD 4.2.5)
+  - [ ] 3.5 Add tests for: routing key derivation (all three patterns), Slack signature verification, and ack timing
+- [ ] 4.0 DO job model + heartbeat
+  - [ ] 4.1 Implement job schema in DO SQLite: id, status (queued → running → paused → completed | failed), created_at, updated_at, resume_state (current step, tool history, partial outputs, sandbox_id), token_usage, model_call_count (PRD 4.3.1–4.3.3)
+  - [ ] 4.2 Implement job lifecycle transitions with validation (e.g., only running → paused, not queued → completed)
+  - [ ] 4.3 Implement max job duration enforcement: configurable wall-clock limit (default 30 min), force-pause on breach (PRD 4.3.4)
+  - [ ] 4.4 Implement heartbeat as DO alarm that re-schedules itself every 10 minutes (PRD 4.9.1)
+  - [ ] 4.5 Heartbeat logic: resume paused jobs with remaining budget, start queued jobs oldest-first, respect per-heartbeat model call limit (PRD 4.9.2)
+  - [ ] 4.6 Heartbeat must not run heavy workloads directly — defer jobs exceeding cycle budget (PRD 4.9.3)
+  - [ ] 4.7 Implement daily summary posting: once per day on first heartbeat after midnight UTC if configured (PRD 4.9.2)
+  - [ ] 4.8 Add tests for: lifecycle transitions, pause/resume with state, budget enforcement, heartbeat scheduling
+- [ ] 5.0 Sandbox lifecycle + Pi 4 tools
+  - [ ] 5.1 Implement sandbox provisioning: create on first tool call for a sandboxId, reuse if exists (PRD 4.4.4)
+  - [ ] 5.2 Implement sandbox idle timeout: eligible for teardown after configurable duration (default 60 min) with no tool calls (PRD 4.4.5)
+  - [ ] 5.3 Implement pre-teardown state persistence: save `/workspace/blob_state/*` to R2; restore into fresh sandbox on next activation (PRD 4.4.6)
+  - [ ] 5.4 Implement sandbox cleanup policy: configurable per job type — destroy on completion, keep on failure for debugging (PRD 4.4.7)
+  - [ ] 5.5 Implement `bash` tool: timeout enforcement, max output capture, exit status, allowed command patterns (PRD 4.4.3)
+  - [ ] 5.6 Implement `read` tool: path allowlist, max file size (PRD 4.4.3)
+  - [ ] 5.7 Implement `write` tool: path allowlist, max file size, atomic write (PRD 4.4.3)
+  - [ ] 5.8 Implement `edit` tool: deterministic text replacement, path allowlist, size limits (PRD 4.4.3)
+  - [ ] 5.9 Implement workspace state helpers for `log.jsonl` and `context.jsonl` (PRD 4.6.1)
+  - [ ] 5.10 Add tests for: tool adapters (mocked sandbox client), sandbox provisioning/reuse, state persistence round-trip, safety limit enforcement
+- [ ] 6.0 Agent loop + error handling + cost control
+  - [ ] 6.1 Implement tool loop: build model input (system prompt + Retrieved Memory + conversation) → execute tool calls → append results → stop on no tool calls or budget hit (PRD 4.5.1)
+  - [ ] 6.2 Implement streaming output and periodic Slack progress updates (PRD 4.5.2)
+  - [ ] 6.3 Implement retry policy — `bash`: up to 2 retries with 5s backoff for transient errors, no retry for deterministic failures; `read/write/edit`: 1 retry on I/O errors, immediate fail on schema/path errors (PRD 4.5.3)
+  - [ ] 6.4 On tool failure after retries: append failure to context, let model decide next action (PRD 4.5.3)
+  - [ ] 6.5 Implement max consecutive tool failures per job: default 5, configurable — pause job and notify Slack on breach (PRD 4.5.4)
+  - [ ] 6.6 Implement per-job token budget: default 100k input + 20k output — inject warning at 90%, halt and pause at 100% (PRD 4.5.5)
+  - [ ] 6.7 Implement per-heartbeat model call limit: default 10 calls across all jobs (PRD 4.5.6)
+  - [ ] 6.8 Implement daily aggregate token ceiling: default 500k — pause non-critical jobs when hit, optional reserve budget for critical jobs (PRD 4.5.7)
+  - [ ] 6.9 Token tracking: record usage per job and per day in DO state, expose in logs (PRD 4.5.5–4.5.7)
+  - [ ] 6.10 Add tests for: retry logic per tool type, consecutive failure threshold, token budget warnings and halts, daily ceiling enforcement
 
-- [ ] 5.0 Add CI/CD pipeline and commit sanitized wrangler.toml
-  - [ ] 5.1 Create `.github/workflows/deploy.yml` that triggers on `push` to `main`; steps: checkout, `npm ci`, `wrangler deploy --env production` using `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets
-  - [ ] 5.2 Create a sanitized `wrangler.toml` by copying `wrangler.agent.toml`, removing any account IDs or secret values, and adding a comment header explaining that secrets are injected via environment variables or GitHub Actions secrets
-  - [ ] 5.3 In `.gitignore`, change the `wrangler.toml` entry to `wrangler.*.local.toml` (or remove it entirely) so the sanitized `wrangler.toml` is tracked by git
-  - [ ] 5.4 Verify `wrangler.toml` is now tracked by running `git status` and confirming it appears as a new file, then stage it
+### Phase 3: Memory System
 
-- [ ] 6.0 Register self-targeting goal and write CLAUDE.md
-  - [ ] 6.1 In `src/do.ts`, in the Durable Object's initialisation logic (first-run or empty state check), seed `kyleboas/blob` as a default repo with the goal: `"Find TODOs, open issues, or incomplete features in this codebase. Pick one, implement it, and open a draft PR."`
-  - [ ] 6.2 Ensure the seed only runs once (check if repos list is empty before seeding, so it doesn't overwrite user-configured repos on restart)
-  - [ ] 6.3 Create `CLAUDE.md` at the repo root with the following sections: (1) Project purpose and architecture overview, (2) Directory structure with one-line descriptions, (3) How to build and deploy (`npm ci`, `wrangler deploy`), (4) Required environment variables and secrets, (5) Files the agent must not modify (e.g. `wrangler.agent.toml`, `sandbox/Dockerfile` unless fixing a specific issue), (6) The PR workflow the agent must follow (branch naming, draft PRs, never push to main), (7) Open questions from the PRD that remain unresolved
-  - [ ] 6.4 Commit all changes from tasks 1–6 with a clear message and push to `claude/pi-autonomy-assessment-8H6Mo`
+- [ ] 7.0 Layered memory: R2 + Vectorize + recall + ingestion
+  - [ ] 7.1 Define memory item schema for R2 at `mem/<id>.json`: id, scope, content, created_at, updated_at, source (thread | cron | compaction), version (PRD 4.6.2)
+  - [ ] 7.2 Implement R2 memory store: create, read, update, delete, list by prefix (PRD 4.6.2)
+  - [ ] 7.3 Implement embeddings helper using Workers AI (PRD 4.6.3)
+  - [ ] 7.4 Implement Vectorize wrapper: upsert (id, embedding, minimal metadata: id/scope/created_at/label), query by embedding, delete (PRD 4.6.3)
+  - [ ] 7.5 Implement recall: embed query → Vectorize nearest-neighbor → R2 fetch → inject as Retrieved Memory block (PRD 4.6.4)
+  - [ ] 7.6 Implement scope-priority retrieval: thread → channel → team, merge and deduplicate by content hash (PRD 4.6.5)
+  - [ ] 7.7 Enforce recall limits: max 10 items, max 4k tokens retrieved per query (configurable) (PRD 4.6.6)
+  - [ ] 7.8 Implement ingestion validation: reject secrets (pattern match), reject duplicates (cosine similarity > 0.95), reject oversized items (> 2k tokens) (PRD 4.6.7)
+  - [ ] 7.9 Implement atomic-as-possible write: R2 first, then Vectorize — if Vectorize fails, mark R2 item as unindexed for later retry (PRD 4.6.8)
+  - [ ] 7.10 Add tests for: recall merging and dedup, scope priority, ingestion validation (secrets, duplicates, size), unindexed item marking
+- [ ] 8.0 Daily learned flush
+  - [ ] 8.1 Implement the dedicated model call for learned extraction: constrained prompt that outputs JSONL with timestamp, scope, category (decision | fact | preference | lesson), content (one sentence), confidence (high | medium | low) (PRD 4.6.9)
+  - [ ] 8.2 Implement JSONL writer for `/workspace/blob_state/daily/YYYY-MM-DD.learned.jsonl` — append-only, create if not exists (PRD 4.6.10)
+  - [ ] 8.3 Apply secret redaction filter to all learned entries before writing (PRD 4.6.11)
+  - [ ] 8.4 Wire: trigger learned flush before every context compaction (PRD 4.6.9)
+  - [ ] 8.5 Implement unconditional upload of daily learned entries to R2 at `daily/YYYY-MM-DD.learned.jsonl` after each flush (PRD 4.6.12)
+  - [ ] 8.6 Add tests for: model prompt output parsing, secret redaction, append behavior, R2 upload
+- [ ] 9.0 Memory compaction + retention + reconciliation
+  - [ ] 9.1 Implement retention thresholds: max 500 items per scope, max 90 days age, max 50MB total in R2 (all configurable) (PRD 4.6.13)
+  - [ ] 9.2 Implement compaction: model call to summarize/merge related items within scope → replace originals in R2 → update Vectorize (delete old, insert new) → log the operation (PRD 4.6.14)
+  - [ ] 9.3 Implement Vectorize/R2 consistency reconciliation: find Vectorize entries pointing to missing R2 objects (delete from Vectorize), find unindexed R2 items (re-index into Vectorize), log all corrections (PRD 4.6.16)
+  - [ ] 9.4 Add tests for: retention threshold detection, compaction replacement logic, reconciliation of orphaned entries
+
+### Phase 4: GitHub + Deploy
+
+- [ ] 10.0 GitHub PR automation
+  - [ ] 10.1 Implement configurable repo/branch settings per channel or team in R2 config or DO state (PRD 4.7.1)
+  - [ ] 10.2 Implement repo operations in Sandbox: clone, checkout base branch, create feature branch (PRD 4.7.1)
+  - [ ] 10.3 Implement pre-push: fetch latest base branch, rebase/merge — on conflict, post Slack message describing conflicts, pause job, await user instruction (retry, force-push, or abort) (PRD 4.7.2)
+  - [ ] 10.4 Implement pre-push secret scan: diff against secret patterns, block push if match found (PRD 4.7.3)
+  - [ ] 10.5 Implement commit + push + PR creation via GitHub API with idempotency key (branch name + commit hash) (PRD 4.7.3–4.7.4)
+  - [ ] 10.6 Post PR link to Slack (PRD 4.7.4)
+  - [ ] 10.7 Implement optional auto-merge: poll/webhook for CI checks → merge on pass → post result; on CI failure, post summary and pause (PRD 4.7.5)
+  - [ ] 10.8 Implement multi-repo support: model or user specifies target repo, ask for clarification in Slack if ambiguous (PRD 4.7.6)
+  - [ ] 10.9 Add tests for: GitHub API wrapper (mocked), idempotency keys, conflict detection flow, secret scan blocking
+- [ ] 11.0 Deploy hooks + status reporting
+  - [ ] 11.1 Implement deploy trigger: configurable mechanism per repo — webhook URL, GitHub Actions dispatch, or Cloudflare Pages deploy hook (PRD 4.8.1)
+  - [ ] 11.2 Implement deploy status polling with configurable timeout (default 10 min) (PRD 4.8.2)
+  - [ ] 11.3 Report deploy status to Slack: success, failure, or timeout (PRD 4.8.2)
+  - [ ] 11.4 If deploy mechanism not configured, skip deploy step and notify Slack that manual deploy is needed (PRD 4.8.3)
+  - [ ] 11.5 Implement idempotency for deploy triggers (keyed on merge SHA) to prevent double-deploy on retries (PRD 4.8.1)
+  - [ ] 11.6 Add tests for: trigger payload generation, idempotency, timeout handling
+
+### Phase 5: Cron + Alerts
+
+- [ ] 12.0 Cron jobs
+  - [ ] 12.1 Add cron triggers to `wrangler.toml` and implement dispatcher in Worker fetch/scheduled handler (PRD 4.9.4–4.9.5)
+  - [ ] 12.2 Implement cron execution pattern: create isolated sandbox session → run task → store results to R2 → post Slack summary → record outcome in DO state (status, duration, last_run_at, last_error, output_summary) (PRD 4.9.5)
+  - [ ] 12.3 Implement `content-scan` cron: read scan targets from `config/scan-targets.json` in R2, run scan, persist findings to R2 memory items, post Slack summary (PRD 4.9.6)
+  - [ ] 12.4 Implement `memory-compaction` cron: invoke compaction logic from task 9.2 (PRD 4.9.6)
+  - [ ] 12.5 Implement `memory-reconciliation` cron: invoke reconciliation logic from task 9.3 (PRD 4.9.6)
+  - [ ] 12.6 Add tests for: cron dispatcher routing, isolated session creation, outcome recording
+- [ ] 13.0 Fallback alerts
+  - [ ] 13.1 Implement cron outcome tracking in DO state: job_name, status (success | failure | running), last_run_at, last_success_at, last_error, consecutive_failures (PRD 4.10.1)
+  - [ ] 13.2 Implement immediate Slack alert on cron failure (configurable per job) (PRD 4.10.2)
+  - [ ] 13.3 Implement heartbeat detection: consecutive failures ≥ N (default 3, env var `CRON_FAIL_THRESHOLD`) and stall detection (no run within 2× expected cadence, env var `CRON_STALL_MULTIPLIER`) (PRD 4.10.3)
+  - [ ] 13.4 Implement Slack alert payload: job name, last error summary, last success timestamp, suggested next action (PRD 4.10.4)
+  - [ ] 13.5 Implement R2 fallback logging at `alerts/YYYY-MM-DD.jsonl` if Slack posting fails (PRD 4.10.5)
+  - [ ] 13.6 Add tests for: threshold detection, stall detection, alert payload construction, R2 fallback on Slack failure
+
+### Phase 6: Observability + Safety
+
+- [ ] 14.0 Observability
+  - [ ] 14.1 Implement structured JSON logging for: Slack ingest, job lifecycle, tool call timing/outcome, memory ops, GitHub ops, deploy ops, heartbeat runs, cron runs (PRD 4.11.1)
+  - [ ] 14.2 Include log reference IDs in all Slack error messages so operators can trace issues (PRD 4.11.3)
+  - [ ] 14.3 Log token usage per job and per day for cost monitoring (PRD 4.5.5–4.5.7)
+- [ ] 15.0 Secret redaction + safety
+  - [ ] 15.1 Implement configurable secret pattern list (API keys, tokens, passwords, private keys) used across all subsystems (PRD 4.11.2)
+  - [ ] 15.2 Apply redaction in: logs, memory ingestion, daily learned flush, GitHub commit diffs, Slack messages (PRD 4.11.2)
+  - [ ] 15.3 Implement catch-all exception handler in Worker: report generic error to Slack with log reference ID, never expose stack traces (PRD 4.11.3)
+  - [ ] 15.4 Add tests for: pattern matching against known secret formats, redaction in each subsystem
+- [ ] 16.0 GitHub API rate limit handling
+  - [ ] 16.1 Track remaining GitHub API quota from response headers (PRD 7)
+  - [ ] 16.2 Warn when below 10% remaining; implement backoff when rate-limited (PRD 7)
+
+### Phase 7: Cleanup + Documentation
+
+- [ ] 17.0 Delete legacy code
+  - [ ] 17.1 Remove all files/modules listed in `/tasks/legacy-delete-plan.md`
+  - [ ] 17.2 Remove unused dependencies from `package.json`
+  - [ ] 17.3 Remove obsolete config files and scripts
+  - [ ] 17.4 Verify no dangling imports or references remain — build must pass clean
+- [ ] 18.0 Documentation
+  - [ ] 18.1 Write `README.md`: project overview, prerequisites, setup steps, env var reference, deployment
+  - [ ] 18.2 Write `docs/architecture.md`: request flow diagram, module boundaries, DO keying rules, memory architecture, scheduling model, cost control
+  - [ ] 18.3 Write `docs/cron-jobs.md`: how to add/remove/configure cron jobs and scan targets
+  - [ ] 18.4 Write `docs/runbook.md`: common failure modes, how to read alerts, how to debug with `wrangler tail`, how to manually trigger cron jobs
+- [ ] 19.0 Final validation
+  - [ ] 19.1 Run full test suite — all tests pass
+  - [ ] 19.2 Build and deploy to staging — no errors
+  - [ ] 19.3 Manual smoke test checklist:
+    - [ ] 19.3.1 Slack message → Blob responds with tool usage
+    - [ ] 19.3.2 Slack request → PR created → PR link posted to Slack
+    - [ ] 19.3.3 Auto-merge enabled → merge triggers deploy → deploy status posted to Slack
+    - [ ] 19.3.4 Memory recall: Blob references a previous decision without being reminded
+    - [ ] 19.3.5 Cron job runs → results in R2 → Slack summary posted
+    - [ ] 19.3.6 Simulate cron failure 3× → Slack alert fires with correct payload
+    - [ ] 19.3.7 Hit daily token ceiling → non-critical jobs pause → Slack notification
+    - [ ] 19.3.8 Push with embedded secret → push blocked → Slack notification
+  - [ ] 19.4 Verify no legacy code remains: grep for known legacy module names, confirm zero matches
