@@ -1,20 +1,21 @@
 import type { Env } from "./types";
 
-interface SandboxResult {
+export interface SandboxResult {
   stdout: string;
   stderr: string;
   exitCode: number;
 }
 
+interface SandboxSession {
+  lastUsedAt: number;
+}
+
 const SANDBOX_STARTUP_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
-const SANDBOX_STARTUP_RETRYABLE_MESSAGES = [
-  "container is not running",
-  "container crashed while checking for ports",
-  "consider calling start()",
-  "container startup failed",
-  "createSession",
-  "checking for ports",
-];
+const SANDBOX_STARTUP_RETRYABLE_MESSAGES = ["container is not running", "container startup failed", "createSession"];
+const SANDBOX_STATE_PREFIX = "sandbox-state/";
+const WORKSPACE_STATE_DIR = "/workspace/blob_state";
+
+const sessions = new Map<string, SandboxSession>();
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -23,8 +24,7 @@ function delay(ms: number): Promise<void> {
 function parseHttpStatus(err: unknown): number | undefined {
   const message = err instanceof Error ? err.message : String(err);
   const statusMatch = message.match(/status:\s*(\d+)/i);
-  if (!statusMatch) return undefined;
-  return Number.parseInt(statusMatch[1], 10);
+  return statusMatch ? Number.parseInt(statusMatch[1], 10) : undefined;
 }
 
 function isRetryableSandboxStartupError(err: unknown): boolean {
@@ -32,38 +32,25 @@ function isRetryableSandboxStartupError(err: unknown): boolean {
   return SANDBOX_STARTUP_RETRYABLE_MESSAGES.some((fragment) => message.includes(fragment));
 }
 
-function formatSandboxError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
+function estimateBytes(text: string): number {
+  return new TextEncoder().encode(text).length;
 }
 
-function createSandboxDiagnostic(
-  phase: "start" | "exec" | "writeFile" | "readFile",
-  attempt: number,
-  err: unknown,
-  command?: string,
-  path?: string,
-): string {
-  const status = parseHttpStatus(err);
-  const message = formatSandboxError(err);
-  return JSON.stringify({
-    phase,
-    attempt,
-    command,
-    path,
-    status,
-    retryableStatus: status !== undefined ? SANDBOX_STARTUP_RETRYABLE_STATUS.has(status) : false,
-    retryableMessage: isRetryableSandboxStartupError(err),
-    message,
-  });
+function ensureRelativeWorkspacePath(path: string): void {
+  if (!path || path.startsWith("/") || path.includes("..")) {
+    throw new Error(`Path not allowed: ${path}`);
+  }
+}
+
+function allowedCommand(command: string): boolean {
+  const blocked = [/rm\s+-rf\s+\//, /:\(\)\{\s*:\|:\s*&\s*\}.*:\)/, /shutdown/, /reboot/];
+  return !blocked.some((pattern) => pattern.test(command));
 }
 
 async function withSandboxRetry<T>(opts: {
   env: Env;
   phase: "start" | "exec" | "writeFile" | "readFile";
   attempts?: number;
-  command?: string;
-  path?: string;
   operation: () => Promise<T>;
 }): Promise<T> {
   const attempts = opts.attempts ?? 3;
@@ -79,13 +66,8 @@ async function withSandboxRetry<T>(opts: {
         isRetryableSandboxStartupError(err) ||
         (status !== undefined && SANDBOX_STARTUP_RETRYABLE_STATUS.has(status));
 
-      const diagnostic = createSandboxDiagnostic(opts.phase, attempt, err, opts.command, opts.path);
-      console.error(`sandbox_${opts.phase}_failure`, diagnostic);
-
       if (!(attempt < attempts && retryable)) {
-        throw new Error(
-          `Sandbox ${opts.phase} failed after ${attempt} attempt(s). Diagnostic: ${diagnostic}`,
-        );
+        throw err;
       }
 
       await delay(attempt * 500);
@@ -95,119 +77,177 @@ async function withSandboxRetry<T>(opts: {
   throw lastError;
 }
 
-async function ensureSandboxStarted(env: Env, contextCommand?: string): Promise<void> {
+async function ensureSandboxStarted(env: Env): Promise<void> {
   if (typeof env.SANDBOX.start !== "function") {
-    throw new Error(
-      "Sandbox service binding is missing start(); check blob-agent -> blob-sandbox service interface wiring.",
-    );
+    throw new Error("Sandbox service binding is missing start() implementation.");
   }
 
   await withSandboxRetry({
     env,
     phase: "start",
     attempts: 3,
-    command: contextCommand,
     operation: () => env.SANDBOX.start!(),
   });
 }
 
-async function execWithRetry(env: Env, command: string, attempts = 3): Promise<SandboxResult> {
-  await ensureSandboxStarted(env, command);
-  return withSandboxRetry({
-    env,
-    phase: "exec",
-    attempts,
-    command,
-    operation: () => env.SANDBOX.exec(command),
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Sandbox timeout after ${timeoutMs}ms`)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
   });
 }
 
-async function writeFileWithRetry(env: Env, path: string, content: string, attempts = 3): Promise<void> {
-  await ensureSandboxStarted(env, `writeFile:${path}`);
-  await withSandboxRetry({
-    env,
-    phase: "writeFile",
-    attempts,
-    path,
-    operation: () => env.SANDBOX.writeFile(path, content),
-  });
+async function persistWorkspaceState(sandboxId: string, env: Env): Promise<void> {
+  if (!env.REPO_STORE) return;
+  const [log, context] = await Promise.all([
+    env.SANDBOX.readFile(`${WORKSPACE_STATE_DIR}/log.jsonl`).catch(() => ""),
+    env.SANDBOX.readFile(`${WORKSPACE_STATE_DIR}/context.jsonl`).catch(() => ""),
+  ]);
+
+  await env.REPO_STORE.put(`${SANDBOX_STATE_PREFIX}${sandboxId}.json`, JSON.stringify({ log, context }));
 }
 
-async function readFileWithRetry(env: Env, path: string, attempts = 3): Promise<string> {
-  await ensureSandboxStarted(env, `readFile:${path}`);
-  return withSandboxRetry({
-    env,
-    phase: "readFile",
-    attempts,
-    path,
-    operation: () => env.SANDBOX.readFile(path),
-  });
+async function restoreWorkspaceState(sandboxId: string, env: Env): Promise<void> {
+  if (!env.REPO_STORE) return;
+  const saved = await env.REPO_STORE.get(`${SANDBOX_STATE_PREFIX}${sandboxId}.json`);
+  if (!saved) return;
+  const payload = await saved.json<{ log?: string; context?: string }>();
+  if (payload.log) {
+    await env.SANDBOX.writeFile(`${WORKSPACE_STATE_DIR}/log.jsonl`, payload.log);
+  }
+  if (payload.context) {
+    await env.SANDBOX.writeFile(`${WORKSPACE_STATE_DIR}/context.jsonl`, payload.context);
+  }
 }
 
-// Validate command before execution
-function validateCommand(command: string): { valid: boolean; error?: string } {
-  const dangerous = [/rm\s+-rf\s+\//, /:\(\)\{\s*:\|:\s*\&\s*\}.*:\)/];
+export async function ensureSandboxSession(sandboxId: string, env: Env): Promise<void> {
+  await ensureSandboxStarted(env);
 
-  for (const pattern of dangerous) {
-    if (pattern.test(command)) {
-      return { valid: false, error: `Dangerous command blocked: ${command}` };
+  if (!sessions.has(sandboxId)) {
+    await restoreWorkspaceState(sandboxId, env);
+    sessions.set(sandboxId, { lastUsedAt: Date.now() });
+  } else {
+    sessions.get(sandboxId)!.lastUsedAt = Date.now();
+  }
+}
+
+export async function teardownIdleSandboxes(env: Env, now = Date.now()): Promise<string[]> {
+  const idleMs = Number.parseInt(env.SANDBOX_IDLE_TIMEOUT_MS ?? "3600000", 10);
+  const removed: string[] = [];
+
+  for (const [sandboxId, session] of sessions.entries()) {
+    if (now - session.lastUsedAt >= idleMs) {
+      await persistWorkspaceState(sandboxId, env);
+      sessions.delete(sandboxId);
+      removed.push(sandboxId);
     }
   }
 
-  return { valid: true };
+  return removed;
+}
+
+export async function cleanupSandboxForJob(
+  sandboxId: string,
+  status: "completed" | "failed",
+  env: Env,
+): Promise<void> {
+  const keepOnFailure = (env.SANDBOX_KEEP_ON_FAILURE ?? "true").toLowerCase() === "true";
+  if (status === "failed" && keepOnFailure) {
+    return;
+  }
+
+  if (sessions.has(sandboxId)) {
+    await persistWorkspaceState(sandboxId, env);
+    sessions.delete(sandboxId);
+  }
 }
 
 export async function executeInSandbox(
   command: string,
   env: Env,
-  opts: { timeout?: number; signal?: AbortSignal } = {},
+  opts: { timeout?: number; sandboxId?: string } = {},
 ): Promise<SandboxResult> {
-  const validation = validateCommand(command);
-  if (!validation.valid) throw new Error(validation.error);
-
-  return execWithRetry(env, command);
-}
-
-// Start Codex device-code login flow
-export async function startCodexLogin(env: Env): Promise<{ url: string; code?: string; instructions: string }> {
-  const result = await execWithRetry(env, "codex login");
-
-  const urlMatch = result.stdout.match(/https:\/\/[^\s]+/);
-  const codeMatch = result.stdout.match(/\b([A-Z0-9]{4}-[A-Z0-9]{4}|[A-Z0-9]{8})\b/);
-
-  return {
-    url: urlMatch?.[0] || "https://platform.openai.com/login",
-    code: codeMatch?.[1],
-    instructions: result.stdout || "Run 'codex login' to authenticate",
-  };
-}
-
-// Save Codex auth to persistent storage
-export async function saveCodexAuth(env: Env): Promise<{ saved: boolean; message: string }> {
-  await writeFileWithRetry(env, "/root/.codex/auth.json", "{}");
-  return { saved: true, message: "Auth saved" };
-}
-
-export async function readSandboxFile(path: string, env: Env): Promise<string> {
-  return readFileWithRetry(env, path);
-}
-
-// Run Codex with a prompt
-export async function runCodex(
-  prompt: string,
-  env: Env,
-  opts: { timeout?: number } = {},
-): Promise<SandboxResult> {
-  await writeFileWithRetry(env, "/tmp/prompt.txt", prompt);
-  return execWithRetry(env, "codex -f /tmp/prompt.txt");
-}
-
-export async function sandboxStatus(env: Env): Promise<{ ready: boolean; message?: string }> {
-  try {
-    const result = await execWithRetry(env, "echo 'health check'");
-    if (result.exitCode === 0) return { ready: true };
-    return { ready: false, message: `Sandbox returned exit code ${result.exitCode}: ${result.stderr}` };
-  } catch (err) {
-    return { ready: false, message: `Connection failed: ${formatSandboxError(err)}` };
+  if (!allowedCommand(command)) {
+    throw new Error(`Dangerous command blocked: ${command}`);
   }
+
+  if (opts.sandboxId) {
+    await ensureSandboxSession(opts.sandboxId, env);
+  } else {
+    await ensureSandboxStarted(env);
+  }
+
+  const timeout = opts.timeout ?? Number.parseInt(env.BASH_TIMEOUT_MS ?? "120000", 10);
+  return withTimeout(env.SANDBOX.exec(command), timeout);
+}
+
+export async function readTool(path: string, env: Env, sandboxId?: string): Promise<string> {
+  ensureRelativeWorkspacePath(path);
+  if (sandboxId) await ensureSandboxSession(sandboxId, env);
+
+  const content = await env.SANDBOX.readFile(`/workspace/blob/${path}`);
+  const maxBytes = Number.parseInt(env.TOOL_MAX_FILE_BYTES ?? "200000", 10);
+  if (estimateBytes(content) > maxBytes) {
+    throw new Error(`File exceeds max size: ${path}`);
+  }
+  return content;
+}
+
+export async function writeTool(path: string, content: string, env: Env, sandboxId?: string): Promise<void> {
+  ensureRelativeWorkspacePath(path);
+  const maxBytes = Number.parseInt(env.TOOL_MAX_FILE_BYTES ?? "200000", 10);
+  if (estimateBytes(content) > maxBytes) {
+    throw new Error(`Write content exceeds max size: ${path}`);
+  }
+  if (sandboxId) await ensureSandboxSession(sandboxId, env);
+
+  const abs = `/workspace/blob/${path}`;
+  const temp = `${abs}.tmp`;
+  await env.SANDBOX.writeFile(temp, content);
+  await env.SANDBOX.exec(`mv ${temp} ${abs}`);
+}
+
+export async function editTool(
+  path: string,
+  oldText: string,
+  newText: string,
+  env: Env,
+  sandboxId?: string,
+): Promise<void> {
+  const current = await readTool(path, env, sandboxId);
+  if (!current.includes(oldText)) {
+    throw new Error("oldText not found in file");
+  }
+  await writeTool(path, current.replace(oldText, newText), env, sandboxId);
+}
+
+export async function appendWorkspaceState(
+  kind: "log" | "context",
+  line: string,
+  env: Env,
+  sandboxId?: string,
+): Promise<void> {
+  const fileName = `${WORKSPACE_STATE_DIR}/${kind}.jsonl`;
+  if (sandboxId) await ensureSandboxSession(sandboxId, env);
+  const current = await env.SANDBOX.readFile(fileName).catch(() => "");
+  await env.SANDBOX.writeFile(fileName, `${current}${line.endsWith("\n") ? line : `${line}\n`}`);
+}
+
+export async function readWorkspaceState(kind: "log" | "context", env: Env, sandboxId?: string): Promise<string> {
+  const fileName = `${WORKSPACE_STATE_DIR}/${kind}.jsonl`;
+  if (sandboxId) await ensureSandboxSession(sandboxId, env);
+  return env.SANDBOX.readFile(fileName).catch(() => "");
+}
+
+export function __resetSandboxSessionsForTests(): void {
+  sessions.clear();
 }

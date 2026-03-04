@@ -1,275 +1,104 @@
-// pi-agent.ts - Minimal Pi-style agent with 4 tools + extension system
-// Inspired by https://github.com/badlogic/pi-mono/ and https://lucumr.pocoo.org/2026/1/31/pi/
-
 import type { Env } from "./types";
 import { DEFAULT_MODEL } from "./models";
-
-interface ToolResult {
-  output: string;
-  error?: string;
-}
+import { appendWorkspaceState, editTool, executeInSandbox, readTool, writeTool } from "./sandbox";
 
 interface PiMessage {
   role: "system" | "user" | "assistant";
   content: string;
 }
 
-// Parameter schema for a single tool argument
-interface ToolParam {
-  type: string;
-  description: string;
+interface ToolCall {
+  tool: "read" | "write" | "edit" | "bash";
+  args: Record<string, unknown>;
 }
 
-// A registered tool: schema + prompt hints + execution handler
-export interface ToolDefinition {
-  name: string;
-  description: string;
-  parameters: Record<string, ToolParam>;
-  required?: string[];
-  /** One-liner injected into the "Available tools" section of the system prompt */
-  promptSnippet?: string;
-  /** Tool-specific guidelines appended to the system prompt */
-  promptGuidelines?: string;
-  handler: (args: Record<string, unknown>) => Promise<ToolResult>;
+interface ToolResult {
+  output: string;
+  error?: string;
 }
 
-const EXTENSIONS_DIR = "/workspace/.blob/extensions";
+interface RunOptions {
+  sandboxId?: string;
+  critical?: boolean;
+  onProgress?: (message: string) => Promise<void> | void;
+}
+
+interface BudgetState {
+  inputTokens: number;
+  outputTokens: number;
+  warned: boolean;
+  halted: boolean;
+}
+
+const dailyTokenUsage = new Map<string, number>();
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function isTransientError(error: string): boolean {
+  const lower = error.toLowerCase();
+  return lower.includes("timeout") || lower.includes("econn") || lower.includes("temporar") || lower.includes("503");
+}
+
+function parseToolCall(response: string): ToolCall | null {
+  const toolMatch = response.match(/TOOL:\s*(\w+)/);
+  const argMatch = response.match(/ARG:\s*(.+)/s);
+  if (!toolMatch) return null;
+
+  const tool = toolMatch[1] as ToolCall["tool"];
+  if (!["read", "write", "edit", "bash"].includes(tool)) {
+    return null;
+  }
+
+  let args: Record<string, unknown> = {};
+  if (argMatch) {
+    try {
+      args = JSON.parse(argMatch[1].trim());
+    } catch {
+      args = { raw: argMatch[1].trim() };
+    }
+  }
+
+  return { tool, args };
+}
 
 export class PiAgent {
-  private messages: PiMessage[] = [];
-  private loadedExtensions: Set<string> = new Set();
-  private toolRegistry = new Map<string, ToolDefinition>();
+  private messages: PiMessage[];
 
   constructor(
     private env: Env,
-    private repo: string
+    private repo: string,
   ) {
-    this.registerBuiltinTools();
-    this.messages.push({ role: "system", content: this.buildSystemPrompt() });
+    this.messages = [{ role: "system", content: this.buildSystemPrompt() }];
   }
 
-  /** Register a tool and refresh the system prompt so the LLM sees it immediately */
-  registerTool(def: ToolDefinition): void {
-    this.toolRegistry.set(def.name, def);
-    const sysIdx = this.messages.findIndex(m => m.role === "system");
-    if (sysIdx !== -1) {
-      this.messages[sysIdx] = { role: "system", content: this.buildSystemPrompt() };
-    }
-  }
-
-  /** Build system prompt dynamically from the tool registry (like Pi's buildSystemPrompt) */
   private buildSystemPrompt(): string {
-    const toolLines = Array.from(this.toolRegistry.values())
-      .map(t => `- ${t.promptSnippet ?? `${t.name}: ${t.description}`}`)
-      .join("\n");
-
-    const guidelines = Array.from(this.toolRegistry.values())
-      .filter(t => t.promptGuidelines)
-      .map(t => t.promptGuidelines!)
-      .join("\n\n");
-
-    return `You are a helpful coding assistant working in an isolated sandbox container.
-All files live under /workspace/${this.repo}/. Always use relative paths with the file tools (e.g. src/index.ts, not /workspace/${this.repo}/src/index.ts).
-Shell commands run inside the container with /workspace/${this.repo} as the working directory.
-
-Available tools:
-${toolLines}
-
-When you need to use a tool, output:
-TOOL: tool_name
-ARG: argument (JSON)
-
-Then wait for the result. Continue until the task is complete.
-Be concise. Don't ask for confirmation. Just do it.${guidelines ? `\n\n${guidelines}` : ""}`;
-  }
-
-  /** Build the OpenAI-compatible tools array passed to the LLM API */
-  private buildToolsParam(): Array<{ type: "function"; function: { name: string; description: string; parameters: object } }> {
-    return Array.from(this.toolRegistry.values()).map(t => ({
-      type: "function" as const,
-      function: {
-        name: t.name,
-        description: t.description,
-        parameters: {
-          type: "object",
-          properties: Object.fromEntries(
-            Object.entries(t.parameters).map(([k, v]) => [k, { type: v.type, description: v.description }])
-          ),
-          required: t.required ?? Object.keys(t.parameters),
-        },
-      },
-    }));
-  }
-
-  private registerBuiltinTools(): void {
-    this.toolRegistry.set("read", {
-      name: "read",
-      description: "Read file contents",
-      parameters: {
-        path: { type: "string", description: "File path relative to workspace" },
-      },
-      promptSnippet: "read(path) - Read file contents",
-      handler: async (args) => this.toolRead(args.path as string),
-    });
-
-    this.toolRegistry.set("write", {
-      name: "write",
-      description: "Create or overwrite a file",
-      parameters: {
-        path: { type: "string", description: "File path relative to workspace" },
-        content: { type: "string", description: "File content to write" },
-      },
-      promptSnippet: "write(path, content) - Write file (overwrites)",
-      handler: async (args) => this.toolWrite(args.path as string, args.content as string),
-    });
-
-    this.toolRegistry.set("edit", {
-      name: "edit",
-      description: "Replace text in a file",
-      parameters: {
-        path: { type: "string", description: "File path relative to workspace" },
-        oldText: { type: "string", description: "Exact text to replace" },
-        newText: { type: "string", description: "Replacement text" },
-      },
-      promptSnippet: "edit(path, oldText, newText) - Replace text in file",
-      handler: async (args) => this.toolEdit(args.path as string, args.oldText as string, args.newText as string),
-    });
-
-    this.toolRegistry.set("bash", {
-      name: "bash",
-      description: "Execute a shell command in the workspace",
-      parameters: {
-        command: { type: "string", description: "Shell command to execute" },
-      },
-      promptSnippet: "bash(command) - Execute shell command",
-      promptGuidelines: "For real-time data (weather, time, etc.), use bash to fetch it (e.g., curl wttr.in for weather). Do not say you lack real-time access.",
-      handler: async (args) => this.toolBash(args.command as string),
-    });
-
-    this.toolRegistry.set("memory", {
-      name: "memory",
-      description: "Persistent memory with semantic search",
-      parameters: {
-        cmd: { type: "string", description: "Command: set, get, list, delete, search" },
-        key: { type: "string", description: "Key or search query" },
-        value: { type: "string", description: "Value to store (for set)" },
-      },
-      required: ["cmd", "key"],
-      promptSnippet: "memory(cmd, key, value?) - Memory ops: set/get/list/delete/search (search uses key as query)",
-      handler: async (args) => this.toolMemory(args.cmd as string, args.key as string, args.value as string | undefined),
-    });
-
-    this.toolRegistry.set("extension", {
-      name: "extension",
-      description: "Write a bash script to add new capabilities, then load it",
-      parameters: {
-        name: { type: "string", description: "Extension name (no .sh suffix)" },
-        content: { type: "string", description: "Bash script content" },
-      },
-      promptSnippet: "extension(name, content) - Create and load a bash extension to add new capabilities",
-      handler: async (args) => this.toolExtension(args.name as string, args.content as string),
-    });
-
-    this.toolRegistry.set("load", {
-      name: "load",
-      description: "Load an existing bash extension by name",
-      parameters: {
-        name: { type: "string", description: "Extension name to load (no .sh suffix)" },
-      },
-      promptSnippet: "load(name) - Load an existing extension",
-      handler: async (args) => this.toolLoad(args.name as string),
-    });
-  }
-
-  async run(userMessage: string): Promise<string> {
-    // Auto-load existing extensions
-    await this.autoLoadExtensions();
-
-    this.messages.push({ role: "user", content: userMessage });
-
-    let iterations = 0;
-    const maxIterations = 10;
-
-    while (iterations < maxIterations) {
-      iterations++;
-
-      // Single LLM call - passes both system prompt snippets and structured tools param
-      const response = await this.callLLM();
-
-      // Check if response contains tool calls
-      const toolCall = this.parseToolCall(response);
-
-      if (!toolCall) {
-        // No tool call - return final response
-        this.messages.push({ role: "assistant", content: response });
-        return response;
-      }
-
-      // Execute tool via registry
-      const result = await this.executeTool(toolCall);
-
-      // Add tool result to context
-      this.messages.push({
-        role: "assistant",
-        content: `TOOL: ${toolCall.tool}\nARG: ${JSON.stringify(toolCall.args)}\n\nRESULT: ${result.output}${result.error ? `\nERROR: ${result.error}` : ""}`,
-      });
-    }
-
-    return "Reached maximum iterations. Task may be incomplete.";
-  }
-
-  private async autoLoadExtensions(): Promise<void> {
-    try {
-      const result = await this.env.SANDBOX.exec(`ls -1 ${EXTENSIONS_DIR}/*.sh 2>/dev/null || echo "No extensions"`);
-      const files = result.stdout.split("\n").filter(f => f.endsWith(".sh"));
-
-      for (const file of files) {
-        const name = file.replace(".sh", "").split("/").pop();
-        if (name && !this.loadedExtensions.has(name)) {
-          await this.toolLoad(name);
-        }
-      }
-    } catch {
-      // No extensions yet
-    }
+    return `You are a coding assistant in /workspace/${this.repo}.
+Use only these tools: read, write, edit, bash.
+When calling tools, output exactly:\nTOOL: <name>\nARG: <json>
+Stop when done and provide a concise summary.`;
   }
 
   private async callLLM(): Promise<string> {
-    // Use AI Gateway when configured (OpenAI-compatible, supports tools natively)
     if (this.env.AI_GATEWAY_BASE_URL && this.env.AI_GATEWAY_TOKEN) {
-      const baseUrl = this.env.AI_GATEWAY_BASE_URL.replace(/\/$/, '');
-      const url = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
-
+      const baseUrl = this.env.AI_GATEWAY_BASE_URL.replace(/\/$/, "");
+      const url = baseUrl.endsWith("/chat/completions") ? baseUrl : `${baseUrl}/chat/completions`;
       const response = await fetch(url, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "Authorization": `Bearer ${this.env.AI_GATEWAY_TOKEN}`,
-          "cf-aig-cache-ttl": "3600", // Cache identical requests for 1 hour
+          Authorization: `Bearer ${this.env.AI_GATEWAY_TOKEN}`,
         },
-        body: JSON.stringify({
-          model: DEFAULT_MODEL,
-          messages: this.messages,
-          tools: this.buildToolsParam(),
-        }),
+        body: JSON.stringify({ model: DEFAULT_MODEL, messages: this.messages }),
       });
-
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`LLM error: ${response.status} ${text}`);
+        throw new Error(`LLM error: ${response.status} ${await response.text()}`);
       }
-
       const data = await response.json() as {
-        choices?: Array<{
-          message?: {
-            content?: string;
-            tool_calls?: Array<{ function: { name: string; arguments: string } }>;
-          };
-        }>;
+        choices?: Array<{ message?: { content?: string; tool_calls?: Array<{ function: { name: string; arguments: string } }> } }>;
       };
-
       const msg = data.choices?.[0]?.message;
-      // Native tool call - convert to text format for uniform parsing
       if (msg?.tool_calls?.length) {
         const call = msg.tool_calls[0].function;
         return `TOOL: ${call.name}\nARG: ${call.arguments}`;
@@ -277,211 +106,144 @@ Be concise. Don't ask for confirmation. Just do it.${guidelines ? `\n\n${guideli
       return msg?.content ?? "";
     }
 
-    // Fallback: Workers AI direct endpoint
-    const response = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${this.env.ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`,
-      {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${this.env.CLOUDFLARE_API_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          messages: this.messages,
-          tools: this.buildToolsParam(),
-        }),
-      }
-    );
-
-    const data = await response.json() as {
-      result?: {
-        response?: string;
-        tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>;
-      };
-    };
-
-    // Native tool call from LLM - convert to text format for uniform parsing
-    if (data.result?.tool_calls?.length) {
-      const call = data.result.tool_calls[0];
-      return `TOOL: ${call.name}\nARG: ${JSON.stringify(call.arguments)}`;
-    }
-
-    return data.result?.response ?? "";
+    throw new Error("AI gateway is required");
   }
 
-  private parseToolCall(response: string): { tool: string; args: Record<string, unknown> } | null {
-    const toolMatch = response.match(/TOOL:\s*(\w+)/);
-    const argMatch = response.match(/ARG:\s*(.+)/s);
+  private async executeToolWithRetry(call: ToolCall, sandboxId: string): Promise<ToolResult> {
+    const errorPrefix = `${call.tool} failed`;
+    const maxRetries = call.tool === "bash" ? 2 : 1;
 
-    if (!toolMatch) return null;
-
-    const tool = toolMatch[1];
-    let args: Record<string, unknown> = {};
-
-    if (argMatch) {
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       try {
-        args = JSON.parse(argMatch[1].trim());
-      } catch {
-        args = { raw: argMatch[1].trim() };
-      }
-    }
-
-    return { tool, args };
-  }
-
-  private async executeTool(toolCall: { tool: string; args: Record<string, unknown> }): Promise<ToolResult> {
-    const def = this.toolRegistry.get(toolCall.tool);
-    if (!def) {
-      return { output: "", error: `Unknown tool: ${toolCall.tool}` };
-    }
-    return def.handler(toolCall.args);
-  }
-
-  private async toolRead(path: string): Promise<ToolResult> {
-    try {
-      const result = await this.env.SANDBOX.readFile(`/workspace/${this.repo}/${path}`);
-      return { output: result };
-    } catch (e) {
-      return { output: "", error: String(e) };
-    }
-  }
-
-  private async toolWrite(path: string, content: string): Promise<ToolResult> {
-    try {
-      await this.env.SANDBOX.writeFile(`/workspace/${this.repo}/${path}`, content);
-      return { output: `Wrote ${path}` };
-    } catch (e) {
-      return { output: "", error: String(e) };
-    }
-  }
-
-  private async toolEdit(path: string, oldText: string, newText: string): Promise<ToolResult> {
-    try {
-      const current = await this.env.SANDBOX.readFile(`/workspace/${this.repo}/${path}`);
-      if (!current.includes(oldText)) {
-        return { output: "", error: "oldText not found in file" };
-      }
-      const updated = current.replace(oldText, newText);
-      await this.env.SANDBOX.writeFile(`/workspace/${this.repo}/${path}`, updated);
-      return { output: `Edited ${path}` };
-    } catch (e) {
-      return { output: "", error: String(e) };
-    }
-  }
-
-  private async toolBash(command: string): Promise<ToolResult> {
-    try {
-      const result = await this.env.SANDBOX.exec(`cd /workspace/${this.repo} && ${command}`);
-      return {
-        output: result.stdout,
-        error: result.stderr || undefined,
-      };
-    } catch (e) {
-      return { output: "", error: String(e) };
-    }
-  }
-
-  private async toolExtension(name: string, content: string): Promise<ToolResult> {
-    try {
-      await this.env.SANDBOX.exec(`mkdir -p ${EXTENSIONS_DIR}`);
-      const extPath = `${EXTENSIONS_DIR}/${name}.sh`;
-      await this.env.SANDBOX.writeFile(extPath, content);
-      await this.toolLoad(name);
-      return { output: `Extension ${name} written and loaded` };
-    } catch (e) {
-      return { output: "", error: String(e) };
-    }
-  }
-
-  private async toolLoad(name: string): Promise<ToolResult> {
-    try {
-      const extPath = `${EXTENSIONS_DIR}/${name}.sh`;
-      const result = await this.env.SANDBOX.exec(`source ${extPath} && echo "Extension ${name} loaded"`);
-      this.loadedExtensions.add(name);
-      return { output: result.stdout };
-    } catch (e) {
-      return { output: "", error: String(e) };
-    }
-  }
-
-  // Generate embedding via Workers AI (bge-small-en-v1.5 = 384 dims, free tier)
-  private async embed(text: string): Promise<number[] | null> {
-    if (!this.env.AI) return null;
-    try {
-      const result = await this.env.AI.run("@cf/baai/bge-small-en-v1.5", { text }) as { data: number[][] };
-      return result.data?.[0] ?? null;
-    } catch {
-      return null;
-    }
-  }
-
-  // Persistent memory: KV for exact lookup, Vectorize for semantic search
-  private async toolMemory(cmd: string, key?: string, value?: string): Promise<ToolResult> {
-    const prefix = `pi:${this.repo}:`;
-
-    try {
-      switch (cmd) {
-        case "set": {
-          if (!key) return { output: "", error: "Key required" };
-          await this.env.PI_MEMORY!.put(`${prefix}${key}`, value || "");
-          if (value && this.env.PI_VECTORS) {
-            const vector = await this.embed(`${key}: ${value}`);
-            if (vector) {
-              await this.env.PI_VECTORS.upsert([{
-                id: `${this.repo}:${key}`,
-                values: vector,
-                metadata: { repo: this.repo, key, text: value, ts: Date.now() },
-              }]);
-            }
+        switch (call.tool) {
+          case "read":
+            return { output: await readTool(String(call.args.path ?? ""), this.env, sandboxId) };
+          case "write":
+            await writeTool(String(call.args.path ?? ""), String(call.args.content ?? ""), this.env, sandboxId);
+            return { output: `Wrote ${String(call.args.path ?? "")}` };
+          case "edit":
+            await editTool(
+              String(call.args.path ?? ""),
+              String(call.args.oldText ?? ""),
+              String(call.args.newText ?? ""),
+              this.env,
+              sandboxId,
+            );
+            return { output: `Edited ${String(call.args.path ?? "")}` };
+          case "bash": {
+            const result = await executeInSandbox(`cd /workspace/${this.repo} && ${String(call.args.command ?? "")}`, this.env, { sandboxId });
+            return { output: result.stdout, error: result.stderr || undefined };
           }
-          return { output: `Set ${key}` };
         }
-
-        case "get": {
-          if (!key) return { output: "", error: "Key required" };
-          const val = await this.env.PI_MEMORY!.get(`${prefix}${key}`);
-          return { output: val || "" };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const ioError = message.toLowerCase().includes("eio") || message.toLowerCase().includes("i/o");
+        const deterministic = message.toLowerCase().includes("not allowed") || message.toLowerCase().includes("oldtext not found");
+        const shouldRetry = attempt < maxRetries && (call.tool === "bash" ? isTransientError(message) : ioError) && !deterministic;
+        if (!shouldRetry) {
+          return { output: "", error: `${errorPrefix}: ${message}` };
         }
-
-        case "list": {
-          const keys = await this.env.PI_MEMORY!.list({ prefix });
-          const keyList = keys.keys.map((k: { name: string }) => k.name.replace(prefix, "")).join("\n");
-          return { output: keyList || "No memory keys" };
-        }
-
-        case "delete": {
-          if (!key) return { output: "", error: "Key required" };
-          await this.env.PI_MEMORY!.delete(`${prefix}${key}`);
-          if (this.env.PI_VECTORS) {
-            await this.env.PI_VECTORS.deleteByIds([`${this.repo}:${key}`]);
-          }
-          return { output: `Deleted ${key}` };
-        }
-
-        case "search": {
-          if (!key) return { output: "", error: "Query required" };
-          if (!this.env.PI_VECTORS) return { output: "", error: "Vectorize not available" };
-          const vector = await this.embed(key);
-          if (!vector) return { output: "", error: "Failed to embed query" };
-          const results = await this.env.PI_VECTORS.query(vector, {
-            topK: 5,
-            filter: { repo: this.repo },
-            returnMetadata: "all",
-          });
-          if (!results.matches.length) return { output: "No relevant memories found" };
-          const lines = results.matches.map((m: VectorizeMatch) => {
-            const meta = m.metadata as { key: string; text: string; ts: number } | undefined;
-            const score = m.score.toFixed(3);
-            return `[${score}] ${meta?.key ?? m.id}: ${meta?.text ?? ""}`;
-          });
-          return { output: lines.join("\n") };
-        }
-
-        default:
-          return { output: "", error: `Unknown memory command: ${cmd}` };
+        await new Promise((resolve) => setTimeout(resolve, call.tool === "bash" ? 5000 : 300));
       }
-    } catch (e) {
-      return { output: "", error: String(e) };
     }
+
+    return { output: "", error: `${errorPrefix}: exhausted retries` };
+  }
+
+  private applyBudget(usage: BudgetState): string | null {
+    const maxIn = Number.parseInt(this.env.JOB_MAX_INPUT_TOKENS ?? "100000", 10);
+    const maxOut = Number.parseInt(this.env.JOB_MAX_OUTPUT_TOKENS ?? "20000", 10);
+    const warningThreshold = 0.9;
+
+    if (!usage.warned && (usage.inputTokens >= maxIn * warningThreshold || usage.outputTokens >= maxOut * warningThreshold)) {
+      usage.warned = true;
+      return "⚠️ Token budget at 90%";
+    }
+
+    if (usage.inputTokens >= maxIn || usage.outputTokens >= maxOut) {
+      usage.halted = true;
+      return "⏸️ Token budget reached; pausing job.";
+    }
+
+    return null;
+  }
+
+  private consumeDailyBudget(totalTokens: number, critical: boolean): boolean {
+    const date = new Date().toISOString().slice(0, 10);
+    const current = dailyTokenUsage.get(date) ?? 0;
+    const dailyCeiling = Number.parseInt(this.env.DAILY_TOKEN_CEILING ?? "500000", 10);
+    if (!critical && current >= dailyCeiling) {
+      return false;
+    }
+    dailyTokenUsage.set(date, current + totalTokens);
+    return true;
+  }
+
+  async run(userMessage: string, opts: RunOptions = {}): Promise<string> {
+    const sandboxId = opts.sandboxId ?? "default";
+    const usage: BudgetState = { inputTokens: 0, outputTokens: 0, warned: false, halted: false };
+    const maxCalls = Number.parseInt(this.env.HEARTBEAT_MODEL_CALL_LIMIT ?? "10", 10);
+    const maxConsecutiveFailures = Number.parseInt(this.env.MAX_CONSECUTIVE_TOOL_FAILURES ?? "5", 10);
+
+    this.messages.push({ role: "user", content: userMessage });
+
+    let modelCalls = 0;
+    let consecutiveFailures = 0;
+
+    while (modelCalls < maxCalls) {
+      modelCalls += 1;
+      if (opts.onProgress && modelCalls % 2 === 0) {
+        await opts.onProgress(`Progress update: ${modelCalls} model calls used.`);
+      }
+
+      const response = await this.callLLM();
+      usage.inputTokens += estimateTokens(JSON.stringify(this.messages));
+      usage.outputTokens += estimateTokens(response);
+
+      if (!this.consumeDailyBudget(estimateTokens(response), opts.critical ?? false)) {
+        return "⏸️ Daily token ceiling reached; paused non-critical job.";
+      }
+
+      const budgetNotice = this.applyBudget(usage);
+      if (budgetNotice) {
+        this.messages.push({ role: "assistant", content: budgetNotice });
+      }
+      if (usage.halted) {
+        return "Paused due to token budget limit.";
+      }
+
+      const toolCall = parseToolCall(response);
+      if (!toolCall) {
+        this.messages.push({ role: "assistant", content: response });
+        await appendWorkspaceState("context", JSON.stringify({ role: "assistant", content: response }), this.env, sandboxId);
+        return response;
+      }
+
+      const result = await this.executeToolWithRetry(toolCall, sandboxId);
+      if (result.error) {
+        consecutiveFailures += 1;
+        this.messages.push({
+          role: "assistant",
+          content: `TOOL_FAILURE: ${toolCall.tool}\nARG: ${JSON.stringify(toolCall.args)}\nERROR: ${result.error}`,
+        });
+        if (consecutiveFailures >= maxConsecutiveFailures) {
+          return `Paused after ${consecutiveFailures} consecutive tool failures.`;
+        }
+      } else {
+        consecutiveFailures = 0;
+        this.messages.push({
+          role: "assistant",
+          content: `TOOL: ${toolCall.tool}\nARG: ${JSON.stringify(toolCall.args)}\nRESULT: ${result.output}`,
+        });
+      }
+      await appendWorkspaceState("log", JSON.stringify({ tool: toolCall.tool, ok: !result.error }), this.env, sandboxId);
+    }
+
+    return "Stopped after heartbeat model call limit.";
   }
 }
+
+export const __piAgentTestUtils = {
+  parseToolCall,
+  isTransientError,
+};

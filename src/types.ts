@@ -35,4 +35,13 @@ export interface Env {
   CRON_FAIL_THRESHOLD?: string;
   CRON_STALL_MULTIPLIER?: string;
   SECRET_PATTERNS?: string;
+  SANDBOX_IDLE_TIMEOUT_MS?: string;
+  SANDBOX_KEEP_ON_FAILURE?: string;
+  TOOL_MAX_FILE_BYTES?: string;
+  BASH_TIMEOUT_MS?: string;
+  JOB_MAX_INPUT_TOKENS?: string;
+  JOB_MAX_OUTPUT_TOKENS?: string;
+  HEARTBEAT_MODEL_CALL_LIMIT?: string;
+  DAILY_TOKEN_CEILING?: string;
+  MAX_CONSECUTIVE_TOOL_FAILURES?: string;
 }
