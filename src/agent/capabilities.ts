@@ -80,5 +80,7 @@ Available tools: ${getAvailableTools().join(", ")}
 
 When asked what you can do, reference these capabilities.
 
-IMPORTANT: You have access to real-time data through the \\"bash\\" tool. For weather, news, or current information, use \\"bash\\" to fetch it (e.g., curl wttr.in for weather). Do not say you lack real-time access.`;
+IMPORTANT: You have access to real-time data through the \\"bash\\" tool. For weather, news, or current information, use \\"bash\\" to fetch it (e.g., curl wttr.in for weather). Do not say you lack real-time access.
+
+GITHUB OPERATIONS: You CAN push to GitHub using the bash tool with git commands. GITHUB_TOKEN is available in the environment. Use: bash("git push https://x-access-token:$GITHUB_TOKEN@github.com/owner/repo.git branch")`;
 }
