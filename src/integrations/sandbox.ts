@@ -10,6 +10,11 @@ interface SandboxSession {
   lastUsedAt: number;
 }
 
+interface ToolOptions {
+  sandboxId?: string;
+  workspaceRoot?: string;
+}
+
 const SANDBOX_STARTUP_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const SANDBOX_STARTUP_RETRYABLE_MESSAGES = ["container is not running", "container startup failed", "createSession"];
 const SANDBOX_STATE_PREFIX = "sandbox-state/";
@@ -36,18 +41,22 @@ function estimateBytes(text: string): number {
   return new TextEncoder().encode(text).length;
 }
 
-const WORKSPACE_PREFIX = "/workspace/blob/";
-
-function normalizeToolPath(path: string): string {
+function normalizeToolPath(path: string, workspaceRoot: string): string {
   if (!path) {
     throw new Error(`Path not allowed: ${path}`);
   }
 
+  if (!workspaceRoot.startsWith("/workspace/") || workspaceRoot.includes("..")) {
+    throw new Error(`Workspace root not allowed: ${workspaceRoot}`);
+  }
+
+  const normalizedRoot = workspaceRoot.endsWith("/") ? workspaceRoot : `${workspaceRoot}/`;
+
   let normalized = path;
 
   // Strip the workspace prefix if the model used an absolute path
-  if (normalized.startsWith(WORKSPACE_PREFIX)) {
-    normalized = normalized.slice(WORKSPACE_PREFIX.length);
+  if (normalized.startsWith(normalizedRoot)) {
+    normalized = normalized.slice(normalizedRoot.length);
   }
 
   // Strip leading "./" for convenience
@@ -194,7 +203,7 @@ export async function cleanupSandboxForJob(
 export async function executeInSandbox(
   command: string,
   env: Env,
-  opts: { timeout?: number; sandboxId?: string } = {},
+  opts: { timeout?: number; sandboxId?: string; workspaceRoot?: string } = {},
 ): Promise<SandboxResult> {
   if (!allowedCommand(command)) {
     throw new Error(`Dangerous command blocked: ${command}`);
@@ -208,7 +217,9 @@ export async function executeInSandbox(
 
   const timeout = opts.timeout ?? Number.parseInt(env.BASH_TIMEOUT_MS ?? "120000", 10);
   const maxOutputBytes = Number.parseInt(env.BASH_MAX_OUTPUT_BYTES ?? "1000000", 10);
-  const result = await withTimeout(env.SANDBOX.exec(command), timeout);
+  const workspaceRoot = opts.workspaceRoot ? resolveWorkspaceRoot(opts.workspaceRoot) : undefined;
+  const commandToRun = workspaceRoot ? `cd ${workspaceRoot} && ${command}` : command;
+  const result = await withTimeout(env.SANDBOX.exec(commandToRun), timeout);
   if (estimateBytes(result.stdout) > maxOutputBytes) {
     result.stdout = result.stdout.slice(0, maxOutputBytes) + "\n[output truncated]";
   }
@@ -218,11 +229,16 @@ export async function executeInSandbox(
   return result;
 }
 
-export async function readTool(path: string, env: Env, sandboxId?: string): Promise<string> {
-  const normalized = normalizeToolPath(path);
-  if (sandboxId) await ensureSandboxSession(sandboxId, env);
+function resolveWorkspaceRoot(workspaceRoot?: string): string {
+  return workspaceRoot && workspaceRoot.trim() ? workspaceRoot : "/workspace/blob";
+}
 
-  const content = await env.SANDBOX.readFile(`/workspace/blob/${normalized}`);
+export async function readTool(path: string, env: Env, opts: ToolOptions = {}): Promise<string> {
+  const workspaceRoot = resolveWorkspaceRoot(opts.workspaceRoot);
+  const normalized = normalizeToolPath(path, workspaceRoot);
+  if (opts.sandboxId) await ensureSandboxSession(opts.sandboxId, env);
+
+  const content = await env.SANDBOX.readFile(`${workspaceRoot}/${normalized}`);
   const maxBytes = Number.parseInt(env.TOOL_MAX_FILE_BYTES ?? "200000", 10);
   if (estimateBytes(content) > maxBytes) {
     throw new Error(`File exceeds max size: ${path}`);
@@ -230,15 +246,16 @@ export async function readTool(path: string, env: Env, sandboxId?: string): Prom
   return content;
 }
 
-export async function writeTool(path: string, content: string, env: Env, sandboxId?: string): Promise<void> {
-  const normalized = normalizeToolPath(path);
+export async function writeTool(path: string, content: string, env: Env, opts: ToolOptions = {}): Promise<void> {
+  const workspaceRoot = resolveWorkspaceRoot(opts.workspaceRoot);
+  const normalized = normalizeToolPath(path, workspaceRoot);
   const maxBytes = Number.parseInt(env.TOOL_MAX_FILE_BYTES ?? "200000", 10);
   if (estimateBytes(content) > maxBytes) {
     throw new Error(`Write content exceeds max size: ${path}`);
   }
-  if (sandboxId) await ensureSandboxSession(sandboxId, env);
+  if (opts.sandboxId) await ensureSandboxSession(opts.sandboxId, env);
 
-  const abs = `/workspace/blob/${normalized}`;
+  const abs = `${workspaceRoot}/${normalized}`;
   const temp = `${abs}.tmp`;
   await env.SANDBOX.writeFile(temp, content);
   await env.SANDBOX.exec(`mv ${temp} ${abs}`);
@@ -249,13 +266,13 @@ export async function editTool(
   oldText: string,
   newText: string,
   env: Env,
-  sandboxId?: string,
+  opts: ToolOptions = {},
 ): Promise<void> {
-  const current = await readTool(path, env, sandboxId);
+  const current = await readTool(path, env, opts);
   if (!current.includes(oldText)) {
     throw new Error("oldText not found in file");
   }
-  await writeTool(path, current.replace(oldText, newText), env, sandboxId);
+  await writeTool(path, current.replace(oldText, newText), env, opts);
 }
 
 export async function appendWorkspaceState(
@@ -280,4 +297,4 @@ export function __resetSandboxSessionsForTests(): void {
   sessions.clear();
 }
 
-export const __sandboxTestUtils = { normalizeToolPath };
+export const __sandboxTestUtils = { normalizeToolPath, resolveWorkspaceRoot };

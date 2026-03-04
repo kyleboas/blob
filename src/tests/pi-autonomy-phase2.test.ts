@@ -43,16 +43,16 @@ test("sandbox tools enforce path allowlist and atomic writes", async () => {
   __resetSandboxSessionsForTests();
   const { env, files } = makeEnv();
 
-  await writeTool("src/new.txt", "content", env, "s1");
+  await writeTool("src/new.txt", "content", env, { sandboxId: "s1" });
   assert.equal(files.get("/workspace/blob/src/new.txt"), "content");
 
-  await assert.rejects(() => readTool("../secrets", env, "s1"));
+  await assert.rejects(() => readTool("../secrets", env, { sandboxId: "s1" }));
 });
 
 test("sandbox idle teardown removes expired sessions", async () => {
   __resetSandboxSessionsForTests();
   const { env } = makeEnv({ SANDBOX_IDLE_TIMEOUT_MS: "0" });
-  await writeTool("src/idle.txt", "x", env, "idle-session");
+  await writeTool("src/idle.txt", "x", env, { sandboxId: "idle-session" });
   const removed = await teardownIdleSandboxes(env, Date.now() + 1);
   assert.deepEqual(removed, ["idle-session"]);
 });
@@ -60,7 +60,7 @@ test("sandbox idle teardown removes expired sessions", async () => {
 test("sandbox cleanup keeps failed sessions when configured", async () => {
   __resetSandboxSessionsForTests();
   const { env } = makeEnv({ SANDBOX_KEEP_ON_FAILURE: "true" });
-  await writeTool("src/fail.txt", "x", env, "fail-session");
+  await writeTool("src/fail.txt", "x", env, { sandboxId: "fail-session" });
   await cleanupSandboxForJob("fail-session", "failed", env);
   const removed = await teardownIdleSandboxes({ ...env, SANDBOX_IDLE_TIMEOUT_MS: "0" }, Date.now() + 1);
   assert.deepEqual(removed, ["fail-session"]);
@@ -140,29 +140,80 @@ test("agent halts when daily token ceiling is reached", async () => {
 
 test("normalizeToolPath strips /workspace/blob/ prefix", () => {
   const { normalizeToolPath } = __sandboxTestUtils;
-  assert.equal(normalizeToolPath("/workspace/blob/src/a.txt"), "src/a.txt");
-  assert.equal(normalizeToolPath("src/a.txt"), "src/a.txt");
-  assert.equal(normalizeToolPath("./src/a.txt"), "src/a.txt");
+  assert.equal(normalizeToolPath("/workspace/blob/src/a.txt", "/workspace/blob"), "src/a.txt");
+  assert.equal(normalizeToolPath("src/a.txt", "/workspace/blob"), "src/a.txt");
+  assert.equal(normalizeToolPath("./src/a.txt", "/workspace/blob"), "src/a.txt");
 });
 
 test("normalizeToolPath rejects traversal and outside-workspace absolute paths", () => {
   const { normalizeToolPath } = __sandboxTestUtils;
-  assert.throws(() => normalizeToolPath(""), /Path not allowed/);
-  assert.throws(() => normalizeToolPath("/etc/passwd"), /Path not allowed/);
-  assert.throws(() => normalizeToolPath("../secrets"), /Path not allowed/);
-  assert.throws(() => normalizeToolPath("/workspace/blob/../secrets"), /Path not allowed/);
+  assert.throws(() => normalizeToolPath("", "/workspace/blob"), /Path not allowed/);
+  assert.throws(() => normalizeToolPath("/etc/passwd", "/workspace/blob"), /Path not allowed/);
+  assert.throws(() => normalizeToolPath("../secrets", "/workspace/blob"), /Path not allowed/);
+  assert.throws(() => normalizeToolPath("/workspace/blob/../secrets", "/workspace/blob"), /Path not allowed/);
+});
+
+
+
+test("sandbox tools honor custom workspace roots", async () => {
+  __resetSandboxSessionsForTests();
+  const { env, files } = makeEnv();
+  files.set("/workspace/demo/src/a.txt", "demo repo");
+
+  const content = await readTool("/workspace/demo/src/a.txt", env, { sandboxId: "s4", workspaceRoot: "/workspace/demo" });
+  assert.equal(content, "demo repo");
+
+  await writeTool("src/new.txt", "from-demo", env, { sandboxId: "s4", workspaceRoot: "/workspace/demo" });
+  assert.equal(files.get("/workspace/demo/src/new.txt"), "from-demo");
+  await assert.rejects(() => readTool("/workspace/blob/src/a.txt", env, { sandboxId: "s4", workspaceRoot: "/workspace/demo" }));
 });
 
 test("readTool accepts absolute workspace paths", async () => {
   __resetSandboxSessionsForTests();
   const { env } = makeEnv();
-  const content = await readTool("/workspace/blob/src/a.txt", env, "s2");
+  const content = await readTool("/workspace/blob/src/a.txt", env, { sandboxId: "s2" });
   assert.equal(content, "hello world");
 });
 
 test("writeTool accepts absolute workspace paths", async () => {
   __resetSandboxSessionsForTests();
   const { env, files } = makeEnv();
-  await writeTool("/workspace/blob/src/abs.txt", "absolute", env, "s3");
+  await writeTool("/workspace/blob/src/abs.txt", "absolute", env, { sandboxId: "s3" });
   assert.equal(files.get("/workspace/blob/src/abs.txt"), "absolute");
+});
+
+
+test("agent tools use repo-specific workspace root", async () => {
+  __resetSandboxSessionsForTests();
+  const originalFetch = globalThis.fetch;
+  const commands: string[] = [];
+  const { env } = makeEnv({
+    SANDBOX: {
+      start: async () => {},
+      exec: async (command: string) => {
+        commands.push(command);
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+      writeFile: async (_path: string, _content: string) => {},
+      readFile: async (path: string) => path.includes("/workspace/project/src/a.txt") ? "ok" : Promise.reject(new Error("ENOENT")),
+    },
+    AI_GATEWAY_BASE_URL: "https://gateway.example",
+  });
+
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: calls === 1 ? 'TOOL: read\nARG: {"path":"src/a.txt"}' : calls === 2 ? 'TOOL: bash\nARG: {"command":"pwd"}' : 'done' } }],
+    }), { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const agent = new PiAgent(env, "owner/project");
+    const result = await agent.run("test", { sandboxId: "repo-root" });
+    assert.equal(result, "done");
+    assert.equal(commands[0], "cd /workspace/project && pwd");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
