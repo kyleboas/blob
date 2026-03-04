@@ -2,6 +2,7 @@ import type { Env } from "../core/types";
 import { DEFAULT_MODEL } from "../core/models";
 import { appendWorkspaceState, editTool, ensureSandboxSession, executeInSandbox, readTool, writeTool } from "../integrations/sandbox";
 import { logEvent } from "../core/observability";
+import { appendLearnedRecord, flushLearnedRecordsToR2, updateLearnedMemoryStatus } from "../core/memory";
 
 interface PiMessage {
   role: "system" | "user" | "assistant";
@@ -38,7 +39,9 @@ interface RunOptions {
   onToolLedger?: (entry: { tool: ToolCall["tool"]; argsSummary: string; ok: boolean; durationMs: number; error?: string }) => Promise<void> | void;
   verbosity?: "minimal" | "verbose";
   conversationHistory?: Array<{ role: string; content: string }>;
+  conversationKey?: string;
 }
+
 
 interface BudgetState {
   inputTokens: number;
@@ -356,6 +359,37 @@ Stop when done and provide a concise summary.`;
     return true;
   }
 
+
+  private async persistLearnedMemory(userMessage: string, finalResponse: string, conversationKey: string, sandboxId: string): Promise<void> {
+    await ensureSandboxSession(sandboxId, this.env);
+    const record = {
+      timestamp: new Date().toISOString(),
+      conversationKey,
+      summary: summarizeText(`${userMessage} => ${finalResponse}`, 280),
+      tags: ["agent-run"],
+      sourceRefs: [this.repo],
+    };
+    await appendLearnedRecord(this.env, record);
+    const flushed = await flushLearnedRecordsToR2(this.env, conversationKey);
+    if (flushed.count > 0) {
+      await updateLearnedMemoryStatus(this.env, {
+        lastFlushAt: new Date().toISOString(),
+        lastFlushCount: flushed.count,
+        lastRecordTimestamp: flushed.lastRecord?.timestamp,
+        lastRecordSummary: flushed.lastRecord?.summary,
+      });
+    }
+  }
+
+  private async finishRun(userMessage: string, response: string, conversationKey: string, sandboxId: string): Promise<string> {
+    try {
+      await this.persistLearnedMemory(userMessage, response, conversationKey, sandboxId);
+    } catch (err) {
+      logEvent(this.env, "memory_ops", "learned_memory_persist_failed", { error: String(err) });
+    }
+    return response;
+  }
+
   async run(userMessage: string, opts: RunOptions = {}): Promise<string> {
     const sandboxId = opts.sandboxId ?? "default";
     const usage: BudgetState = { inputTokens: 0, outputTokens: 0, warned: false, halted: false };
@@ -376,6 +410,7 @@ Stop when done and provide a concise summary.`;
     let bootstrapAttempted = false;
 
     const verbosity = opts.verbosity ?? "verbose";
+    const conversationKey = opts.conversationKey ?? this.repoDir;
 
     while (modelCalls < maxCalls) {
       modelCalls += 1;
@@ -389,7 +424,7 @@ Stop when done and provide a concise summary.`;
       usage.outputTokens += estimateTokens(responseText);
 
       if (!(await this.consumeDailyBudget(estimateTokens(responseText), opts.critical ?? false))) {
-        return "⏸️ Daily token ceiling reached; paused non-critical job.";
+        return this.finishRun(userMessage, "⏸️ Daily token ceiling reached; paused non-critical job.", conversationKey, sandboxId);
       }
 
       const budgetNotice = this.applyBudget(usage);
@@ -397,7 +432,7 @@ Stop when done and provide a concise summary.`;
         this.messages.push({ role: "assistant", content: budgetNotice });
       }
       if (usage.halted) {
-        return "Paused due to token budget limit.";
+        return this.finishRun(userMessage, "Paused due to token budget limit.", conversationKey, sandboxId);
       }
 
       const structuredToolCall = llmResponse.toolCalls.length > 0 ? parseStructuredToolCall(llmResponse.toolCalls[0]) : null;
@@ -405,7 +440,7 @@ Stop when done and provide a concise summary.`;
       if (!toolCall) {
         this.messages.push({ role: "assistant", content: responseText });
         await appendWorkspaceState("context", JSON.stringify({ role: "assistant", content: responseText }), this.env, sandboxId);
-        return responseText;
+        return this.finishRun(userMessage, responseText, conversationKey, sandboxId);
       }
 
       this.messages.push({ role: "assistant", content: responseText || `TOOL: ${toolCall.tool}` });
@@ -420,7 +455,7 @@ Stop when done and provide a concise summary.`;
           if (opts.onProgress && verbosity === "verbose") {
             await opts.onProgress(`⚠️ ${failure}`);
           }
-          return failure;
+          return this.finishRun(userMessage, failure, conversationKey, sandboxId);
         }
       }
 
@@ -452,7 +487,7 @@ Stop when done and provide a concise summary.`;
           if (opts.onProgress) {
             await opts.onProgress(`⚠️ ${pauseMsg}`);
           }
-          return pauseMsg;
+          return this.finishRun(userMessage, pauseMsg, conversationKey, sandboxId);
         }
       } else {
         consecutiveFailures = 0;
@@ -464,7 +499,7 @@ Stop when done and provide a concise summary.`;
       await appendWorkspaceState("log", JSON.stringify({ tool: toolCall.tool, ok: !result.error }), this.env, sandboxId);
     }
 
-    return "Stopped after heartbeat model call limit.";
+    return this.finishRun(userMessage, "Stopped after heartbeat model call limit.", conversationKey, sandboxId);
   }
 }
 

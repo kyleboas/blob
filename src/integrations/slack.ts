@@ -6,6 +6,7 @@ import { PiAgent } from "../agent/pi-agent";
 import { deriveRoutingKey, verifySlackSignature } from "./slack-routing";
 import { createLogRef, logEvent } from "../core/observability";
 import { redactSecrets } from "../core/safety";
+import { getLearnedMemoryStatus } from "../core/memory";
 
 const inFlightEvents = new Set<string>();
 
@@ -226,7 +227,13 @@ async function processSlackEvent(body: {
       }
       if (keywordCommand === "status") {
         const verbosity = await getConversationVerbosity(conversationDO);
-        await postToSlack(channel, `Status: ready. Current verbosity is ${verbosity}.`, env);
+        const learned = await getLearnedMemoryStatus(env);
+        const flushText = learned.lastFlushAt ? learned.lastFlushAt : "never";
+        await postToSlack(
+          channel,
+          `Status: ready. Current verbosity is ${verbosity}. Learned memory last flush: ${flushText}. Learned entries in last flush: ${learned.lastFlushCount}.`,
+          env,
+        );
         return;
       }
       if (keywordCommand === "selftest") {
@@ -304,6 +311,7 @@ async function processSlackEvent(body: {
           onToolLedger: verbosity === "verbose"
             ? (entry) => postToSlack(channel, formatToolLedger(entry), env)
             : undefined,
+          conversationKey: key,
         });
         // Store the exchange in the DO
         if (conversationDO) {

@@ -54,6 +54,9 @@ function makeEnv() {
           if (path === "/messages") {
             return Response.json({ messages: row.messages.slice(-20) });
           }
+          if (path === "/memory/learned/status") {
+            return Response.json({ lastFlushAt: "2026-01-01T00:00:00.000Z", lastFlushCount: 3 });
+          }
           return new Response("not found", { status: 404 });
         },
       }),
@@ -90,10 +93,13 @@ test("settings and set verbose commands are exact keywords and persist verbosity
     await handleSlackEvent(makeReq("settings"), env);
     await handleSlackEvent(makeReq("set verbose"), env);
     await handleSlackEvent(makeReq("settings"), env);
+    await handleSlackEvent(makeReq("status"), env);
 
     assert.match(posts[0], /Current mode: minimal/i);
     assert.match(posts[1], /verbosity is now verbose/i);
     assert.match(posts[2], /Current mode: verbose/i);
+    assert.match(posts[3], /Learned memory last flush: 2026-01-01T00:00:00.000Z/i);
+    assert.match(posts[3], /Learned entries in last flush: 3/i);
     const key = "T1:C1:channel";
     assert.equal(store.get(key)?.verbosity, "verbose");
   } finally {

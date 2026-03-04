@@ -86,16 +86,16 @@ Update the file after completing each sub-task, not just after completing an ent
     - Structured tool-call flow (mocked provider response)
     - Tool ledger entries created for each call
 
-- [ ] 5.0 Implement durable “learned memory” persistence to R2 and status reporting
-  - [ ] 5.1 Define a “learned record” JSON shape (timestamp, conversation key, summary, tags, optional source refs).
-  - [ ] 5.2 Append learned records to a local sandbox file (e.g., `/workspace/blob_state/learned.jsonl`) at end-of-job.
-  - [ ] 5.3 Flush learned artifacts to R2:
+- [x] 5.0 Implement durable “learned memory” persistence to R2 and status reporting
+  - [x] 5.1 Define a “learned record” JSON shape (timestamp, conversation key, summary, tags, optional source refs).
+  - [x] 5.2 Append learned records to a local sandbox file (e.g., `/workspace/blob_state/learned.jsonl`) at end-of-job.
+  - [x] 5.3 Flush learned artifacts to R2:
     - Choose stable key format, e.g. `memory/<conversationKey>/<YYYY-MM-DD>/learned.jsonl` or per-record objects.
-  - [ ] 5.4 Persist last R2 flush time + count/last record metadata in DO state for `status`.
-  - [ ] 5.5 Implement `status` output fields for R2 learned memory:
+  - [x] 5.4 Persist last R2 flush time + count/last record metadata in DO state for `status`.
+  - [x] 5.5 Implement `status` output fields for R2 learned memory:
     - last flush time
     - count since last flush (or last known count)
-  - [ ] 5.6 Add tests for learned record creation and DO metadata updates (mock R2 + DO fetch).
+  - [x] 5.6 Add tests for learned record creation and DO metadata updates (mock R2 + DO fetch).
 
 - [ ] 6.0 Add Cloudflare Vectorize semantic memory (bindings + embeddings + upsert + query + context injection)
   - [ ] 6.1 Add Vectorize binding to `wrangler.agent.toml`:
