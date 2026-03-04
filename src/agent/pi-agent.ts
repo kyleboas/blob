@@ -65,16 +65,19 @@ function parseToolCall(response: string): ToolCall | null {
 
 export class PiAgent {
   private messages: PiMessage[];
+  private repoDir: string;
 
   constructor(
     private env: Env,
     private repo: string,
   ) {
+    // repo may be "owner/name" but the sandbox clones into /workspace/<name>
+    this.repoDir = repo.includes("/") ? repo.split("/").pop()! : repo;
     this.messages = [{ role: "system", content: this.buildSystemPrompt() }];
   }
 
   private buildSystemPrompt(): string {
-    return `You are a coding assistant in /workspace/${this.repo}.
+    return `You are a coding assistant in /workspace/${this.repoDir}.
 Use only these tools: read, write, edit, bash.
 When calling tools, output exactly:\nTOOL: <name>\nARG: <json>
 Stop when done and provide a concise summary.`;
@@ -131,7 +134,7 @@ Stop when done and provide a concise summary.`;
             );
             return { output: `Edited ${String(call.args.path ?? "")}` };
           case "bash": {
-            const result = await executeInSandbox(`cd /workspace/${this.repo} && ${String(call.args.command ?? "")}`, this.env, { sandboxId });
+            const result = await executeInSandbox(`cd /workspace/${this.repoDir} && ${String(call.args.command ?? "")}`, this.env, { sandboxId });
             return { output: result.stdout, error: result.stderr || undefined };
           }
         }
