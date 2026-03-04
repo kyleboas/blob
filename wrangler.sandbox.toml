@@ -6,7 +6,7 @@ compatibility_flags = ["nodejs_compat"]
 [[containers]]
 name = "sandbox"
 class_name = "Sandbox"
-image = "./sandbox/Dockerfile"
+image = "./src/sandbox/Dockerfile"
 instance_type = "lite"
 max_instances = 1
 
