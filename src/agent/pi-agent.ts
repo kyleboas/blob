@@ -126,9 +126,9 @@ Stop when done and provide a concise summary.`;
       try {
         switch (call.tool) {
           case "read":
-            return { output: await readTool(String(call.args.path ?? ""), this.env, sandboxId) };
+            return { output: await readTool(String(call.args.path ?? ""), this.env, { sandboxId, workspaceRoot: `/workspace/${this.repoDir}` }) };
           case "write":
-            await writeTool(String(call.args.path ?? ""), String(call.args.content ?? ""), this.env, sandboxId);
+            await writeTool(String(call.args.path ?? ""), String(call.args.content ?? ""), this.env, { sandboxId, workspaceRoot: `/workspace/${this.repoDir}` });
             return { output: `Wrote ${String(call.args.path ?? "")}` };
           case "edit":
             await editTool(
@@ -136,11 +136,12 @@ Stop when done and provide a concise summary.`;
               String(call.args.oldText ?? ""),
               String(call.args.newText ?? ""),
               this.env,
-              sandboxId,
+              { sandboxId, workspaceRoot: `/workspace/${this.repoDir}` },
             );
             return { output: `Edited ${String(call.args.path ?? "")}` };
           case "bash": {
-            const result = await executeInSandbox(`cd /workspace/${this.repoDir} && ${String(call.args.command ?? "")}`, this.env, { sandboxId });
+            const workspaceRoot = `/workspace/${this.repoDir}`;
+            const result = await executeInSandbox(String(call.args.command ?? ""), this.env, { sandboxId, workspaceRoot });
             return { output: result.stdout, error: result.stderr || undefined };
           }
         }

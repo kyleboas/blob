@@ -48,12 +48,12 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 1.7 Ensure keyword commands do not trigger when extra text is present (e.g., `status please` treated as normal chat).
   - [x] 1.8 Add/extend tests for keyword parsing and settings persistence (mock DO).
 
-- [ ] 2.0 Align workspace paths across agent + sandbox tools (`/workspace/<repoDir>`)
-  - [ ] 2.1 Refactor `src/integrations/sandbox.ts` to accept a `workspaceRoot` (or `repoDir`) for `readTool/writeTool/editTool/executeInSandbox`.
-  - [ ] 2.2 Update path normalization to allow relative paths under `/workspace/<repoDir>` (still block `..`, absolute paths, and empty paths).
-  - [ ] 2.3 Replace hardcoded `/workspace/blob/...` usage with `/workspace/<repoDir>/...` derived from the active repo.
-  - [ ] 2.4 Update `PiAgent` to compute and pass the correct `repoDir` consistently (already derived in `pi-agent.ts`, but must be used by tools).
-  - [ ] 2.5 Add unit tests for workspace root + path normalization (including allowed and rejected cases).
+- [x] 2.0 Align workspace paths across agent + sandbox tools (`/workspace/<repoDir>`)
+  - [x] 2.1 Refactor `src/integrations/sandbox.ts` to accept a `workspaceRoot` (or `repoDir`) for `readTool/writeTool/editTool/executeInSandbox`.
+  - [x] 2.2 Update path normalization to allow relative paths under `/workspace/<repoDir>` (still block `..`, absolute paths, and empty paths).
+  - [x] 2.3 Replace hardcoded `/workspace/blob/...` usage with `/workspace/<repoDir>/...` derived from the active repo.
+  - [x] 2.4 Update `PiAgent` to compute and pass the correct `repoDir` consistently (already derived in `pi-agent.ts`, but must be used by tools).
+  - [x] 2.5 Add unit tests for workspace root + path normalization (including allowed and rejected cases).
 
 - [ ] 3.0 Implement repo bootstrap in sandbox before tool usage
   - [ ] 3.1 Define a bootstrap routine in `PiAgent` that runs before first tool call:
