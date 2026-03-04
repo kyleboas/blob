@@ -165,18 +165,18 @@ Update this file after completing each sub-task.
 
 ### Phase 6: Observability + Safety
 
-- [ ] 14.0 Observability
-  - [ ] 14.1 Implement structured JSON logging for: Slack ingest, job lifecycle, tool call timing/outcome, memory ops, GitHub ops, deploy ops, heartbeat runs, cron runs (PRD 4.11.1)
-  - [ ] 14.2 Include log reference IDs in all Slack error messages so operators can trace issues (PRD 4.11.3)
-  - [ ] 14.3 Log token usage per job and per day for cost monitoring (PRD 4.5.5–4.5.7)
-- [ ] 15.0 Secret redaction + safety
-  - [ ] 15.1 Implement configurable secret pattern list (API keys, tokens, passwords, private keys) used across all subsystems (PRD 4.11.2)
-  - [ ] 15.2 Apply redaction in: logs, memory ingestion, daily learned flush, GitHub commit diffs, Slack messages (PRD 4.11.2)
-  - [ ] 15.3 Implement catch-all exception handler in Worker: report generic error to Slack with log reference ID, never expose stack traces (PRD 4.11.3)
-  - [ ] 15.4 Add tests for: pattern matching against known secret formats, redaction in each subsystem
-- [ ] 16.0 GitHub API rate limit handling
-  - [ ] 16.1 Track remaining GitHub API quota from response headers (PRD 7)
-  - [ ] 16.2 Warn when below 10% remaining; implement backoff when rate-limited (PRD 7)
+- [x] 14.0 Observability
+  - [x] 14.1 Implement structured JSON logging for: Slack ingest, job lifecycle, tool call timing/outcome, memory ops, GitHub ops, deploy ops, heartbeat runs, cron runs (PRD 4.11.1)
+  - [x] 14.2 Include log reference IDs in all Slack error messages so operators can trace issues (PRD 4.11.3)
+  - [x] 14.3 Log token usage per job and per day for cost monitoring (PRD 4.5.5–4.5.7)
+- [x] 15.0 Secret redaction + safety
+  - [x] 15.1 Implement configurable secret pattern list (API keys, tokens, passwords, private keys) used across all subsystems (PRD 4.11.2)
+  - [x] 15.2 Apply redaction in: logs, memory ingestion, daily learned flush, GitHub commit diffs, Slack messages (PRD 4.11.2)
+  - [x] 15.3 Implement catch-all exception handler in Worker: report generic error to Slack with log reference ID, never expose stack traces (PRD 4.11.3)
+  - [x] 15.4 Add tests for: pattern matching against known secret formats, redaction in each subsystem
+- [x] 16.0 GitHub API rate limit handling
+  - [x] 16.1 Track remaining GitHub API quota from response headers (PRD 7)
+  - [x] 16.2 Warn when below 10% remaining; implement backoff when rate-limited (PRD 7)
 
 ### Phase 7: Cleanup + Documentation
 

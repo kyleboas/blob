@@ -34,4 +34,5 @@ export interface Env {
 
   CRON_FAIL_THRESHOLD?: string;
   CRON_STALL_MULTIPLIER?: string;
+  SECRET_PATTERNS?: string;
 }

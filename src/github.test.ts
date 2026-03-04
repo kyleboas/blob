@@ -59,3 +59,23 @@ test("GitHubApi includes idempotency key for PR creation", async () => {
   assert.equal(pr.number, 1);
   assert.equal(capturedHeader, "feat/test:abc123");
 });
+
+test("GitHubApi retries when rate limited", async () => {
+  let calls = 0;
+  const api = new GitHubApi("token", (async () => {
+    calls += 1;
+    if (calls === 1) {
+      return new Response("rate limited", { status: 429, headers: { "retry-after": "0" } });
+    }
+    return new Response(JSON.stringify({ state: "success" }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch);
+
+  const result = await api.getPullChecks({ owner: "acme", repo: "api", ref: "abc" });
+  assert.equal(result.state, "success");
+  assert.equal(calls, 2);
+});
+
+test("scanDiffForSecrets supports configured regex patterns", () => {
+  const result = scanDiffForSecrets('+const CUSTOM = "topsecret"', [/topsecret/i]);
+  assert.equal(result.blocked, true);
+});

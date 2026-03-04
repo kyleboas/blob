@@ -1,5 +1,6 @@
 import { assertTransition, shouldForcePause, type JobStatus } from "./job-model";
 import { type CronOutcomeRecord, detectCronAlerts, buildCronAlert, postCronAlertWithFallback } from "./cron-jobs";
+import { logEvent } from "./observability";
 
 interface CronJob {
   id: string;
@@ -86,6 +87,7 @@ export class AgentDO {
 
   async alarm(): Promise<void> {
     await this.init();
+    logEvent(this.env, "heartbeat", "alarm_start");
     const maxCalls = 10;
     const now = Date.now();
     let callsRemaining = maxCalls;
@@ -130,6 +132,7 @@ export class AgentDO {
 
     await this.checkCronHealthAlerts();
 
+    logEvent(this.env, "heartbeat", "alarm_complete", { callsRemaining });
     await this.state.storage.setAlarm(Date.now() + 10 * 60 * 1000);
   }
 
@@ -177,6 +180,8 @@ export class AgentDO {
         modelCallCount ?? 0,
         id,
       );
+      logEvent(this.env, "job_lifecycle", "job_transition", { id, from, to, tokenUsage: tokenUsage ?? 0, modelCallCount: modelCallCount ?? 0 });
+      await this.logTokenUsage();
       return json({ id, from, to });
     }
 
@@ -314,6 +319,13 @@ export class AgentDO {
   }
 
 
+
+  private async logTokenUsage(): Promise<void> {
+    const rows = this.state.storage.sql.exec("SELECT SUM(token_usage) AS total FROM jobs");
+    const total = Number(rows.one()?.total ?? 0);
+    const day = new Date().toISOString().slice(0, 10);
+    logEvent(this.env, "cost", "token_usage_aggregate", { day, totalTokens: total });
+  }
 
   private async checkCronHealthAlerts(): Promise<void> {
     if (!this.data.cronOutcomes || !this.env.REPO_STORE) return;
