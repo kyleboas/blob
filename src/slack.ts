@@ -4,6 +4,7 @@ import { callLLM } from "./llm";
 import { getCronJobs, addCronJob, deleteCronJob } from "./cron";
 import { startCodexLogin, saveCodexAuth, runCodex, sandboxStatus, executeInSandbox } from "./sandbox";
 import { PiAgent } from "./pi-agent";
+import { deriveRoutingKey, verifySlackSignature } from "./slack-routing";
 
 // Track in-flight events to prevent race conditions
 const inFlightEvents = new Set<string>();
@@ -57,7 +58,14 @@ Message: "${text}"`;
   return { intent: "chat" };
 }
 
-export async function handleSlackEvent(request: Request, env: Env): Promise<Response> {
+export async function handleSlackEvent(request: Request, env: Env, executionCtx?: ExecutionContext): Promise<Response> {
+  if (env.SLACK_SIGNING_SECRET) {
+    const verified = await verifySlackSignature(request, env.SLACK_SIGNING_SECRET);
+    if (!verified) {
+      return new Response("Invalid Slack signature", { status: 401 });
+    }
+  }
+
   const body = await request.json() as {
     type?: string;
     challenge?: string;
@@ -77,26 +85,54 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
     return new Response(body.challenge);
   }
 
+  // Acknowledge quickly and process asynchronously.
+  if (executionCtx && body.type === "event_callback") {
+    executionCtx.waitUntil(processSlackEvent(body, env));
+    return new Response("OK");
+  }
+
+  await processSlackEvent(body, env);
+  return new Response("OK");
+}
+
+async function processSlackEvent(body: {
+  type?: string;
+  challenge?: string;
+  event_id?: string;
+  team_id?: string;
+  event?: {
+    type: string;
+    text?: string;
+    channel?: string;
+    user?: string;
+    bot_id?: string;
+    ts?: string;
+    thread_ts?: string;
+    channel_type?: string;
+  };
+}, env: Env): Promise<void> {
+
   // Deduplicate using DO with in-flight check
   const eventId = body.event_id || body.event?.ts;
   if (eventId && env.AGENT_DO) {
     // Check if already processing
     if (inFlightEvents.has(eventId)) {
-      return new Response("OK");
+      return;
     }
     
     // Mark as in-flight immediately
     inFlightEvents.add(eventId);
     
     try {
-      const do_ = env.AGENT_DO.get(env.AGENT_DO.idFromName("blob"));
+      const key = deriveRoutingKey(body);
+      const do_ = env.AGENT_DO.get(env.AGENT_DO.idFromName(key));
       const checkRes = await do_.fetch("http://do/events/check", {
         method: "POST",
         body: JSON.stringify({ eventId }),
       });
       const { processed } = await checkRes.json() as { processed: boolean };
       if (processed) {
-        return new Response("OK");
+        return;
       }
     } finally {
       // Remove from in-flight after 10s
@@ -110,7 +146,21 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
     const originalText = body.event.text;
 
     // Ignore bot messages (including our own)
-    if (!channel || body.event.bot_id) return new Response("OK");
+    if (!channel || body.event.bot_id) return;
+
+    // Copy-on-first-thread-message migration from channel-level context.
+    if (body.event.thread_ts && body.event.thread_ts === body.event.ts && body.team_id) {
+      const threadKey = deriveRoutingKey(body);
+      const channelKey = `${body.team_id}:${channel}:channel`;
+      const threadDO = env.AGENT_DO.get(env.AGENT_DO.idFromName(threadKey));
+      const channelDO = env.AGENT_DO.get(env.AGENT_DO.idFromName(channelKey));
+      const channelRes = await channelDO.fetch("http://do/messages?limit=20");
+      const { messages } = await channelRes.json() as { messages: Array<{ role: string; content: string; timestamp: number }> };
+      await threadDO.fetch("http://do/state/migrate", {
+        method: "POST",
+        body: JSON.stringify({ channelMessages: messages }),
+      });
+    }
 
     // Fast-path regex detection for common commands (before LLM classification)
     const lowerText = originalText.toLowerCase().trim();
@@ -120,7 +170,7 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
       const status = await sandboxStatus(env);
       if (!status.ready) {
         await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
-        return new Response("OK");
+        return;
       }
 
       try {
@@ -136,14 +186,14 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
       } catch (err) {
         await postToSlack(channel, `❌ Codex login failed: ${err}`, env);
       }
-      return new Response("OK");
+      return;
     }
 
     if (codexRunRegex.test(originalText)) {
       const status = await sandboxStatus(env);
       if (!status.ready) {
         await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
-        return new Response("OK");
+        return;
       }
 
       const prompt = originalText.replace(codexRunRegex, "");
@@ -170,7 +220,7 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
           await postToSlack(channel, `❌ Codex error: ${errMsg}`, env);
         }
       }
-      return new Response("OK");
+      return;
     }
 
     // Check for "done" after login (save auth)
@@ -181,7 +231,7 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
           const saved = await saveCodexAuth(env);
           if (saved.saved) {
             await postToSlack(channel, `✅ ${saved.message}. You can now run Codex!`, env);
-            return new Response("OK");
+            return;
           }
         }
       } catch {
@@ -197,7 +247,7 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
       const status = await sandboxStatus(env);
       if (!status.ready) {
         await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
-        return new Response("OK");
+        return;
       }
 
       try {
@@ -213,14 +263,14 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
       } catch (err) {
         await postToSlack(channel, `❌ Codex login failed: ${err}`, env);
       }
-      return new Response("OK");
+      return;
     }
 
     if (intent.intent === "codex_run") {
       const status = await sandboxStatus(env);
       if (!status.ready) {
         await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
-        return new Response("OK");
+        return;
       }
 
       const prompt = intent.prompt?.trim() || originalText;
@@ -246,7 +296,7 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
           await postToSlack(channel, `❌ Codex error: ${errMsg}`, env);
         }
       }
-      return new Response("OK");
+      return;
     }
 
     if (intent.intent === "list_cron") {
@@ -257,7 +307,7 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
         const list = jobs.map(j => `• ${j.schedule}: ${j.task}`).join("\n");
         await postToSlack(channel, `Your cron jobs:\n${list}`, env);
       }
-      return new Response("OK");
+      return;
     }
 
     if (intent.intent === "add_cron" && intent.schedule && intent.task) {
@@ -267,7 +317,7 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
       } else {
         await postToSlack(channel, "❌ Failed to add cron job", env);
       }
-      return new Response("OK");
+      return;
     }
 
     if (intent.intent === "delete_cron") {
@@ -285,7 +335,7 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
       } else {
         await postToSlack(channel, "Which job would you like to delete? Try: 'delete my email reminder job'", env);
       }
-      return new Response("OK");
+      return;
     }
 
     // Check for weather queries - handle directly
@@ -297,7 +347,7 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
       const status = await sandboxStatus(env);
       if (!status.ready) {
         await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
-        return new Response("OK");
+        return;
       }
       
       await postToSlack(channel, `🌤️ Checking weather in ${location}...`, env);
@@ -308,7 +358,7 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
       } catch (err) {
         await postToSlack(channel, `❌ Failed to get weather: ${err}`, env);
       }
-      return new Response("OK");
+      return;
     }
 
     try {
@@ -324,10 +374,10 @@ export async function handleSlackEvent(request: Request, env: Env): Promise<Resp
     }
   }
 
-  return new Response("OK");
+  return;
 }
 
-async function postToSlack(channel: string, text: string, env: Env): Promise<void> {
+async function postToSlack(channel: string, text: string, env: Env, threadTs?: string): Promise<void> {
   if (!env.SLACK_BOT_TOKEN) return;
 
   // Strip markdown formatting
@@ -342,9 +392,16 @@ async function postToSlack(channel: string, text: string, env: Env): Promise<voi
     body: JSON.stringify({
       channel,
       text: plainText,
+      ...(threadTs ? { thread_ts: threadTs } : {}),
     }),
   });
 }
+
+export const slackPoster = {
+  progress: (channel: string, text: string, env: Env, threadTs?: string) => postToSlack(channel, `⏳ ${text}`, env, threadTs),
+  final: (channel: string, text: string, env: Env, threadTs?: string) => postToSlack(channel, `✅ ${text}`, env, threadTs),
+  error: (channel: string, text: string, env: Env, threadTs?: string) => postToSlack(channel, `❌ ${text}`, env, threadTs),
+};
 
 function stripFormatting(text: string): string {
   return text

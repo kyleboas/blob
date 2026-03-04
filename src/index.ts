@@ -15,7 +15,7 @@ function json(data: unknown, status = 200): Response {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     
     // Sandbox health check
@@ -39,7 +39,7 @@ export default {
     
     // Main worker routes only
     if (url.pathname === "/slack/events") {
-      return handleSlackEvent(request, env);
+      return handleSlackEvent(request, env, ctx);
     }
     
     if (url.pathname === "/repos" && request.method === "GET") {

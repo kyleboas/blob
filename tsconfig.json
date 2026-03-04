@@ -11,5 +11,6 @@
     "outDir": "./dist",
     "types": ["@cloudflare/workers-types"]
   },
-  "include": ["src/index.ts"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
 }

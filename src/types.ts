@@ -8,16 +8,12 @@ export interface SandboxService {
 }
 
 export interface Env {
-  // Main agent DO
   AGENT_DO: DurableObjectNamespace;
-
-  // Service binding to sandbox worker (WorkerEntrypoint methods)
   SANDBOX: SandboxService;
-
-  // R2 Bucket
   REPO_STORE: R2Bucket;
+  PI_MEMORY?: KVNamespace;
+  PI_VECTORS?: VectorizeIndex;
 
-  // Workers AI binding
   AI?: {
     run: (
       model: string,
@@ -27,11 +23,12 @@ export interface Env {
     ) => Promise<{ response?: string } | { data: number[][] }>;
   };
 
-  // Secrets / vars
   GITHUB_TOKEN?: string;
   AI_GATEWAY_TOKEN?: string;
   AI_GATEWAY_BASE_URL?: string;
   SLACK_BOT_TOKEN?: string;
+  SLACK_SIGNING_SECRET?: string;
+  SLACK_SUMMARY_CHANNEL?: string;
   CLOUDFLARE_API_TOKEN?: string;
   ACCOUNT_ID?: string;
 }

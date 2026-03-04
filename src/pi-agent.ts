@@ -423,7 +423,7 @@ Be concise. Don't ask for confirmation. Just do it.${guidelines ? `\n\n${guideli
       switch (cmd) {
         case "set": {
           if (!key) return { output: "", error: "Key required" };
-          await this.env.PI_MEMORY.put(`${prefix}${key}`, value || "");
+          await this.env.PI_MEMORY!.put(`${prefix}${key}`, value || "");
           if (value && this.env.PI_VECTORS) {
             const vector = await this.embed(`${key}: ${value}`);
             if (vector) {
@@ -439,19 +439,19 @@ Be concise. Don't ask for confirmation. Just do it.${guidelines ? `\n\n${guideli
 
         case "get": {
           if (!key) return { output: "", error: "Key required" };
-          const val = await this.env.PI_MEMORY.get(`${prefix}${key}`);
+          const val = await this.env.PI_MEMORY!.get(`${prefix}${key}`);
           return { output: val || "" };
         }
 
         case "list": {
-          const keys = await this.env.PI_MEMORY.list({ prefix });
-          const keyList = keys.keys.map(k => k.name.replace(prefix, "")).join("\n");
+          const keys = await this.env.PI_MEMORY!.list({ prefix });
+          const keyList = keys.keys.map((k: { name: string }) => k.name.replace(prefix, "")).join("\n");
           return { output: keyList || "No memory keys" };
         }
 
         case "delete": {
           if (!key) return { output: "", error: "Key required" };
-          await this.env.PI_MEMORY.delete(`${prefix}${key}`);
+          await this.env.PI_MEMORY!.delete(`${prefix}${key}`);
           if (this.env.PI_VECTORS) {
             await this.env.PI_VECTORS.deleteByIds([`${this.repo}:${key}`]);
           }
@@ -469,7 +469,7 @@ Be concise. Don't ask for confirmation. Just do it.${guidelines ? `\n\n${guideli
             returnMetadata: "all",
           });
           if (!results.matches.length) return { output: "No relevant memories found" };
-          const lines = results.matches.map(m => {
+          const lines = results.matches.map((m: VectorizeMatch) => {
             const meta = m.metadata as { key: string; text: string; ts: number } | undefined;
             const score = m.score.toFixed(3);
             return `[${score}] ${meta?.key ?? m.id}: ${meta?.text ?? ""}`;
