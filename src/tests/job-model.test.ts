@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { canTransition, assertTransition, shouldForcePause } from "./job-model";
+import { canTransition, assertTransition, shouldForcePause } from "../job-model";
 
 test("job lifecycle transition rules", () => {
   assert.equal(canTransition("queued", "running"), true);
