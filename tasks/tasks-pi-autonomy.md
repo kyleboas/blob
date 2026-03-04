@@ -62,21 +62,21 @@ Update this file after completing each sub-task.
 
 ### Phase 2: Core Infrastructure
 
-- [ ] 3.0 Slack ingestion and DO routing
-  - [ ] 3.1 Implement Slack signature verification + 3-second ack (PRD 4.2.1)
-  - [ ] 3.2 Implement deterministic DO routing keys per the keying rules in 2.2 (PRD 4.2.2–4.2.3)
-  - [ ] 3.3 Define thread-to-channel state migration behavior (copy-on-first-thread-message vs. lazy lookup) and implement chosen approach (PRD 4.2.4)
-  - [ ] 3.4 Implement Slack posting utilities for progress updates, final summaries, and error messages (PRD 4.2.5)
-  - [ ] 3.5 Add tests for: routing key derivation (all three patterns), Slack signature verification, and ack timing
-- [ ] 4.0 DO job model + heartbeat
-  - [ ] 4.1 Implement job schema in DO SQLite: id, status (queued → running → paused → completed | failed), created_at, updated_at, resume_state (current step, tool history, partial outputs, sandbox_id), token_usage, model_call_count (PRD 4.3.1–4.3.3)
-  - [ ] 4.2 Implement job lifecycle transitions with validation (e.g., only running → paused, not queued → completed)
-  - [ ] 4.3 Implement max job duration enforcement: configurable wall-clock limit (default 30 min), force-pause on breach (PRD 4.3.4)
-  - [ ] 4.4 Implement heartbeat as DO alarm that re-schedules itself every 10 minutes (PRD 4.9.1)
-  - [ ] 4.5 Heartbeat logic: resume paused jobs with remaining budget, start queued jobs oldest-first, respect per-heartbeat model call limit (PRD 4.9.2)
-  - [ ] 4.6 Heartbeat must not run heavy workloads directly — defer jobs exceeding cycle budget (PRD 4.9.3)
-  - [ ] 4.7 Implement daily summary posting: once per day on first heartbeat after midnight UTC if configured (PRD 4.9.2)
-  - [ ] 4.8 Add tests for: lifecycle transitions, pause/resume with state, budget enforcement, heartbeat scheduling
+- [x] 3.0 Slack ingestion and DO routing
+  - [x] 3.1 Implement Slack signature verification + 3-second ack (PRD 4.2.1)
+  - [x] 3.2 Implement deterministic DO routing keys per the keying rules in 2.2 (PRD 4.2.2–4.2.3)
+  - [x] 3.3 Define thread-to-channel state migration behavior (copy-on-first-thread-message vs. lazy lookup) and implement chosen approach (PRD 4.2.4)
+  - [x] 3.4 Implement Slack posting utilities for progress updates, final summaries, and error messages (PRD 4.2.5)
+  - [x] 3.5 Add tests for: routing key derivation (all three patterns), Slack signature verification, and ack timing
+- [x] 4.0 DO job model + heartbeat
+  - [x] 4.1 Implement job schema in DO SQLite: id, status (queued → running → paused → completed | failed), created_at, updated_at, resume_state (current step, tool history, partial outputs, sandbox_id), token_usage, model_call_count (PRD 4.3.1–4.3.3)
+  - [x] 4.2 Implement job lifecycle transitions with validation (e.g., only running → paused, not queued → completed)
+  - [x] 4.3 Implement max job duration enforcement: configurable wall-clock limit (default 30 min), force-pause on breach (PRD 4.3.4)
+  - [x] 4.4 Implement heartbeat as DO alarm that re-schedules itself every 10 minutes (PRD 4.9.1)
+  - [x] 4.5 Heartbeat logic: resume paused jobs with remaining budget, start queued jobs oldest-first, respect per-heartbeat model call limit (PRD 4.9.2)
+  - [x] 4.6 Heartbeat must not run heavy workloads directly — defer jobs exceeding cycle budget (PRD 4.9.3)
+  - [x] 4.7 Implement daily summary posting: once per day on first heartbeat after midnight UTC if configured (PRD 4.9.2)
+  - [x] 4.8 Add tests for: lifecycle transitions, pause/resume with state, budget enforcement, heartbeat scheduling
 - [ ] 5.0 Sandbox lifecycle + Pi 4 tools
   - [ ] 5.1 Implement sandbox provisioning: create on first tool call for a sandboxId, reuse if exists (PRD 4.4.4)
   - [ ] 5.2 Implement sandbox idle timeout: eligible for teardown after configurable duration (default 60 min) with no tool calls (PRD 4.4.5)
