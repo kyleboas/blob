@@ -204,18 +204,45 @@ async function processSlackEvent(body: {
       return;
     }
 
+    const key = deriveRoutingKey(body);
+    const conversationDO = env.AGENT_DO ? env.AGENT_DO.get(env.AGENT_DO.idFromName(key)) : null;
+
+    // Fetch conversation history from the Durable Object
+    let conversationHistory: Array<{ role: string; content: string }> = [];
+    if (conversationDO) {
+      try {
+        const historyRes = await conversationDO.fetch("http://do/messages?limit=20");
+        const { messages } = await historyRes.json() as { messages: Array<{ role: string; content: string; timestamp: number }> };
+        conversationHistory = messages.map(({ role, content }) => ({ role, content }));
+      } catch {
+        // proceed without history if fetch fails
+      }
+    }
+
     try {
       if (intent.needsSandbox) {
         const repos = await getRepos(env);
         const repo = repos[0] ?? "default";
         const agent = new PiAgent(env, repo);
-        const response = await agent.run(originalText);
+        const response = await agent.run(originalText, { conversationHistory });
+        // Store the exchange in the DO
+        if (conversationDO) {
+          await conversationDO.fetch("http://do/messages", { method: "POST", body: JSON.stringify({ role: "user", content: originalText }) });
+          await conversationDO.fetch("http://do/messages", { method: "POST", body: JSON.stringify({ role: "assistant", content: response }) });
+        }
         await postToSlack(channel, response, env);
       } else {
-        const response = await callLLM([
+        const llmMessages: Array<{ role: string; content: string }> = [
           { role: "system", content: "You are a helpful, versatile assistant responding via Slack. Be concise and friendly." },
+          ...conversationHistory,
           { role: "user", content: originalText },
-        ], env);
+        ];
+        const response = await callLLM(llmMessages, env);
+        // Store the exchange in the DO
+        if (conversationDO) {
+          await conversationDO.fetch("http://do/messages", { method: "POST", body: JSON.stringify({ role: "user", content: originalText }) });
+          await conversationDO.fetch("http://do/messages", { method: "POST", body: JSON.stringify({ role: "assistant", content: response }) });
+        }
         await postToSlack(channel, response, env);
       }
     } catch (err) {
