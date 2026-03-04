@@ -11,6 +11,7 @@ const inFlightEvents = new Set<string>();
 
 interface IntentResult {
   intent: "list_cron" | "add_cron" | "delete_cron" | "chat";
+  needsSandbox?: boolean;
   schedule?: string;
   task?: string;
   search?: string;
@@ -25,6 +26,9 @@ Possible intents:
 - "delete_cron": User wants to remove a scheduled task (e.g., "delete the email reminder", "remove my test job")
 - "chat": General conversation, not a specific command
 
+For "chat" intent, also determine:
+- needsSandbox: true if the message requires reading, writing, editing, or running code in the repository (e.g., "fix the bug in auth.ts", "add a new endpoint", "run the tests", "what does the login function do"). false if the message is general conversation, greetings, questions about non-code topics, or anything that can be answered without accessing the codebase (e.g., "hello", "thanks", "what is a REST API", "how are you").
+
 For "add_cron", extract:
 - schedule: The time pattern (e.g., "every 5 minutes", "daily at 9am", "hourly")
 - task: What to do (e.g., "check email", "run tests", "backup database")
@@ -33,7 +37,7 @@ For "delete_cron", extract:
 - search: Keywords to find the job to delete (e.g., "email", "test", "backup")
 
 Respond with ONLY a JSON object in this format:
-{"intent": "list_cron|add_cron|delete_cron|chat", "schedule": "...", "task": "...", "search": "..."}
+{"intent": "list_cron|add_cron|delete_cron|chat", "needsSandbox": true|false, "schedule": "...", "task": "...", "search": "..."}
 
 Message: "${text}"`;
 
@@ -47,7 +51,7 @@ Message: "${text}"`;
     // fall back to chat
   }
 
-  return { intent: "chat" };
+  return { intent: "chat", needsSandbox: false };
 }
 
 function formatSlackError(message: string, logRef: string): string {
@@ -201,11 +205,19 @@ async function processSlackEvent(body: {
     }
 
     try {
-      const repos = await getRepos(env);
-      const repo = repos[0] ?? "default";
-      const agent = new PiAgent(env, repo);
-      const response = await agent.run(originalText);
-      await postToSlack(channel, response, env);
+      if (intent.needsSandbox) {
+        const repos = await getRepos(env);
+        const repo = repos[0] ?? "default";
+        const agent = new PiAgent(env, repo);
+        const response = await agent.run(originalText);
+        await postToSlack(channel, response, env);
+      } else {
+        const response = await callLLM([
+          { role: "system", content: "You are a helpful coding assistant responding via Slack. Be concise and friendly." },
+          { role: "user", content: originalText },
+        ], env);
+        await postToSlack(channel, response, env);
+      }
     } catch (err) {
       const logRef = createLogRef("slack");
       logEvent(env, "slack_ingest", "process_message_failed", { error: String(err), channel }, logRef);
