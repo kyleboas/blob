@@ -1,4 +1,4 @@
-import type { Env } from "./types";
+import type { Env } from "../core/types";
 
 export interface SandboxResult {
   stdout: string;

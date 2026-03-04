@@ -56,7 +56,7 @@ These are active entrypoints and should remain while refactoring:
 
 ### 4) Dead code and stale artifacts
 
-8. `sandbox/restore-auth.py`
+8. `src/sandbox/restore-auth.py`
    - **Why review for deletion:** Operational script not referenced by Worker runtime; if no external runbook depends on it, remove.
    - **Migration:** Move any required operational steps into documented scripts under a single ops directory.
 

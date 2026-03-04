@@ -1,7 +1,7 @@
-import type { Env } from "./types";
-import { R2MemoryStore, writeMemoryItem, compactScope, reconcileMemory } from "./memory-system";
-import { logEvent } from "./observability";
-import { redactSecrets } from "./safety";
+import type { Env } from "../core/types";
+import { R2MemoryStore, writeMemoryItem, compactScope, reconcileMemory } from "../core/memory-system";
+import { logEvent } from "../core/observability";
+import { redactSecrets } from "../core/safety";
 
 export type CronTaskName = "content-scan" | "memory-compaction" | "memory-reconciliation";
 export type CronStatus = "success" | "failure" | "running";

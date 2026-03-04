@@ -1,4 +1,4 @@
-import { logEvent } from "./observability";
+import { logEvent } from "../core/observability";
 export type DeployMechanism =
   | { type: "webhook"; url: string; headers?: Record<string, string> }
   | { type: "cloudflare_pages"; hookUrl: string }
