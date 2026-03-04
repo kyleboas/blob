@@ -22,6 +22,8 @@ interface RunOptions {
   sandboxId?: string;
   critical?: boolean;
   onProgress?: (message: string) => Promise<void> | void;
+  onToolLedger?: (entry: { tool: ToolCall["tool"]; ok: boolean; durationMs: number; error?: string }) => Promise<void> | void;
+  verbosity?: "minimal" | "verbose";
   conversationHistory?: Array<{ role: string; content: string }>;
 }
 
@@ -224,9 +226,11 @@ Stop when done and provide a concise summary.`;
     let modelCalls = 0;
     let consecutiveFailures = 0;
 
+    const verbosity = opts.verbosity ?? "verbose";
+
     while (modelCalls < maxCalls) {
       modelCalls += 1;
-      if (opts.onProgress && modelCalls % 2 === 0) {
+      if (opts.onProgress && verbosity === "verbose" && modelCalls % 2 === 0) {
         await opts.onProgress(`Progress update: ${modelCalls} model calls used.`);
       }
 
@@ -262,6 +266,14 @@ Stop when done and provide a concise summary.`;
         durationMs: toolDurationMs,
         error: result.error ?? undefined,
       });
+      if (opts.onToolLedger) {
+        await opts.onToolLedger({
+          tool: toolCall.tool,
+          ok: !result.error,
+          durationMs: toolDurationMs,
+          error: result.error ?? undefined,
+        });
+      }
       if (result.error) {
         consecutiveFailures += 1;
         this.messages.push({

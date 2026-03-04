@@ -21,6 +21,9 @@ interface BlobState {
   migratedFromChannel?: boolean;
   lastDailySummaryDate?: string;
   cronOutcomes?: Record<string, CronOutcomeRecord>;
+  settings?: {
+    verbosity?: "minimal" | "verbose";
+  };
 }
 
 const DEFAULT_CATALOG: Record<string, { name: string; description: string; maxTokens: number }> = {
@@ -253,6 +256,20 @@ export class AgentDO {
     if (url.pathname === "/messages" && request.method === "GET") {
       const limit = parseInt(url.searchParams.get("limit") || "10");
       return json({ messages: this.data.messages.slice(-limit) });
+    }
+
+    if (url.pathname === "/settings/verbosity" && request.method === "GET") {
+      return json({ verbosity: this.data.settings?.verbosity ?? "minimal" });
+    }
+
+    if (url.pathname === "/settings/verbosity" && request.method === "POST") {
+      const { verbosity } = (await request.json()) as { verbosity: "minimal" | "verbose" };
+      if (verbosity !== "minimal" && verbosity !== "verbose") {
+        return json({ error: "invalid verbosity" }, 400);
+      }
+      this.data.settings = { ...(this.data.settings ?? {}), verbosity };
+      await this.save();
+      return json({ saved: true, verbosity });
     }
 
     if (url.pathname === "/events/check" && request.method === "POST") {
