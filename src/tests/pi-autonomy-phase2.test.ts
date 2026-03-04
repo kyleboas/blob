@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { PiAgent } from "../agent/pi-agent";
+import { PiAgent, __piAgentTestUtils } from "../agent/pi-agent";
 import { __resetSandboxSessionsForTests, __sandboxTestUtils, cleanupSandboxForJob, readTool, teardownIdleSandboxes, writeTool } from "../integrations/sandbox";
 
 function makeEnv(overrides: Record<string, unknown> = {}) {
@@ -96,7 +96,7 @@ test("agent enforces model call limit and reports progress", async () => {
   const result = await agent.run("test", { onProgress: (msg) => progress.push(msg), sandboxId: "a1" });
 
   assert.equal(result, "final");
-  assert.equal(progress.length, 1);
+  assert.ok(progress.length >= 1);
   globalThis.fetch = originalFetch;
 });
 
@@ -212,7 +212,86 @@ test("agent tools use repo-specific workspace root", async () => {
     const agent = new PiAgent(env, "owner/project");
     const result = await agent.run("test", { sandboxId: "repo-root" });
     assert.equal(result, "done");
-    assert.equal(commands[0], "cd /workspace/project && pwd");
+    assert.ok(commands.some((command) => command === "cd /workspace/project && pwd"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("bootstrap script includes clone and update logic", () => {
+  const script = __piAgentTestUtils.buildBootstrapScript("project", "owner/project");
+  assert.match(script, /git clone 'https:\/\/github.com\/owner\/project.git' '\/workspace\/project'/);
+  assert.match(script, /git fetch --prune origin/);
+  assert.match(script, /git reset --hard origin\/main/);
+  assert.match(script, /origin\/master/);
+});
+
+test("agent bootstraps once before first tool call", async () => {
+  __resetSandboxSessionsForTests();
+  const originalFetch = globalThis.fetch;
+  const execCommands: string[] = [];
+
+  const { env } = makeEnv({
+    SANDBOX: {
+      start: async () => {},
+      exec: async (command: string) => {
+        execCommands.push(command);
+        return { stdout: "ok", stderr: "", exitCode: 0 };
+      },
+      writeFile: async (_path: string, _content: string) => {},
+      readFile: async (_path: string) => "ok",
+    },
+    GITHUB_TOKEN: "ghs_test_token",
+  });
+
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    const content =
+      calls === 1
+        ? 'TOOL: read\nARG: {"path":"README.md"}'
+        : calls === 2
+          ? 'TOOL: bash\nARG: {"command":"pwd"}'
+          : "done";
+    return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const agent = new PiAgent(env, "owner/project");
+    const result = await agent.run("test", { sandboxId: "bootstrap-1" });
+    assert.equal(result, "done");
+    const bootstrapCalls = execCommands.filter((command) => command.includes("git fetch --prune origin") || command.includes("git clone"));
+    assert.equal(bootstrapCalls.length, 1);
+    assert.match(bootstrapCalls[0], /GIT_ASKPASS=\/usr\/local\/bin\/blob-git-askpass/);
+    assert.match(bootstrapCalls[0], /GITHUB_TOKEN='ghs_test_token'/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("agent reports bootstrap failures with error text", async () => {
+  __resetSandboxSessionsForTests();
+  const originalFetch = globalThis.fetch;
+  const { env } = makeEnv({
+    SANDBOX: {
+      start: async () => {},
+      exec: async () => ({ stdout: "", stderr: "fatal: repo not found", exitCode: 1 }),
+      writeFile: async (_path: string, _content: string) => {},
+      readFile: async (_path: string) => "ok",
+    },
+  });
+
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ choices: [{ message: { content: 'TOOL: read\nARG: {"path":"README.md"}' } }] }), {
+      status: 200,
+    })) as typeof fetch;
+
+  try {
+    const agent = new PiAgent(env, "owner/project");
+    const result = await agent.run("test", { sandboxId: "bootstrap-fail", verbosity: "verbose" });
+    assert.match(result, /Bootstrap failed:/);
+    assert.match(result, /repo bootstrap failed/);
+    assert.match(result, /fatal: repo not found/);
   } finally {
     globalThis.fetch = originalFetch;
   }

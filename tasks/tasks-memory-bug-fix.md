@@ -55,18 +55,18 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 2.4 Update `PiAgent` to compute and pass the correct `repoDir` consistently (already derived in `pi-agent.ts`, but must be used by tools).
   - [x] 2.5 Add unit tests for workspace root + path normalization (including allowed and rejected cases).
 
-- [ ] 3.0 Implement repo bootstrap in sandbox before tool usage
-  - [ ] 3.1 Define a bootstrap routine in `PiAgent` that runs before first tool call:
+- [x] 3.0 Implement repo bootstrap in sandbox before tool usage
+  - [x] 3.1 Define a bootstrap routine in `PiAgent` that runs before first tool call:
     - Ensure sandbox started/session available
     - Ensure `/workspace/<repoDir>` exists
-  - [ ] 3.2 Implement “clone if missing”:
+  - [x] 3.2 Implement “clone if missing”:
     - If `/workspace/<repoDir>/.git` does not exist, `git clone` the repo URL into `/workspace/<repoDir>`.
-  - [ ] 3.3 Implement “update if present”:
+  - [x] 3.3 Implement “update if present”:
     - `git fetch` + reset/pull to configured default branch/ref (choose simple default: origin/main, fallback origin/master).
-  - [ ] 3.4 Ensure `git` authentication works in sandbox (use existing `blob-git-askpass` + `GITHUB_TOKEN` pattern).
-  - [ ] 3.5 Record and report bootstrap failures clearly (error text included in final response; verbose mode can include bootstrap log excerpt).
-  - [ ] 3.6 Add a safe guard to avoid repeated clone/update in a single job (bootstrap once per run).
-  - [ ] 3.7 Add tests for bootstrap decision logic (mock bash exec; verify commands issued).
+  - [x] 3.4 Ensure `git` authentication works in sandbox (use existing `blob-git-askpass` + `GITHUB_TOKEN` pattern).
+  - [x] 3.5 Record and report bootstrap failures clearly (error text included in final response; verbose mode can include bootstrap log excerpt).
+  - [x] 3.6 Add a safe guard to avoid repeated clone/update in a single job (bootstrap once per run).
+  - [x] 3.7 Add tests for bootstrap decision logic (mock bash exec; verify commands issued).
 
 - [ ] 4.0 Add robust tool calling (structured tool calls preferred; fallback parsing supported)
   - [ ] 4.1 Define tool schemas for the 4 tools in `PiAgent`:

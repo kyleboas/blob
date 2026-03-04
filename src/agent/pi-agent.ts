@@ -1,6 +1,6 @@
 import type { Env } from "../core/types";
 import { DEFAULT_MODEL } from "../core/models";
-import { appendWorkspaceState, editTool, executeInSandbox, readTool, writeTool } from "../integrations/sandbox";
+import { appendWorkspaceState, editTool, ensureSandboxSession, executeInSandbox, readTool, writeTool } from "../integrations/sandbox";
 import { logEvent } from "../core/observability";
 
 interface PiMessage {
@@ -67,6 +67,50 @@ function parseToolCall(response: string): ToolCall | null {
   return { tool, args };
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function summarizeText(text: string, maxChars = 300): string {
+  const normalized = text.trim().replace(/\s+/g, " ");
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxChars)}…`;
+}
+
+function buildBootstrapScript(repoDir: string, repo: string): string {
+  const workspaceRoot = `/workspace/${repoDir}`;
+  const hasRepoSlug = repo.includes("/");
+  const cloneUrl = hasRepoSlug ? `https://github.com/${repo}.git` : "";
+  const cloneStep = hasRepoSlug
+    ? `    git clone ${shellQuote(cloneUrl)} ${shellQuote(workspaceRoot)}\n`
+    : `    mkdir -p ${shellQuote(workspaceRoot)}\n`;
+
+  return `set -eu
+mkdir -p /workspace
+if [ -d ${shellQuote(`${workspaceRoot}/.git`)} ]; then
+  cd ${shellQuote(workspaceRoot)}
+  git fetch --prune origin
+  if git show-ref --verify --quiet refs/remotes/origin/main; then
+    git reset --hard origin/main
+  elif git show-ref --verify --quiet refs/remotes/origin/master; then
+    git reset --hard origin/master
+  else
+    git pull --ff-only
+  fi
+else
+${cloneStep}  if [ -d ${shellQuote(`${workspaceRoot}/.git`)} ]; then
+    cd ${shellQuote(workspaceRoot)}
+    if git show-ref --verify --quiet refs/remotes/origin/main; then
+      git checkout -B main origin/main
+    elif git show-ref --verify --quiet refs/remotes/origin/master; then
+      git checkout -B master origin/master
+    fi
+  fi
+fi`;
+}
+
 export class PiAgent {
   private messages: PiMessage[];
   private repoDir: string;
@@ -87,6 +131,32 @@ You have 4 tools — read, write, edit, bash — which together give you full ca
 
 When calling tools, output exactly:\nTOOL: <name>\nARG: <json>
 Stop when done and provide a concise summary.`;
+  }
+
+  private async ensureRepoBootstrapped(
+    sandboxId: string,
+    onProgress?: RunOptions["onProgress"],
+    verbosity: RunOptions["verbosity"] = "minimal",
+  ): Promise<void> {
+    await ensureSandboxSession(sandboxId, this.env);
+
+    const authPrefix = this.env.GITHUB_TOKEN
+      ? `export GITHUB_TOKEN=${shellQuote(this.env.GITHUB_TOKEN)}; export GIT_ASKPASS=/usr/local/bin/blob-git-askpass; export GIT_TERMINAL_PROMPT=0;`
+      : "";
+
+    const result = await executeInSandbox(`${authPrefix} ${buildBootstrapScript(this.repoDir, this.repo)}`.trim(), this.env, {
+      sandboxId,
+      timeout: 180000,
+    });
+
+    if (result.exitCode !== 0) {
+      const excerpt = summarizeText(result.stderr || result.stdout || "unknown bootstrap error");
+      throw new Error(`repo bootstrap failed (${this.repoDir}): ${excerpt}`);
+    }
+
+    if (verbosity === "verbose" && onProgress) {
+      await onProgress(`Bootstrap ready for /workspace/${this.repoDir}`);
+    }
   }
 
   private async callLLM(): Promise<string> {
@@ -226,6 +296,7 @@ Stop when done and provide a concise summary.`;
 
     let modelCalls = 0;
     let consecutiveFailures = 0;
+    let bootstrapAttempted = false;
 
     const verbosity = opts.verbosity ?? "verbose";
 
@@ -259,6 +330,21 @@ Stop when done and provide a concise summary.`;
       }
 
       this.messages.push({ role: "assistant", content: response });
+
+      if (!bootstrapAttempted) {
+        bootstrapAttempted = true;
+        try {
+          await this.ensureRepoBootstrapped(sandboxId, opts.onProgress, verbosity);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const failure = `Bootstrap failed: ${message}`;
+          if (opts.onProgress && verbosity === "verbose") {
+            await opts.onProgress(`⚠️ ${failure}`);
+          }
+          return failure;
+        }
+      }
+
       const toolStart = Date.now();
       const result = await this.executeToolWithRetry(toolCall, sandboxId);
       const toolDurationMs = Date.now() - toolStart;
@@ -305,4 +391,5 @@ Stop when done and provide a concise summary.`;
 export const __piAgentTestUtils = {
   parseToolCall,
   isTransientError,
+  buildBootstrapScript,
 };
