@@ -77,7 +77,7 @@ export class PiAgent {
   }
 
   private buildSystemPrompt(): string {
-    return `You are a coding assistant in /workspace/${this.repoDir}.
+    return `You are a full-stack assistant in /workspace/${this.repoDir}.
 Use only these tools: read, write, edit, bash.
 When calling tools, output exactly:\nTOOL: <name>\nARG: <json>
 Stop when done and provide a concise summary.`;

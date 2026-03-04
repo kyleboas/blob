@@ -213,7 +213,7 @@ async function processSlackEvent(body: {
         await postToSlack(channel, response, env);
       } else {
         const response = await callLLM([
-          { role: "system", content: "You are a helpful coding assistant responding via Slack. Be concise and friendly." },
+          { role: "system", content: "You are a helpful full-stack assistant responding via Slack. Be concise and friendly." },
           { role: "user", content: originalText },
         ], env);
         await postToSlack(channel, response, env);
