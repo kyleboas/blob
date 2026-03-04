@@ -336,19 +336,41 @@ export async function compactScope(env: Env, store: R2MemoryStore, scope: string
   return { replaced: selected.length, newItem: created };
 }
 
-export async function reconcileMemory(env: Env, store: R2MemoryStore, vectorIds: string[]): Promise<{ deletedOrphans: number; reindexed: number }> {
+export async function reconcileMemory(env: Env, store: R2MemoryStore, vectorIds?: string[]): Promise<{ deletedOrphans: number; reindexed: number }> {
   let deletedOrphans = 0;
   let reindexed = 0;
 
-  for (const id of vectorIds) {
-    const item = await store.read(id);
-    if (!item) {
-      await deleteVector(env, id);
-      deletedOrphans += 1;
+  // If explicit vectorIds are provided, check those; otherwise discover orphans
+  // by querying Vectorize for each known scope from R2 items
+  const items = await store.listByPrefix("mem/");
+  const r2Ids = new Set(items.map((i) => i.id));
+
+  if (vectorIds && vectorIds.length > 0) {
+    for (const id of vectorIds) {
+      if (!r2Ids.has(id)) {
+        await deleteVector(env, id);
+        deletedOrphans += 1;
+      }
+    }
+  } else if (env.PI_VECTORS) {
+    // Discover orphans by querying Vectorize per scope
+    const scopes = [...new Set(items.map((i) => i.scope))];
+    const checkedIds = new Set<string>();
+    for (const scope of scopes) {
+      const matches = await queryVectors(env, " ", scope, 100);
+      for (const match of matches) {
+        const id = String(match.id);
+        if (checkedIds.has(id)) continue;
+        checkedIds.add(id);
+        if (!r2Ids.has(id)) {
+          await deleteVector(env, id);
+          deletedOrphans += 1;
+        }
+      }
     }
   }
 
-  const items = await store.listByPrefix("mem/");
+  // Re-index unindexed R2 items
   for (const item of items.filter((x) => x.unindexed)) {
     await upsertVector(env, item);
     await store.update(item.id, { unindexed: false });

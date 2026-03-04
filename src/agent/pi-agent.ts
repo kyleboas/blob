@@ -1,6 +1,7 @@
 import type { Env } from "../core/types";
 import { DEFAULT_MODEL } from "../core/models";
 import { appendWorkspaceState, editTool, executeInSandbox, readTool, writeTool } from "../integrations/sandbox";
+import { logEvent } from "../core/observability";
 
 interface PiMessage {
   role: "system" | "user" | "assistant";
@@ -31,7 +32,7 @@ interface BudgetState {
   halted: boolean;
 }
 
-const dailyTokenUsage = new Map<string, number>();
+const dailyTokenUsageLocal = new Map<string, number>();
 
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
@@ -172,14 +173,34 @@ Stop when done and provide a concise summary.`;
     return null;
   }
 
-  private consumeDailyBudget(totalTokens: number, critical: boolean): boolean {
+  private async consumeDailyBudget(totalTokens: number, critical: boolean): Promise<boolean> {
     const date = new Date().toISOString().slice(0, 10);
-    const current = dailyTokenUsage.get(date) ?? 0;
     const dailyCeiling = Number.parseInt(this.env.DAILY_TOKEN_CEILING ?? "500000", 10);
+
+    // Try to persist to DO for durable tracking
+    if (this.env.AGENT_DO) {
+      try {
+        const do_ = this.env.AGENT_DO.get(this.env.AGENT_DO.idFromName("blob"));
+        const res = await do_.fetch("http://do/daily-tokens", {
+          method: "POST",
+          body: JSON.stringify({ date, tokens: totalTokens }),
+        });
+        const { totalTokens: total } = await res.json() as { totalTokens: number };
+        if (!critical && total >= dailyCeiling) {
+          return false;
+        }
+        return true;
+      } catch {
+        // Fall back to local tracking
+      }
+    }
+
+    // Fallback: in-memory tracking
+    const current = dailyTokenUsageLocal.get(date) ?? 0;
     if (!critical && current >= dailyCeiling) {
       return false;
     }
-    dailyTokenUsage.set(date, current + totalTokens);
+    dailyTokenUsageLocal.set(date, current + totalTokens);
     return true;
   }
 
@@ -211,7 +232,7 @@ Stop when done and provide a concise summary.`;
       usage.inputTokens += estimateTokens(JSON.stringify(this.messages));
       usage.outputTokens += estimateTokens(response);
 
-      if (!this.consumeDailyBudget(estimateTokens(response), opts.critical ?? false)) {
+      if (!(await this.consumeDailyBudget(estimateTokens(response), opts.critical ?? false))) {
         return "⏸️ Daily token ceiling reached; paused non-critical job.";
       }
 
@@ -231,7 +252,14 @@ Stop when done and provide a concise summary.`;
       }
 
       this.messages.push({ role: "assistant", content: response });
+      const toolStart = Date.now();
       const result = await this.executeToolWithRetry(toolCall, sandboxId);
+      const toolDurationMs = Date.now() - toolStart;
+      logEvent(this.env, "tool_call", result.error ? "tool_failure" : "tool_success", {
+        tool: toolCall.tool,
+        durationMs: toolDurationMs,
+        error: result.error ?? undefined,
+      });
       if (result.error) {
         consecutiveFailures += 1;
         this.messages.push({
@@ -239,7 +267,11 @@ Stop when done and provide a concise summary.`;
           content: `TOOL_FAILURE: ${toolCall.tool}\nARG: ${JSON.stringify(toolCall.args)}\nERROR: ${result.error}`,
         });
         if (consecutiveFailures >= maxConsecutiveFailures) {
-          return `Paused after ${consecutiveFailures} consecutive tool failures.`;
+          const pauseMsg = `Paused after ${consecutiveFailures} consecutive tool failures.`;
+          if (opts.onProgress) {
+            await opts.onProgress(`⚠️ ${pauseMsg}`);
+          }
+          return pauseMsg;
         }
       } else {
         consecutiveFailures = 0;

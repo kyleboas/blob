@@ -77,6 +77,13 @@ export class AgentDO {
       )
     `);
 
+    this.state.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS daily_token_usage (
+        date TEXT PRIMARY KEY,
+        total_tokens INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+
     const existingAlarm = await this.state.storage.getAlarm();
     if (!existingAlarm) {
       await this.state.storage.setAlarm(Date.now() + 10 * 60 * 1000);
@@ -309,6 +316,25 @@ export class AgentDO {
       this.data.cronJobs = (this.data.cronJobs || []).filter((j) => j.id !== id);
       await this.save();
       return json({ deleted: id });
+    }
+
+    if (url.pathname === "/daily-tokens" && request.method === "GET") {
+      const date = url.searchParams.get("date") ?? new Date().toISOString().slice(0, 10);
+      const row = this.state.storage.sql.exec("SELECT total_tokens FROM daily_token_usage WHERE date=?", date).toArray();
+      const total = row.length > 0 ? Number(row[0].total_tokens) : 0;
+      return json({ date, totalTokens: total });
+    }
+
+    if (url.pathname === "/daily-tokens" && request.method === "POST") {
+      const { date, tokens } = (await request.json()) as { date: string; tokens: number };
+      const existing = this.state.storage.sql.exec("SELECT total_tokens FROM daily_token_usage WHERE date=?", date).toArray();
+      if (existing.length > 0) {
+        const newTotal = Number(existing[0].total_tokens) + tokens;
+        this.state.storage.sql.exec("UPDATE daily_token_usage SET total_tokens=? WHERE date=?", newTotal, date);
+        return json({ date, totalTokens: newTotal });
+      }
+      this.state.storage.sql.exec("INSERT INTO daily_token_usage (date, total_tokens) VALUES (?, ?)", date, tokens);
+      return json({ date, totalTokens: tokens });
     }
 
     return new Response("Not found", { status: 404 });

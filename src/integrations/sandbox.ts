@@ -207,7 +207,15 @@ export async function executeInSandbox(
   }
 
   const timeout = opts.timeout ?? Number.parseInt(env.BASH_TIMEOUT_MS ?? "120000", 10);
-  return withTimeout(env.SANDBOX.exec(command), timeout);
+  const maxOutputBytes = Number.parseInt(env.BASH_MAX_OUTPUT_BYTES ?? "1000000", 10);
+  const result = await withTimeout(env.SANDBOX.exec(command), timeout);
+  if (estimateBytes(result.stdout) > maxOutputBytes) {
+    result.stdout = result.stdout.slice(0, maxOutputBytes) + "\n[output truncated]";
+  }
+  if (estimateBytes(result.stderr) > maxOutputBytes) {
+    result.stderr = result.stderr.slice(0, maxOutputBytes) + "\n[output truncated]";
+  }
+  return result;
 }
 
 export async function readTool(path: string, env: Env, sandboxId?: string): Promise<string> {
