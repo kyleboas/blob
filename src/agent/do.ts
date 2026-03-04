@@ -24,6 +24,12 @@ interface BlobState {
   settings?: {
     verbosity?: "minimal" | "verbose";
   };
+  learnedMemory?: {
+    lastFlushAt?: string;
+    lastFlushCount?: number;
+    lastRecordTimestamp?: string;
+    lastRecordSummary?: string;
+  };
 }
 
 const DEFAULT_CATALOG: Record<string, { name: string; description: string; maxTokens: number }> = {
@@ -270,6 +276,30 @@ export class AgentDO {
       this.data.settings = { ...(this.data.settings ?? {}), verbosity };
       await this.save();
       return json({ saved: true, verbosity });
+    }
+
+    if (url.pathname === "/memory/learned/status" && request.method === "GET") {
+      return json({
+        lastFlushAt: this.data.learnedMemory?.lastFlushAt ?? null,
+        lastFlushCount: this.data.learnedMemory?.lastFlushCount ?? 0,
+        lastRecordTimestamp: this.data.learnedMemory?.lastRecordTimestamp ?? null,
+        lastRecordSummary: this.data.learnedMemory?.lastRecordSummary ?? null,
+      });
+    }
+
+    if (url.pathname === "/memory/learned/status" && request.method === "POST") {
+      const body = (await request.json()) as {
+        lastFlushAt?: string;
+        lastFlushCount?: number;
+        lastRecordTimestamp?: string;
+        lastRecordSummary?: string;
+      };
+      this.data.learnedMemory = {
+        ...(this.data.learnedMemory ?? {}),
+        ...body,
+      };
+      await this.save();
+      return json({ saved: true, learnedMemory: this.data.learnedMemory });
     }
 
     if (url.pathname === "/events/check" && request.method === "POST") {
