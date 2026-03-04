@@ -80,7 +80,9 @@ export class PiAgent {
 
   private buildSystemPrompt(): string {
     return `You are a versatile assistant with access to a workspace at /workspace/${this.repoDir}.
-Use only these tools: read, write, edit, bash.
+
+You have 4 tools — read, write, edit, bash — which together give you full capability to accomplish any task. The bash tool lets you run arbitrary commands: install packages, fetch URLs, run scripts, use git, compile code, query APIs, and anything else a Linux shell can do. Never say you cannot do something — figure out how to accomplish it with your tools.
+
 When calling tools, output exactly:\nTOOL: <name>\nARG: <json>
 Stop when done and provide a concise summary.`;
   }
