@@ -77,28 +77,28 @@ Update this file after completing each sub-task.
   - [x] 4.6 Heartbeat must not run heavy workloads directly — defer jobs exceeding cycle budget (PRD 4.9.3)
   - [x] 4.7 Implement daily summary posting: once per day on first heartbeat after midnight UTC if configured (PRD 4.9.2)
   - [x] 4.8 Add tests for: lifecycle transitions, pause/resume with state, budget enforcement, heartbeat scheduling
-- [ ] 5.0 Sandbox lifecycle + Pi 4 tools
-  - [ ] 5.1 Implement sandbox provisioning: create on first tool call for a sandboxId, reuse if exists (PRD 4.4.4)
-  - [ ] 5.2 Implement sandbox idle timeout: eligible for teardown after configurable duration (default 60 min) with no tool calls (PRD 4.4.5)
-  - [ ] 5.3 Implement pre-teardown state persistence: save `/workspace/blob_state/*` to R2; restore into fresh sandbox on next activation (PRD 4.4.6)
-  - [ ] 5.4 Implement sandbox cleanup policy: configurable per job type — destroy on completion, keep on failure for debugging (PRD 4.4.7)
-  - [ ] 5.5 Implement `bash` tool: timeout enforcement, max output capture, exit status, allowed command patterns (PRD 4.4.3)
-  - [ ] 5.6 Implement `read` tool: path allowlist, max file size (PRD 4.4.3)
-  - [ ] 5.7 Implement `write` tool: path allowlist, max file size, atomic write (PRD 4.4.3)
-  - [ ] 5.8 Implement `edit` tool: deterministic text replacement, path allowlist, size limits (PRD 4.4.3)
-  - [ ] 5.9 Implement workspace state helpers for `log.jsonl` and `context.jsonl` (PRD 4.6.1)
-  - [ ] 5.10 Add tests for: tool adapters (mocked sandbox client), sandbox provisioning/reuse, state persistence round-trip, safety limit enforcement
-- [ ] 6.0 Agent loop + error handling + cost control
-  - [ ] 6.1 Implement tool loop: build model input (system prompt + Retrieved Memory + conversation) → execute tool calls → append results → stop on no tool calls or budget hit (PRD 4.5.1)
-  - [ ] 6.2 Implement streaming output and periodic Slack progress updates (PRD 4.5.2)
-  - [ ] 6.3 Implement retry policy — `bash`: up to 2 retries with 5s backoff for transient errors, no retry for deterministic failures; `read/write/edit`: 1 retry on I/O errors, immediate fail on schema/path errors (PRD 4.5.3)
-  - [ ] 6.4 On tool failure after retries: append failure to context, let model decide next action (PRD 4.5.3)
-  - [ ] 6.5 Implement max consecutive tool failures per job: default 5, configurable — pause job and notify Slack on breach (PRD 4.5.4)
-  - [ ] 6.6 Implement per-job token budget: default 100k input + 20k output — inject warning at 90%, halt and pause at 100% (PRD 4.5.5)
-  - [ ] 6.7 Implement per-heartbeat model call limit: default 10 calls across all jobs (PRD 4.5.6)
-  - [ ] 6.8 Implement daily aggregate token ceiling: default 500k — pause non-critical jobs when hit, optional reserve budget for critical jobs (PRD 4.5.7)
-  - [ ] 6.9 Token tracking: record usage per job and per day in DO state, expose in logs (PRD 4.5.5–4.5.7)
-  - [ ] 6.10 Add tests for: retry logic per tool type, consecutive failure threshold, token budget warnings and halts, daily ceiling enforcement
+- [x] 5.0 Sandbox lifecycle + Pi 4 tools
+  - [x] 5.1 Implement sandbox provisioning: create on first tool call for a sandboxId, reuse if exists (PRD 4.4.4)
+  - [x] 5.2 Implement sandbox idle timeout: eligible for teardown after configurable duration (default 60 min) with no tool calls (PRD 4.4.5)
+  - [x] 5.3 Implement pre-teardown state persistence: save `/workspace/blob_state/*` to R2; restore into fresh sandbox on next activation (PRD 4.4.6)
+  - [x] 5.4 Implement sandbox cleanup policy: configurable per job type — destroy on completion, keep on failure for debugging (PRD 4.4.7)
+  - [x] 5.5 Implement `bash` tool: timeout enforcement, max output capture, exit status, allowed command patterns (PRD 4.4.3)
+  - [x] 5.6 Implement `read` tool: path allowlist, max file size (PRD 4.4.3)
+  - [x] 5.7 Implement `write` tool: path allowlist, max file size, atomic write (PRD 4.4.3)
+  - [x] 5.8 Implement `edit` tool: deterministic text replacement, path allowlist, size limits (PRD 4.4.3)
+  - [x] 5.9 Implement workspace state helpers for `log.jsonl` and `context.jsonl` (PRD 4.6.1)
+  - [x] 5.10 Add tests for: tool adapters (mocked sandbox client), sandbox provisioning/reuse, state persistence round-trip, safety limit enforcement
+- [x] 6.0 Agent loop + error handling + cost control
+  - [x] 6.1 Implement tool loop: build model input (system prompt + Retrieved Memory + conversation) → execute tool calls → append results → stop on no tool calls or budget hit (PRD 4.5.1)
+  - [x] 6.2 Implement streaming output and periodic Slack progress updates (PRD 4.5.2)
+  - [x] 6.3 Implement retry policy — `bash`: up to 2 retries with 5s backoff for transient errors, no retry for deterministic failures; `read/write/edit`: 1 retry on I/O errors, immediate fail on schema/path errors (PRD 4.5.3)
+  - [x] 6.4 On tool failure after retries: append failure to context, let model decide next action (PRD 4.5.3)
+  - [x] 6.5 Implement max consecutive tool failures per job: default 5, configurable — pause job and notify Slack on breach (PRD 4.5.4)
+  - [x] 6.6 Implement per-job token budget: default 100k input + 20k output — inject warning at 90%, halt and pause at 100% (PRD 4.5.5)
+  - [x] 6.7 Implement per-heartbeat model call limit: default 10 calls across all jobs (PRD 4.5.6)
+  - [x] 6.8 Implement daily aggregate token ceiling: default 500k — pause non-critical jobs when hit, optional reserve budget for critical jobs (PRD 4.5.7)
+  - [x] 6.9 Token tracking: record usage per job and per day in DO state, expose in logs (PRD 4.5.5–4.5.7)
+  - [x] 6.10 Add tests for: retry logic per tool type, consecutive failure threshold, token budget warnings and halts, daily ceiling enforcement
 
 ### Phase 3: Memory System
 
