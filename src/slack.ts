@@ -2,25 +2,19 @@ import type { Env } from "./types";
 import { getRepos } from "./storage";
 import { callLLM } from "./llm";
 import { getCronJobs, addCronJob, deleteCronJob } from "./cron";
-import { startCodexLogin, saveCodexAuth, runCodex, sandboxStatus, executeInSandbox } from "./sandbox";
 import { PiAgent } from "./pi-agent";
 import { deriveRoutingKey, verifySlackSignature } from "./slack-routing";
 import { createLogRef, logEvent } from "./observability";
 import { redactSecrets } from "./safety";
 
-// Track in-flight events to prevent race conditions
 const inFlightEvents = new Set<string>();
 
 interface IntentResult {
-  intent: "list_cron" | "add_cron" | "delete_cron" | "codex_login" | "codex_run" | "chat";
+  intent: "list_cron" | "add_cron" | "delete_cron" | "chat";
   schedule?: string;
   task?: string;
   search?: string;
-  prompt?: string;
 }
-
-const codexLoginRegex = /^(login to codex|login with codex|codex login|codex auth|connect openai)$/i;
-const codexRunRegex = /^(run codex|codex run|use codex)[,:]?\s*/i;
 
 async function classifyIntent(text: string, env: Env): Promise<IntentResult> {
   const prompt = `You are an intent classifier for a Slack bot. Analyze the message and extract the user's intent.
@@ -29,8 +23,6 @@ Possible intents:
 - "list_cron": User wants to see their scheduled cron jobs (e.g., "show my jobs", "what tasks do I have", "list my cron jobs")
 - "add_cron": User wants to create a new scheduled task (e.g., "remind me every 5 minutes to check email", "add a job to run tests daily")
 - "delete_cron": User wants to remove a scheduled task (e.g., "delete the email reminder", "remove my test job")
-- "codex_login": User wants to login to Codex/OpenAI (e.g., "login to codex", "codex auth", "connect openai")
-- "codex_run": User wants to run Codex (e.g., "run codex", "use codex to fix this", "codex: refactor this code")
 - "chat": General conversation, not a specific command
 
 For "add_cron", extract:
@@ -40,11 +32,8 @@ For "add_cron", extract:
 For "delete_cron", extract:
 - search: Keywords to find the job to delete (e.g., "email", "test", "backup")
 
-For "codex_run", extract:
-- prompt: The task for Codex (e.g., "fix this bug", "refactor the auth module")
-
 Respond with ONLY a JSON object in this format:
-{"intent": "list_cron|add_cron|delete_cron|codex_login|codex_run|chat", "schedule": "...", "task": "...", "search": "...", "prompt": "..."}
+{"intent": "list_cron|add_cron|delete_cron|chat", "schedule": "...", "task": "...", "search": "..."}
 
 Message: "${text}"`;
 
@@ -55,11 +44,11 @@ Message: "${text}"`;
       return JSON.parse(jsonMatch[0]) as IntentResult;
     }
   } catch {
-    // Fallback to chat if parsing fails
+    // fall back to chat
   }
+
   return { intent: "chat" };
 }
-
 
 function formatSlackError(message: string, logRef: string): string {
   return `A system error occurred. Please retry. (ref: ${logRef})\n${message}`;
@@ -76,31 +65,29 @@ export async function handleSlackEvent(request: Request, env: Env, executionCtx?
     }
 
     const body = await request.json() as {
-    type?: string;
-    challenge?: string;
-    event_id?: string;
-    event?: {
-      type: string;
-      text?: string;
-      channel?: string;
-      user?: string;
-      bot_id?: string;
-      ts?: string;
+      type?: string;
+      challenge?: string;
+      event_id?: string;
+      event?: {
+        type: string;
+        text?: string;
+        channel?: string;
+        user?: string;
+        bot_id?: string;
+        ts?: string;
+      };
     };
-  };
 
-  // Slack URL verification
-  if (body.type === "url_verification" && body.challenge) {
-    return new Response(body.challenge);
-  }
+    if (body.type === "url_verification" && body.challenge) {
+      return new Response(body.challenge);
+    }
 
-  // Acknowledge quickly and process asynchronously.
-  if (executionCtx && body.type === "event_callback") {
-    executionCtx.waitUntil(processSlackEvent(body, env));
-    return new Response("OK");
-  }
+    if (executionCtx && body.type === "event_callback") {
+      executionCtx.waitUntil(processSlackEvent(body, env));
+      return new Response("OK");
+    }
 
-  await processSlackEvent(body, env);
+    await processSlackEvent(body, env);
     return new Response("OK");
   } catch (err) {
     const logRef = createLogRef("slack");
@@ -127,17 +114,14 @@ async function processSlackEvent(body: {
 }, env: Env): Promise<void> {
   logEvent(env, "slack_ingest", "event_received", { type: body.type, eventType: body.event?.type, eventId: body.event_id });
 
-  // Deduplicate using DO with in-flight check
   const eventId = body.event_id || body.event?.ts;
   if (eventId && env.AGENT_DO) {
-    // Check if already processing
     if (inFlightEvents.has(eventId)) {
       return;
     }
-    
-    // Mark as in-flight immediately
+
     inFlightEvents.add(eventId);
-    
+
     try {
       const key = deriveRoutingKey(body);
       const do_ = env.AGENT_DO.get(env.AGENT_DO.idFromName(key));
@@ -150,20 +134,18 @@ async function processSlackEvent(body: {
         return;
       }
     } finally {
-      // Remove from in-flight after 10s
       setTimeout(() => inFlightEvents.delete(eventId), 10000);
     }
   }
 
-  // Handle message events
   if (body.type === "event_callback" && body.event?.type === "message" && body.event.text) {
     const channel = body.event.channel;
     const originalText = body.event.text;
 
-    // Ignore bot messages (including our own)
-    if (!channel || body.event.bot_id) return;
+    if (!channel || body.event.bot_id) {
+      return;
+    }
 
-    // Copy-on-first-thread-message migration from channel-level context.
     if (body.event.thread_ts && body.event.thread_ts === body.event.ts && body.team_id) {
       const threadKey = deriveRoutingKey(body);
       const channelKey = `${body.team_id}:${channel}:channel`;
@@ -177,149 +159,14 @@ async function processSlackEvent(body: {
       });
     }
 
-    // Fast-path regex detection for common commands (before LLM classification)
-    const lowerText = originalText.toLowerCase().trim();
-    
-    // Codex commands
-    if (codexLoginRegex.test(lowerText)) {
-      const status = await sandboxStatus(env);
-      if (!status.ready) {
-        await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
-        return;
-      }
-
-      try {
-        const login = await startCodexLogin(env);
-        await postToSlack(channel, 
-          `🔐 **Codex Login Required**\n\n` +
-          `1. Open: ${login.url}\n` +
-          `2. Enter code: \`${login.code || "see instructions"}\`\n` +
-          `3. Complete login on your device\n` +
-          `4. Reply here with "done" to save credentials`,
-          env
-        );
-      } catch (err) {
-        await postToSlack(channel, `❌ Codex login failed: ${err}`, env);
-      }
-      return;
-    }
-
-    if (codexRunRegex.test(originalText)) {
-      const status = await sandboxStatus(env);
-      if (!status.ready) {
-        await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
-        return;
-      }
-
-      const prompt = originalText.replace(codexRunRegex, "");
-      
-      await postToSlack(channel, `🤖 Running Codex: "${prompt}"...`, env);
-      
-      try {
-        const result = await runCodex(prompt, env);
-        const output = result.stdout || result.stderr || "No output";
-        await postToSlack(channel, 
-          `✅ Codex completed (exit: ${result.exitCode})\n\n` +
-          "```\n" + output.slice(0, 3000) + "\n```",
-          env
-        );
-      } catch (err) {
-        const errMsg = String(err);
-        if (errMsg.includes("Not authenticated")) {
-          await postToSlack(channel, 
-            `❌ Not logged in to Codex.\n\n` +
-            `Run "login to codex" first to authenticate.`,
-            env
-          );
-        } else {
-          await postToSlack(channel, `❌ Codex error: ${errMsg}`, env);
-        }
-      }
-      return;
-    }
-
-    // Check for "done" after login (save auth)
-    if (lowerText === "done") {
-      try {
-        const status = await sandboxStatus(env);
-        if (status.ready) {
-          const saved = await saveCodexAuth(env);
-          if (saved.saved) {
-            await postToSlack(channel, `✅ ${saved.message}. You can now run Codex!`, env);
-            return;
-          }
-        }
-      } catch {
-        // Not a "done" for Codex, continue to chat
-      }
-    }
-
-    // Classify intent using LLM for other commands
     const intent = await classifyIntent(originalText, env);
-
-    // Handle cron commands based on LLM intent
-    if (intent.intent === "codex_login") {
-      const status = await sandboxStatus(env);
-      if (!status.ready) {
-        await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
-        return;
-      }
-
-      try {
-        const login = await startCodexLogin(env);
-        await postToSlack(channel,
-          `🔐 **Codex Login Required**\n\n` +
-          `1. Open: ${login.url}\n` +
-          `2. Enter code: \`${login.code || "see instructions"}\`\n` +
-          `3. Complete login on your device\n` +
-          `4. Reply here with "done" to save credentials`,
-          env
-        );
-      } catch (err) {
-        await postToSlack(channel, `❌ Codex login failed: ${err}`, env);
-      }
-      return;
-    }
-
-    if (intent.intent === "codex_run") {
-      const status = await sandboxStatus(env);
-      if (!status.ready) {
-        await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
-        return;
-      }
-
-      const prompt = intent.prompt?.trim() || originalText;
-      await postToSlack(channel, `🤖 Running Codex: "${prompt}"...`, env);
-
-      try {
-        const result = await runCodex(prompt, env);
-        const output = result.stdout || result.stderr || "No output";
-        await postToSlack(channel,
-          `✅ Codex completed (exit: ${result.exitCode})\n\n` +
-          "```\n" + output.slice(0, 3000) + "\n```",
-          env
-        );
-      } catch (err) {
-        const errMsg = String(err);
-        if (errMsg.includes("Not authenticated")) {
-          await postToSlack(channel,
-            `❌ Not logged in to Codex.\n\n` +
-            `Run "login to codex" first to authenticate.`,
-            env
-          );
-        } else {
-          await postToSlack(channel, `❌ Codex error: ${errMsg}`, env);
-        }
-      }
-      return;
-    }
 
     if (intent.intent === "list_cron") {
       const jobs = await getCronJobs(env);
       if (jobs.length === 0) {
         await postToSlack(channel, "No cron jobs configured. Try: 'remind me every 5 minutes to check email'", env);
       } else {
-        const list = jobs.map(j => `• ${j.schedule}: ${j.task}`).join("\n");
+        const list = jobs.map((job) => `• ${job.schedule}: ${job.task}`).join("\n");
         await postToSlack(channel, `Your cron jobs:\n${list}`, env);
       }
       return;
@@ -340,7 +187,7 @@ async function processSlackEvent(body: {
       if (jobs.length === 0) {
         await postToSlack(channel, "No cron jobs to delete", env);
       } else if (intent.search) {
-        const job = jobs.find(j => j.task.toLowerCase().includes(intent.search!.toLowerCase()));
+        const job = jobs.find((entry) => entry.task.toLowerCase().includes(intent.search!.toLowerCase()));
         if (job) {
           await deleteCronJob(env, job.id);
           await postToSlack(channel, `✅ Deleted cron job: ${job.task}`, env);
@@ -349,29 +196,6 @@ async function processSlackEvent(body: {
         }
       } else {
         await postToSlack(channel, "Which job would you like to delete? Try: 'delete my email reminder job'", env);
-      }
-      return;
-    }
-
-    // Check for weather queries - handle directly
-    const weatherMatch = originalText.match(/weather\s+(?:in\s+)?([a-zA-Z\s]+)/i);
-    if (weatherMatch) {
-      const location = weatherMatch[1].trim();
-      
-      // First check if sandbox service is available
-      const status = await sandboxStatus(env);
-      if (!status.ready) {
-        await postToSlack(channel, `❌ Sandbox not available: ${status.message}`, env);
-        return;
-      }
-      
-      await postToSlack(channel, `🌤️ Checking weather in ${location}...`, env);
-      try {
-        const result = await executeInSandbox(`curl -s "wttr.in/${encodeURIComponent(location)}?format=3"`, env);
-        const weather = result.stdout.trim() || result.stderr.trim() || "Could not fetch weather";
-        await postToSlack(channel, `Weather in ${location}: ${weather}`, env);
-      } catch (err) {
-        await postToSlack(channel, `❌ Failed to get weather: ${err}`, env);
       }
       return;
     }
@@ -388,8 +212,6 @@ async function processSlackEvent(body: {
       await postToSlack(channel, `❌ ${formatSlackError("Unable to process message.", logRef)}`, env);
     }
   }
-
-  return;
 }
 
 async function postToSlack(channel: string, text: string, env: Env, threadTs?: string): Promise<void> {
@@ -402,13 +224,12 @@ async function postToSlack(channel: string, text: string, env: Env, threadTs?: s
     outbound = `${outbound} (ref: ${logRef})`;
   }
 
-  // Strip markdown formatting
   const plainText = stripFormatting(redactSecrets(outbound, env));
 
   await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${env.SLACK_BOT_TOKEN}`,
+      Authorization: `Bearer ${env.SLACK_BOT_TOKEN}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -419,18 +240,9 @@ async function postToSlack(channel: string, text: string, env: Env, threadTs?: s
   });
 }
 
-export const slackPoster = {
-  progress: (channel: string, text: string, env: Env, threadTs?: string) => postToSlack(channel, `⏳ ${text}`, env, threadTs),
-  final: (channel: string, text: string, env: Env, threadTs?: string) => postToSlack(channel, `✅ ${text}`, env, threadTs),
-  error: (channel: string, text: string, env: Env, threadTs?: string) => postToSlack(channel, `❌ ${text}`, env, threadTs),
-};
-
 function stripFormatting(text: string): string {
   return text
-    // Convert **bold** to *bold* (Slack format)
-    .replace(/\*\*([^*]+)\*\*/g, '*$1*')
-    // Remove # headers (just remove the #)
-    .replace(/^#{1,6}\s+/gm, '')
-    // Keep: `code`, ```code blocks```, [links](url), > quotes, --- rules
-    .trim();
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/```[\s\S]*?```/g, (match) => match.replace(/```/g, ""));
 }
