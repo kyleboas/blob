@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PiAgent } from "../agent/pi-agent";
-import { __resetSandboxSessionsForTests, cleanupSandboxForJob, readTool, teardownIdleSandboxes, writeTool } from "../integrations/sandbox";
+import { __resetSandboxSessionsForTests, __sandboxTestUtils, cleanupSandboxForJob, readTool, teardownIdleSandboxes, writeTool } from "../integrations/sandbox";
 
 function makeEnv(overrides: Record<string, unknown> = {}) {
   const files = new Map<string, string>();
@@ -136,4 +136,33 @@ test("agent halts when daily token ceiling is reached", async () => {
   const second = await agent.run("second", { sandboxId: "a3" });
   assert.match(second, /Daily token ceiling reached/);
   globalThis.fetch = originalFetch;
+});
+
+test("normalizeToolPath strips /workspace/blob/ prefix", () => {
+  const { normalizeToolPath } = __sandboxTestUtils;
+  assert.equal(normalizeToolPath("/workspace/blob/src/a.txt"), "src/a.txt");
+  assert.equal(normalizeToolPath("src/a.txt"), "src/a.txt");
+  assert.equal(normalizeToolPath("./src/a.txt"), "src/a.txt");
+});
+
+test("normalizeToolPath rejects traversal and outside-workspace absolute paths", () => {
+  const { normalizeToolPath } = __sandboxTestUtils;
+  assert.throws(() => normalizeToolPath(""), /Path not allowed/);
+  assert.throws(() => normalizeToolPath("/etc/passwd"), /Path not allowed/);
+  assert.throws(() => normalizeToolPath("../secrets"), /Path not allowed/);
+  assert.throws(() => normalizeToolPath("/workspace/blob/../secrets"), /Path not allowed/);
+});
+
+test("readTool accepts absolute workspace paths", async () => {
+  __resetSandboxSessionsForTests();
+  const { env } = makeEnv();
+  const content = await readTool("/workspace/blob/src/a.txt", env, "s2");
+  assert.equal(content, "hello world");
+});
+
+test("writeTool accepts absolute workspace paths", async () => {
+  __resetSandboxSessionsForTests();
+  const { env, files } = makeEnv();
+  await writeTool("/workspace/blob/src/abs.txt", "absolute", env, "s3");
+  assert.equal(files.get("/workspace/blob/src/abs.txt"), "absolute");
 });

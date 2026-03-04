@@ -36,10 +36,30 @@ function estimateBytes(text: string): number {
   return new TextEncoder().encode(text).length;
 }
 
-function ensureRelativeWorkspacePath(path: string): void {
-  if (!path || path.startsWith("/") || path.includes("..")) {
+const WORKSPACE_PREFIX = "/workspace/blob/";
+
+function normalizeToolPath(path: string): string {
+  if (!path) {
     throw new Error(`Path not allowed: ${path}`);
   }
+
+  let normalized = path;
+
+  // Strip the workspace prefix if the model used an absolute path
+  if (normalized.startsWith(WORKSPACE_PREFIX)) {
+    normalized = normalized.slice(WORKSPACE_PREFIX.length);
+  }
+
+  // Strip leading "./" for convenience
+  if (normalized.startsWith("./")) {
+    normalized = normalized.slice(2);
+  }
+
+  if (!normalized || normalized.startsWith("/") || normalized.includes("..")) {
+    throw new Error(`Path not allowed: ${path}`);
+  }
+
+  return normalized;
 }
 
 function allowedCommand(command: string): boolean {
@@ -191,10 +211,10 @@ export async function executeInSandbox(
 }
 
 export async function readTool(path: string, env: Env, sandboxId?: string): Promise<string> {
-  ensureRelativeWorkspacePath(path);
+  const normalized = normalizeToolPath(path);
   if (sandboxId) await ensureSandboxSession(sandboxId, env);
 
-  const content = await env.SANDBOX.readFile(`/workspace/blob/${path}`);
+  const content = await env.SANDBOX.readFile(`/workspace/blob/${normalized}`);
   const maxBytes = Number.parseInt(env.TOOL_MAX_FILE_BYTES ?? "200000", 10);
   if (estimateBytes(content) > maxBytes) {
     throw new Error(`File exceeds max size: ${path}`);
@@ -203,14 +223,14 @@ export async function readTool(path: string, env: Env, sandboxId?: string): Prom
 }
 
 export async function writeTool(path: string, content: string, env: Env, sandboxId?: string): Promise<void> {
-  ensureRelativeWorkspacePath(path);
+  const normalized = normalizeToolPath(path);
   const maxBytes = Number.parseInt(env.TOOL_MAX_FILE_BYTES ?? "200000", 10);
   if (estimateBytes(content) > maxBytes) {
     throw new Error(`Write content exceeds max size: ${path}`);
   }
   if (sandboxId) await ensureSandboxSession(sandboxId, env);
 
-  const abs = `/workspace/blob/${path}`;
+  const abs = `/workspace/blob/${normalized}`;
   const temp = `${abs}.tmp`;
   await env.SANDBOX.writeFile(temp, content);
   await env.SANDBOX.exec(`mv ${temp} ${abs}`);
@@ -251,3 +271,5 @@ export async function readWorkspaceState(kind: "log" | "context", env: Env, sand
 export function __resetSandboxSessionsForTests(): void {
   sessions.clear();
 }
+
+export const __sandboxTestUtils = { normalizeToolPath };
