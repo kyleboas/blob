@@ -5,6 +5,8 @@ import { getCronJobs, addCronJob, deleteCronJob } from "./cron";
 import { startCodexLogin, saveCodexAuth, runCodex, sandboxStatus, executeInSandbox } from "./sandbox";
 import { PiAgent } from "./pi-agent";
 import { deriveRoutingKey, verifySlackSignature } from "./slack-routing";
+import { createLogRef, logEvent } from "./observability";
+import { redactSecrets } from "./safety";
 
 // Track in-flight events to prevent race conditions
 const inFlightEvents = new Set<string>();
@@ -58,15 +60,22 @@ Message: "${text}"`;
   return { intent: "chat" };
 }
 
-export async function handleSlackEvent(request: Request, env: Env, executionCtx?: ExecutionContext): Promise<Response> {
-  if (env.SLACK_SIGNING_SECRET) {
-    const verified = await verifySlackSignature(request, env.SLACK_SIGNING_SECRET);
-    if (!verified) {
-      return new Response("Invalid Slack signature", { status: 401 });
-    }
-  }
 
-  const body = await request.json() as {
+function formatSlackError(message: string, logRef: string): string {
+  return `A system error occurred. Please retry. (ref: ${logRef})\n${message}`;
+}
+
+export async function handleSlackEvent(request: Request, env: Env, executionCtx?: ExecutionContext): Promise<Response> {
+  try {
+    if (env.SLACK_SIGNING_SECRET) {
+      const verified = await verifySlackSignature(request, env.SLACK_SIGNING_SECRET);
+      if (!verified) {
+        logEvent(env, "slack_ingest", "signature_invalid");
+        return new Response("Invalid Slack signature", { status: 401 });
+      }
+    }
+
+    const body = await request.json() as {
     type?: string;
     challenge?: string;
     event_id?: string;
@@ -92,7 +101,12 @@ export async function handleSlackEvent(request: Request, env: Env, executionCtx?
   }
 
   await processSlackEvent(body, env);
-  return new Response("OK");
+    return new Response("OK");
+  } catch (err) {
+    const logRef = createLogRef("slack");
+    logEvent(env, "slack_ingest", "handle_event_failed", { error: String(err) }, logRef);
+    return new Response("Internal error", { status: 500 });
+  }
 }
 
 async function processSlackEvent(body: {
@@ -111,6 +125,7 @@ async function processSlackEvent(body: {
     channel_type?: string;
   };
 }, env: Env): Promise<void> {
+  logEvent(env, "slack_ingest", "event_received", { type: body.type, eventType: body.event?.type, eventId: body.event_id });
 
   // Deduplicate using DO with in-flight check
   const eventId = body.event_id || body.event?.ts;
@@ -368,9 +383,9 @@ async function processSlackEvent(body: {
       const response = await agent.run(originalText);
       await postToSlack(channel, response, env);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      const stack = err instanceof Error && err.stack ? `\n\`\`\`\n${err.stack}\n\`\`\`` : "";
-      await postToSlack(channel, `❌ Error processing message: ${message}${stack}`, env);
+      const logRef = createLogRef("slack");
+      logEvent(env, "slack_ingest", "process_message_failed", { error: String(err), channel }, logRef);
+      await postToSlack(channel, `❌ ${formatSlackError("Unable to process message.", logRef)}`, env);
     }
   }
 
@@ -380,8 +395,15 @@ async function processSlackEvent(body: {
 async function postToSlack(channel: string, text: string, env: Env, threadTs?: string): Promise<void> {
   if (!env.SLACK_BOT_TOKEN) return;
 
+  let outbound = text;
+  if (outbound.startsWith("❌") && !outbound.includes("ref:")) {
+    const logRef = createLogRef("slack");
+    logEvent(env, "slack_ingest", "error_message_without_ref", { channel, text: outbound }, logRef);
+    outbound = `${outbound} (ref: ${logRef})`;
+  }
+
   // Strip markdown formatting
-  const plainText = stripFormatting(text);
+  const plainText = stripFormatting(redactSecrets(outbound, env));
 
   await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",

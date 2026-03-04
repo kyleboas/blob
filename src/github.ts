@@ -1,4 +1,6 @@
 import type { Env } from "./types";
+import { getSecretPatterns } from "./safety";
+import { logEvent } from "./observability";
 
 export interface RepoConfig {
   scope: string;
@@ -76,14 +78,8 @@ export function analyzePrePushSyncResult(exitCode: number, stdout: string, stder
   };
 }
 
-const DEFAULT_SECRET_PATTERNS = [
-  /api[_-]?key\s*[=:]\s*[\"']?[a-z0-9_\-]{10,}/i,
-  /token\s*[=:]\s*[\"']?[a-z0-9_\-]{10,}/i,
-  /password\s*[=:]\s*[\"']?\S{8,}/i,
-  /-----begin (rsa |ec )?private key-----/i,
-];
 
-export function scanDiffForSecrets(diffText: string, patterns: RegExp[] = DEFAULT_SECRET_PATTERNS): { blocked: boolean; matches: string[] } {
+export function scanDiffForSecrets(diffText: string, patterns: RegExp[] = getSecretPatterns()): { blocked: boolean; matches: string[] } {
   const matches: string[] = [];
   const lines = diffText.split("\n").filter((line) => line.startsWith("+"));
   for (const line of lines) {
@@ -115,7 +111,11 @@ export interface GitHubPullRequest {
 }
 
 export class GitHubApi {
-  constructor(private token: string, private readonly fetchImpl: typeof fetch = fetch) {}
+  constructor(
+    private token: string,
+    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly env?: Pick<Env, "SECRET_PATTERNS">,
+  ) {}
 
   private async request(path: string, init: RequestInit, idempotencyKey?: string): Promise<Response> {
     const headers = new Headers(init.headers || {});
@@ -123,12 +123,34 @@ export class GitHubApi {
     headers.set("accept", "application/vnd.github+json");
     if (idempotencyKey) headers.set("x-idempotency-key", idempotencyKey);
 
-    const response = await this.fetchImpl(`https://api.github.com${path}`, { ...init, headers });
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`GitHub API ${path} failed: ${response.status} ${text}`);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await this.fetchImpl(`https://api.github.com${path}`, { ...init, headers });
+      const remaining = Number(response.headers.get("x-ratelimit-remaining") || "0");
+      const limit = Number(response.headers.get("x-ratelimit-limit") || "0");
+      const reset = Number(response.headers.get("x-ratelimit-reset") || "0");
+
+      if (limit > 0 && remaining / limit <= 0.1) {
+        logEvent(this.env, "github_ops", "rate_limit_low", { path, remaining, limit, reset, attempt });
+      }
+
+      if ((response.status === 403 || response.status === 429) && attempt < 2) {
+        const retryAfter = Number(response.headers.get("retry-after") || "0");
+        const waitMs = retryAfter > 0 ? retryAfter * 1000 : Math.max(0, reset * 1000 - Date.now());
+        logEvent(this.env, "github_ops", "rate_limited_backoff", { path, waitMs, attempt });
+        await new Promise((resolve) => setTimeout(resolve, Math.min(waitMs || 1000, 5000)));
+        continue;
+      }
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`GitHub API ${path} failed: ${response.status} ${text}`);
+      }
+
+      logEvent(this.env, "github_ops", "request_success", { path, attempt, remaining, limit });
+      return response;
     }
-    return response;
+
+    throw new Error(`GitHub API ${path} failed after retries`);
   }
 
   async createPullRequest(params: {

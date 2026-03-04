@@ -1,5 +1,7 @@
 import type { Env } from "./types";
 import { R2MemoryStore, writeMemoryItem, compactScope, reconcileMemory } from "./memory-system";
+import { logEvent } from "./observability";
+import { redactSecrets } from "./safety";
 
 export type CronTaskName = "content-scan" | "memory-compaction" | "memory-reconciliation";
 export type CronStatus = "success" | "failure" | "running";
@@ -50,7 +52,7 @@ async function postToSlack(env: AlertEnv, text: string): Promise<boolean> {
       Authorization: `Bearer ${env.SLACK_BOT_TOKEN}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ channel: env.SLACK_SUMMARY_CHANNEL, text }),
+    body: JSON.stringify({ channel: env.SLACK_SUMMARY_CHANNEL, text: redactSecrets(text, env as any) }),
   });
   return response.ok;
 }
@@ -63,6 +65,7 @@ export async function dispatchCronTask(cronExpression: string, env: Env): Promis
 
 export async function runCronTask(jobName: CronTaskName, env: Env): Promise<CronTaskOutcome> {
   const started = Date.now();
+  logEvent(env, "cron_runs", "cron_start", { jobName });
   const sessionId = crypto.randomUUID();
   try {
     if (env.SANDBOX.start) {
@@ -87,6 +90,7 @@ export async function runCronTask(jobName: CronTaskName, env: Env): Promise<Cron
     };
     await recordCronOutcome(env, outcome);
     await postToSlack(env, `🕒 ${jobName} succeeded in ${outcome.durationMs}ms. ${summary}`);
+    logEvent(env, "cron_runs", "cron_success", { jobName, durationMs: outcome.durationMs });
     return outcome;
   } catch (err) {
     const outcome: CronTaskOutcome = {
@@ -99,6 +103,7 @@ export async function runCronTask(jobName: CronTaskName, env: Env): Promise<Cron
     };
     await recordCronOutcome(env, outcome);
     await postCronAlertWithFallback(env, buildCronAlert(outcome, undefined));
+    logEvent(env, "cron_runs", "cron_failure", { jobName, error: outcome.lastError });
     return outcome;
   }
 }

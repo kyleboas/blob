@@ -1,4 +1,6 @@
 import type { Env } from "./types";
+import { getSecretPatterns, redactSecrets as redactWithPatterns } from "./safety";
+import { logEvent } from "./observability";
 
 export type MemoryScope = "thread" | "channel" | "team";
 export type MemorySource = "thread" | "cron" | "compaction";
@@ -24,12 +26,6 @@ export interface LearnedEntry {
   confidence: "high" | "medium" | "low";
 }
 
-const SECRET_PATTERNS = [
-  /api[_-]?key\s*[:=]\s*['\"]?[a-z0-9_\-]{12,}/i,
-  /token\s*[:=]\s*['\"]?[a-z0-9_\-]{12,}/i,
-  /password\s*[:=]\s*['\"]?\S{8,}/i,
-  /-----BEGIN (?:RSA |EC )?PRIVATE KEY-----/,
-];
 
 function estimateTokens(text: string): number {
   return Math.ceil(text.trim().split(/\s+/).filter(Boolean).length * 1.3);
@@ -152,7 +148,7 @@ export async function deleteVector(env: Env, id: string): Promise<void> {
 }
 
 export async function validateIngestion(env: Env, scope: string, content: string): Promise<{ valid: boolean; reason?: string }> {
-  if (SECRET_PATTERNS.some((pattern) => pattern.test(content))) {
+  if (getSecretPatterns(env).some((pattern) => pattern.test(content))) {
     return { valid: false, reason: "secret_detected" };
   }
   if (estimateTokens(content) > 2000) {
@@ -168,6 +164,7 @@ export async function validateIngestion(env: Env, scope: string, content: string
 }
 
 export async function writeMemoryItem(env: Env, store: R2MemoryStore, params: { scope: string; content: string; source: MemorySource; id?: string }): Promise<MemoryItem> {
+  logEvent(env, "memory_ops", "memory_write_attempt", { scope: params.scope, source: params.source });
   const validation = await validateIngestion(env, params.scope, params.content);
   if (!validation.valid) {
     throw new Error(`ingestion_rejected:${validation.reason}`);
@@ -222,12 +219,8 @@ export function buildRetrievedMemoryBlock(items: MemoryItem[]): string {
   ].join("\n");
 }
 
-export function redactSecrets(input: string): string {
-  let output = input;
-  for (const pattern of SECRET_PATTERNS) {
-    output = output.replace(pattern, "[REDACTED]");
-  }
-  return output;
+export function redactSecrets(input: string, env?: Pick<Env, "SECRET_PATTERNS">): string {
+  return redactWithPatterns(input, env);
 }
 
 export async function extractLearnedEntries(env: Env, transcript: string, scope: string): Promise<LearnedEntry[]> {
@@ -278,6 +271,7 @@ export async function appendDailyLearned(env: Env, date: string, entries: Learne
 export async function flushLearnedBeforeCompaction(env: Env, scope: string, transcript: string, date = new Date().toISOString().slice(0, 10)): Promise<LearnedEntry[]> {
   const entries = await extractLearnedEntries(env, transcript, scope);
   if (entries.length > 0) {
+    logEvent(env, "memory_ops", "daily_learned_flush", { scope, entries: entries.length, date });
     await appendDailyLearned(env, date, entries);
   }
   return entries;

@@ -1,3 +1,4 @@
+import { logEvent } from "./observability";
 export type DeployMechanism =
   | { type: "webhook"; url: string; headers?: Record<string, string> }
   | { type: "cloudflare_pages"; hookUrl: string }
@@ -62,6 +63,7 @@ export async function triggerDeploy(
   fetchImpl: typeof fetch = fetch,
 ): Promise<DeployTriggerResult> {
   const req = buildDeployTriggerRequest(mechanism, mergeSha);
+  logEvent(undefined, "deploy_ops", "deploy_trigger_attempt", { mechanism: mechanism.type, mergeSha });
   const idempotencyKey = buildDeployIdempotencyKey(mergeSha);
 
   if (!req) {
@@ -73,6 +75,7 @@ export async function triggerDeploy(
   }
 
   const response = await fetchImpl(req.url, req.init);
+  logEvent(undefined, "deploy_ops", "deploy_trigger_response", { status: response.status, mechanism: mechanism.type });
   if (!response.ok) {
     throw new Error(`Deploy trigger failed: ${response.status} ${await response.text()}`);
   }

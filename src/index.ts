@@ -7,6 +7,7 @@ import { executeInSandbox } from "./sandbox";
 import { triggerCatalogUpdate } from "./memory";
 import { dispatchCronTask } from "./cron-jobs";
 import { Sandbox as SandboxDO } from "@cloudflare/sandbox";
+import { createLogRef, logEvent } from "./observability";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { 
@@ -18,6 +19,8 @@ function json(data: unknown, status = 200): Response {
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    logEvent(env, "slack_ingest", "worker_request", { path: url.pathname, method: request.method });
+    try {
     
     // Sandbox health check
     if (url.pathname === "/sandbox/health") {
@@ -74,10 +77,17 @@ export default {
     }
 
     return json({ error: 'Not found', path: url.pathname });
+    } catch (err) {
+      const logRef = createLogRef("worker");
+      logEvent(env, "slack_ingest", "worker_unhandled_exception", { path: url.pathname, error: String(err) }, logRef);
+      return json({ error: `Internal server error (ref: ${logRef})` }, 500);
+    }
   },
 
   async scheduled(event: ScheduledEvent, env: Env): Promise<void> {
     const cron = event.cron;
+    logEvent(env, "cron_runs", "scheduled_trigger", { cron });
+    try {
 
     const cronOutcome = await dispatchCronTask(cron, env);
     if (cronOutcome) {
@@ -95,6 +105,10 @@ export default {
     for (const repo of repos) {
       const goals = await getRepoGoals(env, repo);
       await new Agent(repo, goals, env).run();
+    }
+    } catch (err) {
+      const logRef = createLogRef("cron");
+      logEvent(env, "cron_runs", "scheduled_failed", { cron, error: String(err) }, logRef);
     }
   }
 };
