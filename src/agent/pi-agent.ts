@@ -2,6 +2,7 @@ import type { Env } from "../core/types";
 import { DEFAULT_MODEL } from "../core/models";
 import { appendWorkspaceState, editTool, executeInSandbox, readTool, writeTool } from "../integrations/sandbox";
 import { logEvent } from "../core/observability";
+import { buildSystemPrompt, defaultPromptContext } from "../prompts/system-prompt";
 
 interface PiMessage {
   role: "system" | "user" | "assistant";
@@ -79,10 +80,17 @@ export class PiAgent {
   }
 
   private buildSystemPrompt(): string {
-    return `You are a versatile assistant with access to a workspace at /workspace/${this.repoDir}.
-Use only these tools: read, write, edit, bash.
+    const basePrompt = `You are a versatile assistant with access to a workspace at /workspace/${this.repoDir}.
 When calling tools, output exactly:\nTOOL: <name>\nARG: <json>
 Stop when done and provide a concise summary.`;
+
+    const ctx = defaultPromptContext({
+      sandboxEnabled: true,
+      sandboxPath: `/workspace/${this.repoDir}`,
+      model: DEFAULT_MODEL,
+    });
+
+    return buildSystemPrompt(basePrompt, ctx);
   }
 
   private async callLLM(): Promise<string> {
