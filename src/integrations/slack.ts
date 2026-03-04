@@ -27,7 +27,7 @@ Possible intents:
 - "chat": General conversation, not a specific command
 
 For "chat" intent, also determine:
-- needsSandbox: true if the message requires reading, writing, editing, or running code in the repository (e.g., "fix the bug in auth.ts", "add a new endpoint", "run the tests", "what does the login function do"). false if the message is general conversation, greetings, questions about non-code topics, or anything that can be answered without accessing the codebase (e.g., "hello", "thanks", "what is a REST API", "how are you").
+- needsSandbox: true if the message requires executing tools — this includes working with code in the repository (e.g., "fix the bug in auth.ts", "run the tests") OR fetching external information that the LLM doesn't inherently know (e.g., "what's the weather", "what time is it", "when do Manchester City play", "check the status of example.com", "what's the latest news"). false ONLY if the message can be fully answered from the LLM's own knowledge without any tool use (e.g., "hello", "thanks", "what is a REST API", "explain how promises work", "how are you").
 
 For "add_cron", extract:
 - schedule: The time pattern (e.g., "every 5 minutes", "daily at 9am", "hourly")
