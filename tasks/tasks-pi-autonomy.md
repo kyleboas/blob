@@ -193,6 +193,7 @@ Update this file after completing each sub-task.
 - [ ] 19.0 Final validation
   - [x] 19.1 Run full test suite — all tests pass
   - [ ] 19.2 Build and deploy to staging — no errors
+    - [x] 19.2.1 Fix default deploy command to target `wrangler.agent.toml` so worker deploys use the correct config
   - [ ] 19.3 Manual smoke test checklist:
     - [ ] 19.3.1 Slack message → Blob responds with tool usage
     - [ ] 19.3.2 Slack request → PR created → PR link posted to Slack
