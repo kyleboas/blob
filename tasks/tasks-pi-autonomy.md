@@ -40,25 +40,25 @@ Update this file after completing each sub-task.
 
 ### Phase 0: Setup
 
-- [ ] 0.0 Create feature branch
-  - [ ] 0.1 Create and checkout `refactor/blob-sandbox-refactor`
+- [x] 0.0 Create feature branch
+  - [x] 0.1 Create and checkout `refactor/blob-sandbox-refactor`
 
 ### Phase 1: Audit and Architecture
 
-- [ ] 1.0 Repository audit: identify and classify legacy code to remove
-  - [ ] 1.1 Map current runtime entrypoints (Worker fetch handler, DO alarm, Sandbox sessions, scheduled triggers)
-  - [ ] 1.2 Identify duplicate/obsolete agent loops and tool implementations
-  - [ ] 1.3 Identify “Workers-only pseudo-tools” or HTTP-template tool layers to delete
-  - [ ] 1.4 Identify unused configs, scripts, dependencies, and dead code not referenced by any entrypoint
-  - [ ] 1.5 Produce `/tasks/legacy-delete-plan.md` with files/modules + rationale for each deletion
-- [ ] 2.0 Define target architecture and module boundaries
-  - [ ] 2.1 Document canonical request flow: Slack → Worker → DO → Sandbox → tools → model loop → Slack response
-  - [ ] 2.2 Document DO keying rules: `team_id:channel_id:thread_ts` for threads, `team_id:channel_id:channel` for top-level, `team_id:user_id:dm` for DMs
-  - [ ] 2.3 Document tool surface: `read/write/edit/bash` only — no other tools
-  - [ ] 2.4 Document scheduling model: DO alarm heartbeat (10 min) + `wrangler.toml` cron triggers for heavy tasks
-  - [ ] 2.5 Document memory architecture: workspace state (ephemeral) → R2 (source of truth) → Vectorize (semantic index) → daily learned flush → compaction
-  - [ ] 2.6 Document cost control model: per-job token budget, per-heartbeat call limit, daily aggregate ceiling, all configurable via env vars
-  - [ ] 2.7 Write architecture diagram and happy-path walkthrough in `docs/architecture.md`
+- [x] 1.0 Repository audit: identify and classify legacy code to remove
+  - [x] 1.1 Map current runtime entrypoints (Worker fetch handler, DO alarm, Sandbox sessions, scheduled triggers)
+  - [x] 1.2 Identify duplicate/obsolete agent loops and tool implementations
+  - [x] 1.3 Identify “Workers-only pseudo-tools” or HTTP-template tool layers to delete
+  - [x] 1.4 Identify unused configs, scripts, dependencies, and dead code not referenced by any entrypoint
+  - [x] 1.5 Produce `/tasks/legacy-delete-plan.md` with files/modules + rationale for each deletion
+- [x] 2.0 Define target architecture and module boundaries
+  - [x] 2.1 Document canonical request flow: Slack → Worker → DO → Sandbox → tools → model loop → Slack response
+  - [x] 2.2 Document DO keying rules: `team_id:channel_id:thread_ts` for threads, `team_id:channel_id:channel` for top-level, `team_id:user_id:dm` for DMs
+  - [x] 2.3 Document tool surface: `read/write/edit/bash` only — no other tools
+  - [x] 2.4 Document scheduling model: DO alarm heartbeat (10 min) + `wrangler.toml` cron triggers for heavy tasks
+  - [x] 2.5 Document memory architecture: workspace state (ephemeral) → R2 (source of truth) → Vectorize (semantic index) → daily learned flush → compaction
+  - [x] 2.6 Document cost control model: per-job token budget, per-heartbeat call limit, daily aggregate ceiling, all configurable via env vars
+  - [x] 2.7 Write architecture diagram and happy-path walkthrough in `docs/architecture.md`
 
 ### Phase 2: Core Infrastructure
 
