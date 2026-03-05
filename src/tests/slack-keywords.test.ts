@@ -118,6 +118,14 @@ function makeEnv() {
               ? Response.json({ saved: true })
               : Response.json({ lastUpsertAt: null, lastUpsertOk: null, lastUpsertError: null, lastQueryAt: null, lastQueryCount: 0 });
           }
+          if (path === "/heartbeat/status") {
+            return Response.json({
+              nextAlarmAt: "2026-01-01T00:10:00.000Z",
+              lastCompletedAt: "2026-01-01T00:00:00.000Z",
+              callsRemaining: 4,
+              jobs: { queued: 1, paused: 0, running: 2 },
+            });
+          }
           return new Response("not found", { status: 404 });
         },
       }),
@@ -159,6 +167,8 @@ test("settings and set verbose commands are exact keywords and persist verbosity
     assert.match(posts[0], /Current mode: minimal/i);
     assert.match(posts[1], /verbosity is now verbose/i);
     assert.match(posts[2], /Current mode: verbose/i);
+    assert.match(posts[3], /Heartbeat last run: 2026-01-01T00:00:00.000Z/i);
+    assert.match(posts[3], /Heartbeat jobs queued\/paused\/running: 1\/0\/2/i);
     assert.match(posts[3], /Learned memory last flush: 2026-01-01T00:00:00.000Z/i);
     assert.match(posts[3], /Learned entries in last flush: 3/i);
     const key = "T1:C1:channel";

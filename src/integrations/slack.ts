@@ -89,6 +89,38 @@ async function setConversationVerbosity(conversationDO: DurableObjectStub | null
   }
 }
 
+async function getHeartbeatStatus(conversationDO: DurableObjectStub | null): Promise<{
+  nextAlarmAt: string | null;
+  lastCompletedAt: string | null;
+  callsRemaining: number | null;
+  jobs: { queued: number; paused: number; running: number };
+}> {
+  if (!conversationDO) {
+    return { nextAlarmAt: null, lastCompletedAt: null, callsRemaining: null, jobs: { queued: 0, paused: 0, running: 0 } };
+  }
+  try {
+    const res = await conversationDO.fetch("http://do/heartbeat/status");
+    const data = await res.json() as {
+      nextAlarmAt?: string | null;
+      lastCompletedAt?: string | null;
+      callsRemaining?: number | null;
+      jobs?: { queued?: number; paused?: number; running?: number };
+    };
+    return {
+      nextAlarmAt: data.nextAlarmAt ?? null,
+      lastCompletedAt: data.lastCompletedAt ?? null,
+      callsRemaining: data.callsRemaining ?? null,
+      jobs: {
+        queued: data.jobs?.queued ?? 0,
+        paused: data.jobs?.paused ?? 0,
+        running: data.jobs?.running ?? 0,
+      },
+    };
+  } catch {
+    return { nextAlarmAt: null, lastCompletedAt: null, callsRemaining: null, jobs: { queued: 0, paused: 0, running: 0 } };
+  }
+}
+
 function formatToolLedger(entry: { tool: string; argsSummary?: string; ok: boolean; durationMs: number; error?: string }): string {
   const status = entry.ok ? "ok" : "fail";
   const suffix = entry.argsSummary ? ` [${entry.argsSummary}]` : "";
@@ -229,6 +261,7 @@ async function processSlackEvent(body: {
         const verbosity = await getConversationVerbosity(conversationDO);
         const learned = await getLearnedMemoryStatus(env);
         const vectorize = await getVectorizeMemoryStatus(env);
+        const heartbeat = await getHeartbeatStatus(conversationDO);
         const flushText = learned.lastFlushAt ? learned.lastFlushAt : "never";
         const upsert = vectorize.lastUpsertOk === null
           ? "unknown"
@@ -237,7 +270,7 @@ async function processSlackEvent(body: {
             : `failure (${vectorize.lastUpsertError ?? "error"})`;
         await postToSlack(
           channel,
-          `Status: ready. Current verbosity is ${verbosity}. Learned memory last flush: ${flushText}. Learned entries in last flush: ${learned.lastFlushCount}. Vectorize upsert: ${upsert} at ${vectorize.lastUpsertAt ?? "never"}. Vectorize last query count: ${vectorize.lastQueryCount} at ${vectorize.lastQueryAt ?? "never"}.`,
+          `Status: ready. Current verbosity is ${verbosity}. Heartbeat last run: ${heartbeat.lastCompletedAt ?? "never"}. Next heartbeat: ${heartbeat.nextAlarmAt ?? "unknown"}. Heartbeat jobs queued/paused/running: ${heartbeat.jobs.queued}/${heartbeat.jobs.paused}/${heartbeat.jobs.running}. Heartbeat call budget remaining in last cycle: ${heartbeat.callsRemaining ?? "unknown"}. Learned memory last flush: ${flushText}. Learned entries in last flush: ${learned.lastFlushCount}. Vectorize upsert: ${upsert} at ${vectorize.lastUpsertAt ?? "never"}. Vectorize last query count: ${vectorize.lastQueryCount} at ${vectorize.lastQueryAt ?? "never"}.`,
           env,
         );
         return;
