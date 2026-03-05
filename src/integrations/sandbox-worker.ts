@@ -6,6 +6,7 @@ import {
   type Sandbox as SandboxType,
 } from "@cloudflare/sandbox";
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { ensureSandboxStarted, runSandboxOperation } from "./sandbox-retry";
 
 function withTimeout<T>(p: Promise<T>, ms: number, label = "timeout"): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -47,12 +48,6 @@ interface Env {
   Sandbox: DurableObjectNamespace<SandboxType>;
 }
 
-async function ensureSandboxStarted(sandbox: SandboxType): Promise<void> {
-  if ("start" in sandbox && typeof sandbox.start === "function") {
-    await sandbox.start();
-  }
-}
-
 export default class SandboxWorker extends WorkerEntrypoint<Env> {
   async fetch(request: Request): Promise<Response> {
     const proxied = await proxyToSandbox(request, this.env);
@@ -83,8 +78,7 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
   async init(): Promise<{ restored: boolean; message: string }> {
     const sandbox = getSandbox(this.env.Sandbox, "agent");
     try {
-      await ensureSandboxStarted(sandbox);
-      const result = await sandbox.exec("python3 /restore-auth.py");
+      const result = await runSandboxOperation(sandbox, () => sandbox.exec("python3 /restore-auth.py"));
       const restored = result.success && !result.stderr?.includes("failed");
       return {
         restored,
@@ -98,8 +92,7 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
   // Run command in sandbox
   async exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const sandbox = getSandbox(this.env.Sandbox, "agent");
-    await ensureSandboxStarted(sandbox);
-    const result = await sandbox.exec(command);
+    const result = await runSandboxOperation(sandbox, () => sandbox.exec(command));
     return {
       stdout: result.stdout ?? "",
       stderr: result.stderr ?? "",
@@ -109,14 +102,12 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
 
   async writeFile(path: string, content: string): Promise<void> {
     const sandbox = getSandbox(this.env.Sandbox, "agent");
-    await ensureSandboxStarted(sandbox);
-    await sandbox.writeFile(path, content);
+    await runSandboxOperation(sandbox, () => sandbox.writeFile(path, content));
   }
 
   async readFile(path: string): Promise<string> {
     const sandbox = getSandbox(this.env.Sandbox, "agent");
-    await ensureSandboxStarted(sandbox);
-    const result = await sandbox.readFile(path);
+    const result = await runSandboxOperation(sandbox, () => sandbox.readFile(path));
     return result.content ?? "";
   }
 }
