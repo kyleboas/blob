@@ -223,9 +223,15 @@ export class PiAgent {
   }
 
   private buildSystemPrompt(): string {
+    const verifyCmd = this.env.VERIFY_COMMAND ?? "";
+    const verifyBlock = verifyCmd
+      ? `\n\nAfter making code changes, ALWAYS verify your work by running: ${verifyCmd}
+If the verification fails, read the error output carefully, fix the issues, and re-run verification. Repeat until all errors are resolved or you have exhausted your reasonable attempts. Never consider a task complete if verification is failing.`
+      : `\n\nAfter making code changes, verify your work by running the project's test and type-check commands (e.g. npm test, tsc --noEmit, or whatever the project uses). If errors appear, read the output carefully, fix the issues, and re-run verification. Repeat until all errors are resolved. Never consider a task complete if verification is failing.`;
+
     return `You are a versatile assistant with access to a workspace at /workspace/${this.repoDir}.
 
-You have 4 tools — read, write, edit, bash — which together give you full capability to accomplish any task. The bash tool lets you run arbitrary commands: install packages, fetch URLs, run scripts, use git, compile code, query APIs, and anything else a Linux shell can do. Never say you cannot do something — figure out how to accomplish it with your tools.
+You have 4 tools — read, write, edit, bash — which together give you full capability to accomplish any task. The bash tool lets you run arbitrary commands: install packages, fetch URLs, run scripts, use git, compile code, query APIs, and anything else a Linux shell can do. Never say you cannot do something — figure out how to accomplish it with your tools.${verifyBlock}
 
 When calling tools, output exactly:\nTOOL: <name>\nARG: <json>
 Stop when done and provide a concise summary.`;
@@ -547,6 +553,45 @@ Stop when done and provide a concise summary.`;
     }
   }
 
+  private async runVerification(
+    sandboxId: string,
+    bootstrapAttempted: boolean,
+    currentAttempt: number,
+    maxAttempts: number,
+    opts: RunOptions,
+  ): Promise<{ passed: boolean; skipped: boolean; output: string }> {
+    const verifyCommand = this.env.VERIFY_COMMAND;
+    if (!verifyCommand || currentAttempt >= maxAttempts) {
+      return { passed: true, skipped: !verifyCommand, output: "" };
+    }
+
+    if (!bootstrapAttempted) {
+      return { passed: true, skipped: true, output: "" };
+    }
+
+    try {
+      const result = await executeInSandbox(verifyCommand, this.env, {
+        sandboxId,
+        workspaceRoot: `/workspace/${this.repoDir}`,
+        timeout: 120000,
+      });
+
+      if (result.exitCode === 0) {
+        logEvent(this.env, "tool_call", "verify_passed", { attempt: currentAttempt + 1 });
+        if (opts.onProgress && (opts.verbosity ?? "verbose") === "verbose") {
+          await opts.onProgress("✅ Verification passed");
+        }
+        return { passed: true, skipped: false, output: result.stdout };
+      }
+
+      const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+      return { passed: false, skipped: false, output: summarizeText(output, 2000) };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { passed: false, skipped: false, output: `Verification error: ${message}` };
+    }
+  }
+
   async run(userMessage: string, opts: RunOptions = {}): Promise<string> {
     const sandboxId = opts.sandboxId ?? "default";
     const usage: BudgetState = { inputTokens: 0, outputTokens: 0, warned: false, halted: false };
@@ -565,6 +610,8 @@ Stop when done and provide a concise summary.`;
     let modelCalls = 0;
     let consecutiveFailures = 0;
     let bootstrapAttempted = false;
+    let verifyAttempts = 0;
+    const maxVerifyAttempts = Number.parseInt(this.env.VERIFY_MAX_ATTEMPTS ?? "3", 10);
 
     const verbosity = opts.verbosity ?? "verbose";
     const conversationKey = opts.conversationKey ?? this.repoDir;
@@ -609,9 +656,29 @@ Stop when done and provide a concise summary.`;
       const structuredToolCall = llmResponse.toolCalls.length > 0 ? parseStructuredToolCall(llmResponse.toolCalls[0]) : null;
       const toolCall = structuredToolCall ?? parseToolCall(responseText);
       if (!toolCall) {
+        // No tool call — the model thinks it's done. Run verification if configured.
+        const verifyResult = await this.runVerification(sandboxId, bootstrapAttempted, verifyAttempts, maxVerifyAttempts, opts);
+        if (verifyResult.passed || verifyResult.skipped) {
+          this.messages.push({ role: "assistant", content: responseText });
+          await appendWorkspaceState("context", JSON.stringify({ role: "assistant", content: responseText }), this.env, sandboxId);
+          return this.finishRun(userMessage, responseText, conversationKey, sandboxId);
+        }
+        // Verification failed — feed errors back to model and continue loop
+        verifyAttempts += 1;
         this.messages.push({ role: "assistant", content: responseText });
-        await appendWorkspaceState("context", JSON.stringify({ role: "assistant", content: responseText }), this.env, sandboxId);
-        return this.finishRun(userMessage, responseText, conversationKey, sandboxId);
+        this.messages.push({
+          role: "user",
+          content: `VERIFICATION FAILED (attempt ${verifyAttempts}/${maxVerifyAttempts}):\n${verifyResult.output}\n\nPlease fix the errors above and try again.`,
+        });
+        logEvent(this.env, "tool_call", "verify_failed", {
+          attempt: verifyAttempts,
+          maxAttempts: maxVerifyAttempts,
+          output: summarizeText(verifyResult.output, 300),
+        });
+        if (opts.onProgress && verbosity === "verbose") {
+          await opts.onProgress(`🔄 Verification failed (attempt ${verifyAttempts}/${maxVerifyAttempts}), auto-fixing…`);
+        }
+        continue;
       }
 
       this.messages.push({ role: "assistant", content: responseText || `TOOL: ${toolCall.tool}` });

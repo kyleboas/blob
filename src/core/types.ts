@@ -46,4 +46,6 @@ export interface Env {
   DAILY_TOKEN_CEILING?: string;
   MAX_CONSECUTIVE_TOOL_FAILURES?: string;
   LLM_MODEL?: string;
+  VERIFY_COMMAND?: string;
+  VERIFY_MAX_ATTEMPTS?: string;
 }
