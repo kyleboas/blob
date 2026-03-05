@@ -40,15 +40,15 @@ interface BlobState {
 }
 
 const DEFAULT_CATALOG: Record<string, { name: string; description: string; maxTokens: number }> = {
+  "claude-sonnet-4-6-20250514": {
+    name: "Claude Sonnet 4.6",
+    description: "Best-in-class tool calling and code generation via AI Gateway.",
+    maxTokens: 8192,
+  },
   "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast": {
     name: "Llama 3.3 70B Fast",
-    description: "Fast, capable model for most coding tasks. Free tier.",
+    description: "Fast, capable model for most coding tasks. Free tier fallback.",
     maxTokens: 4096,
-  },
-  "workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct": {
-    name: "Llama 4 Scout",
-    description: "More powerful, multimodal. Free tier.",
-    maxTokens: 8192,
   },
 };
 

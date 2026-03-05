@@ -267,7 +267,7 @@ Stop when done and provide a concise summary.`;
           "content-type": "application/json",
           Authorization: `Bearer ${this.env.AI_GATEWAY_TOKEN}`,
         },
-        body: JSON.stringify({ model: DEFAULT_MODEL, messages: this.messages, tools: TOOL_SCHEMAS }),
+        body: JSON.stringify({ model: this.env.LLM_MODEL ?? DEFAULT_MODEL, messages: this.messages, tools: TOOL_SCHEMAS }),
       });
       if (!response.ok) {
         throw new Error(`LLM error: ${response.status} ${await response.text()}`);

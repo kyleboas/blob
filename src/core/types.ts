@@ -45,4 +45,5 @@ export interface Env {
   HEARTBEAT_MODEL_CALL_LIMIT?: string;
   DAILY_TOKEN_CEILING?: string;
   MAX_CONSECUTIVE_TOOL_FAILURES?: string;
+  LLM_MODEL?: string;
 }
