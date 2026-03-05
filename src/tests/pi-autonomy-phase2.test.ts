@@ -264,6 +264,7 @@ test("agent bootstraps once before first tool call", async () => {
     assert.equal(bootstrapCalls.length, 1);
     assert.match(bootstrapCalls[0], /GIT_ASKPASS=\/usr\/local\/bin\/blob-git-askpass/);
     assert.match(bootstrapCalls[0], /GITHUB_TOKEN='ghs_test_token'/);
+    assert.match(bootstrapCalls[0], /git config --global url\.'https:\/\/x-access-token:ghs_test_token@github.com\/'\.insteadOf https:\/\/github.com\//);
   } finally {
     globalThis.fetch = originalFetch;
   }
