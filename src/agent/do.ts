@@ -40,7 +40,7 @@ interface BlobState {
 }
 
 const DEFAULT_CATALOG: Record<string, { name: string; description: string; maxTokens: number }> = {
-  "anthropic/claude-sonnet-4-5": {
+  "anthropic/claude-sonnet-4-6": {
     name: "Claude Sonnet 4.6",
     description: "Best-in-class tool calling and code generation via AI Gateway.",
     maxTokens: 8192,

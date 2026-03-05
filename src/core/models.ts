@@ -2,7 +2,7 @@ import type { Env } from "./types";
 import { getModelCatalog } from "./memory";
 
 // Default model for AI Gateway (OpenAI-compatible endpoint)
-export const DEFAULT_MODEL = "anthropic/claude-sonnet-4-5";
+export const DEFAULT_MODEL = "anthropic/claude-sonnet-4-6";
 
 // Free fallback model for Workers AI (used when AI Gateway is not configured)
 export const WORKERS_AI_FALLBACK_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
