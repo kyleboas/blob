@@ -374,3 +374,62 @@ test("runSelfTest executes tool and memory sequence", async () => {
   assert.ok(commands.some((command) => command === "cd /workspace/project && node -v"));
   assert.equal(files.get("/workspace/project/.blob/selftest.txt")?.includes("edited"), true);
 });
+
+
+test("runSelfTest skips vectorize when binding is not configured", async () => {
+  __resetSandboxSessionsForTests();
+  const files = new Map<string, string>();
+  const r2 = new Map<string, string>();
+  files.set("/workspace/project/README.md", "# Project\n");
+
+  const env = {
+    SANDBOX: {
+      start: async () => {},
+      exec: async (command: string) => {
+        if (command.startsWith("mv ")) {
+          const [, from, to] = command.split(" ");
+          files.set(to, files.get(from) ?? "");
+          files.delete(from);
+        }
+        if (command.includes("node -v")) {
+          return { stdout: "v20.11.1\n", stderr: "", exitCode: 0 };
+        }
+        return { stdout: "ok", stderr: "", exitCode: 0 };
+      },
+      writeFile: async (path: string, content: string) => {
+        files.set(path, content);
+      },
+      readFile: async (path: string) => {
+        if (!files.has(path)) throw new Error("ENOENT");
+        return files.get(path) ?? "";
+      },
+    },
+    REPO_STORE: {
+      put: async (key: string, val: string) => {
+        r2.set(key, val);
+      },
+      get: async (key: string) => {
+        const val = r2.get(key);
+        return val === undefined ? null : { text: async () => val };
+      },
+    },
+    AI: {
+      run: async () => ({ data: [[0.1, 0.2]] }),
+    },
+    AGENT_DO: {
+      idFromName: (name: string) => name,
+      get: () => ({
+        fetch: async () => Response.json({ ok: true }),
+      }),
+    },
+  } as any;
+
+  const result = await new PiAgent(env, "owner/project").runSelfTest({
+    sandboxId: "st-no-vector",
+    verbosity: "verbose",
+    conversationKey: "T1:C1:channel",
+  });
+
+  assert.match(result, /Self-test passed/i);
+  assert.match(result, /vectorize: skipped \(PI_VECTORS binding missing/);
+});

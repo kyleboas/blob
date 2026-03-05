@@ -490,38 +490,49 @@ Stop when done and provide a concise summary.`;
       });
       await recordStep("r2", `flushed ${flushed.count} record(s) to ${flushed.key}`);
 
-      const upsert = await upsertSemanticMemory(this.env, {
-        conversationKey,
-        record,
-        r2Key: flushed.key,
-      });
-      await updateVectorizeMemoryStatus(this.env, {
-        lastUpsertAt: new Date().toISOString(),
-        lastUpsertOk: upsert.ok,
-        lastUpsertError: upsert.ok ? undefined : upsert.error,
-      });
-      if (!upsert.ok || !upsert.id) {
-        throw new Error(`Vectorize upsert failed: ${upsert.error ?? "unknown error"}`);
-      }
+      if (!this.env.PI_VECTORS) {
+        await updateVectorizeMemoryStatus(this.env, {
+          lastUpsertAt: new Date().toISOString(),
+          lastUpsertOk: false,
+          lastUpsertError: "PI_VECTORS binding missing",
+          lastQueryAt: new Date().toISOString(),
+          lastQueryCount: 0,
+        });
+        await recordStep("vectorize", "skipped (PI_VECTORS binding missing; configure Vectorize to enable semantic recall)");
+      } else {
+        const upsert = await upsertSemanticMemory(this.env, {
+          conversationKey,
+          record,
+          r2Key: flushed.key,
+        });
+        await updateVectorizeMemoryStatus(this.env, {
+          lastUpsertAt: new Date().toISOString(),
+          lastUpsertOk: upsert.ok,
+          lastUpsertError: upsert.ok ? undefined : upsert.error,
+        });
+        if (!upsert.ok || !upsert.id) {
+          throw new Error(`Vectorize upsert failed: ${upsert.error ?? "unknown error"}`);
+        }
 
-      const matches = await querySemanticMemory(this.env, {
-        conversationKey,
-        query: uniqueToken,
-        topK: 5,
-      });
-      await updateVectorizeMemoryStatus(this.env, {
-        lastQueryAt: new Date().toISOString(),
-        lastQueryCount: matches.length,
-      });
-      const matched = matches.some((entry) => entry.id === upsert.id || entry.r2Key === flushed.key);
-      if (!matched) {
-        throw new Error("Vectorize query did not return selftest record");
+        const matches = await querySemanticMemory(this.env, {
+          conversationKey,
+          query: uniqueToken,
+          topK: 5,
+        });
+        await updateVectorizeMemoryStatus(this.env, {
+          lastQueryAt: new Date().toISOString(),
+          lastQueryCount: matches.length,
+        });
+        const matched = matches.some((entry) => entry.id === upsert.id || entry.r2Key === flushed.key);
+        if (!matched) {
+          throw new Error("Vectorize query did not return selftest record");
+        }
+        await recordStep("vectorize", `upsert+query verified (${matches.length} match(es))`);
       }
-      await recordStep("vectorize", `upsert+query verified (${matches.length} match(es))`);
 
       return verbosity === "verbose"
         ? `Self-test passed for /workspace/${this.repoDir}\n${stepLines.join("\n")}`
-        : `Self-test passed: bootstrap, tools, R2, and Vectorize are healthy for /workspace/${this.repoDir}.`;
+        : `Self-test passed: bootstrap, tools, and R2 are healthy for /workspace/${this.repoDir}.`;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await recordStep("selftest", summarizeText(message, 180), false);
