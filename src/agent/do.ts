@@ -37,6 +37,11 @@ interface BlobState {
     lastQueryAt?: string;
     lastQueryCount?: number;
   };
+  heartbeat?: {
+    lastStartedAt?: string;
+    lastCompletedAt?: string;
+    callsRemaining?: number;
+  };
 }
 
 const DEFAULT_CATALOG: Record<string, { name: string; description: string; maxTokens: number }> = {
@@ -110,6 +115,8 @@ export class AgentDO {
 
   async alarm(): Promise<void> {
     await this.init();
+    const startedAt = new Date().toISOString();
+    this.data.heartbeat = { ...(this.data.heartbeat ?? {}), lastStartedAt: startedAt };
     logEvent(this.env, "heartbeat", "alarm_start");
     const maxCalls = 10;
     const now = Date.now();
@@ -154,6 +161,13 @@ export class AgentDO {
     }
 
     await this.checkCronHealthAlerts();
+
+    this.data.heartbeat = {
+      ...(this.data.heartbeat ?? {}),
+      lastCompletedAt: new Date().toISOString(),
+      callsRemaining,
+    };
+    await this.save();
 
     logEvent(this.env, "heartbeat", "alarm_complete", { callsRemaining });
     await this.state.storage.setAlarm(Date.now() + 10 * 60 * 1000);
@@ -333,6 +347,31 @@ export class AgentDO {
       };
       await this.save();
       return json({ saved: true, vectorizeMemory: this.data.vectorizeMemory });
+    }
+
+    if (url.pathname === "/heartbeat/status" && request.method === "GET") {
+      const nextAlarm = await this.state.storage.getAlarm();
+      const rows = this.state.storage.sql.exec(
+        "SELECT status, COUNT(*) AS count FROM jobs GROUP BY status",
+      );
+      const jobCounts = {
+        queued: 0,
+        paused: 0,
+        running: 0,
+      };
+      for (const row of rows) {
+        const status = String(row.status) as keyof typeof jobCounts;
+        if (status in jobCounts) {
+          jobCounts[status] = Number(row.count);
+        }
+      }
+      return json({
+        nextAlarmAt: nextAlarm ? new Date(nextAlarm).toISOString() : null,
+        lastStartedAt: this.data.heartbeat?.lastStartedAt ?? null,
+        lastCompletedAt: this.data.heartbeat?.lastCompletedAt ?? null,
+        callsRemaining: this.data.heartbeat?.callsRemaining ?? null,
+        jobs: jobCounts,
+      });
     }
 
     if (url.pathname === "/events/check" && request.method === "POST") {
