@@ -7,6 +7,10 @@ type Verbosity = "minimal" | "verbose";
 function makeEnv() {
   const store = new Map<string, { verbosity: Verbosity; messages: Array<{ role: string; content: string; timestamp: number }> }>();
   const posts: string[] = [];
+  const files = new Map<string, string>();
+  const r2 = new Map<string, string>();
+  const vectors = new Map<string, { id: string; values: number[]; metadata?: Record<string, unknown> }>();
+  files.set("/workspace/blob/README.md", "# Blob\n");
 
   const ensure = (id: string) => {
     if (!store.has(id)) {
@@ -17,16 +21,63 @@ function makeEnv() {
 
   const env = {
     SLACK_BOT_TOKEN: "x-test",
+    SANDBOX: {
+      start: async () => {},
+      exec: async (command: string) => {
+        if (command.startsWith("mv ")) {
+          const [, from, to] = command.split(" ");
+          files.set(to, files.get(from) ?? "");
+          files.delete(from);
+          return { stdout: "", stderr: "", exitCode: 0 };
+        }
+        if (command.includes("node -v")) {
+          return { stdout: "v20.11.1\n", stderr: "", exitCode: 0 };
+        }
+        return { stdout: "ok", stderr: "", exitCode: 0 };
+      },
+      writeFile: async (path: string, content: string) => {
+        files.set(path, content);
+      },
+      readFile: async (path: string) => {
+        if (!files.has(path)) throw new Error("ENOENT");
+        return files.get(path) ?? "";
+      },
+    },
+    REPO_STORE: {
+      put: async (key: string, value: string) => {
+        r2.set(key, value);
+      },
+      get: async (key: string) => {
+        const val = r2.get(key);
+        return val === undefined ? null : { text: async () => val };
+      },
+    },
+    PI_VECTORS: {
+      upsert: async (rows: Array<{ id: string; values: number[]; metadata?: Record<string, unknown> }>) => {
+        for (const row of rows) vectors.set(row.id, row);
+      },
+      query: async (_vec: number[], opts?: { filter?: Record<string, unknown>; topK?: number }) => {
+        const scope = opts?.filter?.conversationKey;
+        const matches = [...vectors.values()]
+          .filter((row) => !scope || row.metadata?.conversationKey === scope)
+          .slice(0, opts?.topK ?? 5)
+          .map((row) => ({ id: row.id, score: 0.9, metadata: row.metadata }));
+        return { matches };
+      },
+    },
     AI: {
-      run: async (_model: string, inputs: { messages: Array<{ role: string; content: string }> }) => {
-        const user = inputs.messages.find((m) => m.role === "user")?.content ?? "";
-        if (user.includes('Message: "status please"')) {
-          return { response: '{"intent":"chat","needsSandbox":false}' };
+      run: async (_model: string, inputs: { messages?: Array<{ role: string; content: string }>; text?: string }) => {
+        if (inputs.messages) {
+          const user = inputs.messages.find((m) => m.role === "user")?.content ?? "";
+          if (user.includes('Message: "status please"')) {
+            return { response: '{"intent":"chat","needsSandbox":false}' };
+          }
+          if (user.includes("intent classifier")) {
+            return { response: '{"intent":"chat","needsSandbox":false}' };
+          }
+          return { response: "normal chat response" };
         }
-        if (user.includes("intent classifier")) {
-          return { response: '{"intent":"chat","needsSandbox":false}' };
-        }
-        return { response: "normal chat response" };
+        return { data: [[0.1, 0.2, 0.3]] };
       },
     },
     AGENT_DO: {
@@ -37,6 +88,9 @@ function makeEnv() {
           const row = ensure(id);
           if (path === "/events/check") {
             return Response.json({ processed: false });
+          }
+          if (path === "/repos") {
+            return Response.json({ repos: ["owner/blob"] });
           }
           if (path === "/settings/verbosity" && (!init || init.method === "GET")) {
             return Response.json({ verbosity: row.verbosity });
@@ -55,7 +109,14 @@ function makeEnv() {
             return Response.json({ messages: row.messages.slice(-20) });
           }
           if (path === "/memory/learned/status") {
-            return Response.json({ lastFlushAt: "2026-01-01T00:00:00.000Z", lastFlushCount: 3 });
+            return init?.method === "POST"
+              ? Response.json({ saved: true })
+              : Response.json({ lastFlushAt: "2026-01-01T00:00:00.000Z", lastFlushCount: 3 });
+          }
+          if (path === "/memory/vectorize/status") {
+            return init?.method === "POST"
+              ? Response.json({ saved: true })
+              : Response.json({ lastUpsertAt: null, lastUpsertOk: null, lastUpsertError: null, lastQueryAt: null, lastQueryCount: 0 });
           }
           return new Response("not found", { status: 404 });
         },
@@ -133,6 +194,39 @@ test("status with extra text is treated as normal chat", async () => {
 
     await handleSlackEvent(req, env);
     assert.equal(posts[0], "normal chat response");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("selftest command runs full workflow and posts result", async () => {
+  const { env, posts } = makeEnv();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes("slack.com/api/chat.postMessage")) {
+      const body = JSON.parse(String(init?.body)) as { text: string };
+      posts.push(body.text);
+      return Response.json({ ok: true });
+    }
+    return new Response("unexpected", { status: 500 });
+  }) as typeof fetch;
+
+  try {
+    const req = new Request("https://example.com/slack/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "event_callback",
+        event_id: "E-selftest",
+        team_id: "T1",
+        event: { type: "message", text: "selftest", channel: "C1", ts: "3" },
+      }),
+    });
+
+    await handleSlackEvent(req, env);
+    assert.equal(posts[0], "Running self-test…");
+    assert.match(posts[1], /Self-test passed/i);
+    assert.match(posts[1], /R2, and Vectorize are healthy/i);
   } finally {
     globalThis.fetch = originalFetch;
   }

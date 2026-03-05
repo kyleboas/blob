@@ -50,6 +50,13 @@ interface RunOptions {
   conversationKey?: string;
 }
 
+interface SelfTestOptions {
+  sandboxId?: string;
+  onProgress?: (message: string) => Promise<void> | void;
+  verbosity?: "minimal" | "verbose";
+  conversationKey?: string;
+}
+
 
 interface BudgetState {
   inputTokens: number;
@@ -406,6 +413,122 @@ Stop when done and provide a concise summary.`;
       logEvent(this.env, "memory_ops", "learned_memory_persist_failed", { error: String(err) });
     }
     return response;
+  }
+
+  async runSelfTest(opts: SelfTestOptions = {}): Promise<string> {
+    const sandboxId = opts.sandboxId ?? "default";
+    const verbosity = opts.verbosity ?? "minimal";
+    const conversationKey = opts.conversationKey ?? this.repoDir;
+    const stepLines: string[] = [];
+    const uniqueToken = `selftest-${Date.now()}`;
+
+    const recordStep = async (label: string, detail: string, ok = true): Promise<void> => {
+      const icon = ok ? "✅" : "❌";
+      const line = `${icon} ${label}: ${detail}`;
+      stepLines.push(line);
+      if (verbosity === "verbose" && opts.onProgress) {
+        await opts.onProgress(line);
+      }
+    };
+
+    try {
+      await this.ensureRepoBootstrapped(sandboxId, opts.onProgress, verbosity);
+      await recordStep("bootstrap", `repo ready at /workspace/${this.repoDir}`);
+
+      await executeInSandbox(`mkdir -p /workspace/${this.repoDir}/.blob`, this.env, {
+        sandboxId,
+        workspaceRoot: `/workspace/${this.repoDir}`,
+      });
+
+      const readme = await readTool("README.md", this.env, {
+        sandboxId,
+        workspaceRoot: `/workspace/${this.repoDir}`,
+      });
+      await recordStep("read", `README.md (${readme.length} bytes)`);
+
+      await writeTool(".blob/selftest.txt", `${uniqueToken} initial`, this.env, {
+        sandboxId,
+        workspaceRoot: `/workspace/${this.repoDir}`,
+      });
+      await editTool(".blob/selftest.txt", "initial", "edited", this.env, {
+        sandboxId,
+        workspaceRoot: `/workspace/${this.repoDir}`,
+      });
+      await recordStep("write/edit", "updated .blob/selftest.txt");
+
+      const bashResult = await executeInSandbox("node -v", this.env, {
+        sandboxId,
+        workspaceRoot: `/workspace/${this.repoDir}`,
+      });
+      if (bashResult.exitCode !== 0) {
+        throw new Error(`bash command failed: ${summarizeText(bashResult.stderr || bashResult.stdout || "unknown error", 120)}`);
+      }
+      await recordStep("bash", summarizeText(bashResult.stdout || "node -v ok", 120));
+
+      const record = {
+        timestamp: new Date().toISOString(),
+        conversationKey,
+        summary: `Selftest learned record ${uniqueToken}`,
+        tags: ["selftest", "healthcheck"],
+        sourceRefs: [this.repo],
+      };
+      await appendLearnedRecord(this.env, record);
+      const flushed = await flushLearnedRecordsToR2(this.env, conversationKey);
+      if (!flushed.key || flushed.count < 1) {
+        throw new Error("learned memory flush wrote no records");
+      }
+      const flushedObj = await this.env.REPO_STORE.get(flushed.key);
+      const flushedText = flushedObj ? await flushedObj.text() : "";
+      if (!flushedText.includes(uniqueToken)) {
+        throw new Error("R2 read-back missing selftest learned record");
+      }
+      await updateLearnedMemoryStatus(this.env, {
+        lastFlushAt: new Date().toISOString(),
+        lastFlushCount: flushed.count,
+        lastRecordTimestamp: flushed.lastRecord?.timestamp,
+        lastRecordSummary: flushed.lastRecord?.summary,
+      });
+      await recordStep("r2", `flushed ${flushed.count} record(s) to ${flushed.key}`);
+
+      const upsert = await upsertSemanticMemory(this.env, {
+        conversationKey,
+        record,
+        r2Key: flushed.key,
+      });
+      await updateVectorizeMemoryStatus(this.env, {
+        lastUpsertAt: new Date().toISOString(),
+        lastUpsertOk: upsert.ok,
+        lastUpsertError: upsert.ok ? undefined : upsert.error,
+      });
+      if (!upsert.ok || !upsert.id) {
+        throw new Error(`Vectorize upsert failed: ${upsert.error ?? "unknown error"}`);
+      }
+
+      const matches = await querySemanticMemory(this.env, {
+        conversationKey,
+        query: uniqueToken,
+        topK: 5,
+      });
+      await updateVectorizeMemoryStatus(this.env, {
+        lastQueryAt: new Date().toISOString(),
+        lastQueryCount: matches.length,
+      });
+      const matched = matches.some((entry) => entry.id === upsert.id || entry.r2Key === flushed.key);
+      if (!matched) {
+        throw new Error("Vectorize query did not return selftest record");
+      }
+      await recordStep("vectorize", `upsert+query verified (${matches.length} match(es))`);
+
+      return verbosity === "verbose"
+        ? `Self-test passed for /workspace/${this.repoDir}\n${stepLines.join("\n")}`
+        : `Self-test passed: bootstrap, tools, R2, and Vectorize are healthy for /workspace/${this.repoDir}.`;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await recordStep("selftest", summarizeText(message, 180), false);
+      return verbosity === "verbose"
+        ? `Self-test failed for /workspace/${this.repoDir}\n${stepLines.join("\n")}`
+        : `Self-test failed: ${summarizeText(message, 180)}`;
+    }
   }
 
   async run(userMessage: string, opts: RunOptions = {}): Promise<string> {

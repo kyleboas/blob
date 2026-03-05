@@ -296,3 +296,81 @@ test("agent reports bootstrap failures with error text", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("runSelfTest executes tool and memory sequence", async () => {
+  __resetSandboxSessionsForTests();
+  const commands: string[] = [];
+  const files = new Map<string, string>();
+  const r2 = new Map<string, string>();
+  const vectors = new Map<string, { id: string; metadata?: Record<string, unknown> }>();
+  files.set("/workspace/project/README.md", "# Project\n");
+
+  const env = {
+    SANDBOX: {
+      start: async () => {},
+      exec: async (command: string) => {
+        commands.push(command);
+        if (command.startsWith("mv ")) {
+          const [, from, to] = command.split(" ");
+          files.set(to, files.get(from) ?? "");
+          files.delete(from);
+        }
+        if (command.includes("node -v")) {
+          return { stdout: "v20.11.1\n", stderr: "", exitCode: 0 };
+        }
+        return { stdout: "ok", stderr: "", exitCode: 0 };
+      },
+      writeFile: async (path: string, content: string) => {
+        files.set(path, content);
+      },
+      readFile: async (path: string) => {
+        if (!files.has(path)) throw new Error("ENOENT");
+        return files.get(path) ?? "";
+      },
+    },
+    REPO_STORE: {
+      put: async (key: string, val: string) => {
+        r2.set(key, val);
+      },
+      get: async (key: string) => {
+        const val = r2.get(key);
+        return val === undefined ? null : { text: async () => val };
+      },
+    },
+    PI_VECTORS: {
+      upsert: async (rows: Array<{ id: string; metadata?: Record<string, unknown> }>) => {
+        for (const row of rows) vectors.set(row.id, row);
+      },
+      query: async (_vec: number[], opts?: { filter?: Record<string, unknown> }) => {
+        const scope = opts?.filter?.conversationKey;
+        return {
+          matches: [...vectors.values()]
+            .filter((row) => row.metadata?.conversationKey === scope)
+            .map((row) => ({ id: row.id, score: 0.9, metadata: row.metadata })),
+        };
+      },
+    },
+    AI: {
+      run: async () => ({ data: [[0.1, 0.2]] }),
+    },
+    AGENT_DO: {
+      idFromName: (name: string) => name,
+      get: () => ({
+        fetch: async () => Response.json({ ok: true }),
+      }),
+    },
+  } as any;
+
+  const progress: string[] = [];
+  const agent = new PiAgent(env, "owner/project");
+  const result = await agent.runSelfTest({ sandboxId: "st-1", verbosity: "verbose", onProgress: (line) => progress.push(line), conversationKey: "T1:C1:channel" });
+
+  assert.match(result, /Self-test passed/i);
+  assert.ok(progress.some((line) => line.includes("bootstrap")));
+  assert.ok(progress.some((line) => line.includes("read")));
+  assert.ok(progress.some((line) => line.includes("write\/edit")));
+  assert.ok(progress.some((line) => line.includes("vectorize")));
+  assert.ok(commands.some((command) => command.includes("git fetch --prune origin") || command.includes("git clone")));
+  assert.ok(commands.some((command) => command === "cd /workspace/project && node -v"));
+  assert.equal(files.get("/workspace/project/.blob/selftest.txt")?.includes("edited"), true);
+});

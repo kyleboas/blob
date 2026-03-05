@@ -243,7 +243,20 @@ async function processSlackEvent(body: {
         return;
       }
       if (keywordCommand === "selftest") {
-        await postToSlack(channel, "Self-test command received. Full self-test workflow is handled in the sandbox pipeline.", env);
+        const repos = await getRepos(env);
+        const repo = repos[0] ?? "default";
+        const agent = new PiAgent(env, repo);
+        const verbosity = await getConversationVerbosity(conversationDO);
+        if (verbosity === "minimal") {
+          await postToSlack(channel, "Running self-test…", env);
+        }
+        const selftestResult = await agent.runSelfTest({
+          sandboxId: `selftest-${key}`,
+          verbosity,
+          conversationKey: key,
+          onProgress: verbosity === "verbose" ? (msg: string) => postToSlack(channel, msg, env) : undefined,
+        });
+        await postToSlack(channel, selftestResult, env);
         return;
       }
     }

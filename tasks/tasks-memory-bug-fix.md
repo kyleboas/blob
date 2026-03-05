@@ -120,21 +120,21 @@ Update the file after completing each sub-task, not just after completing an ent
     - last query timestamp + result count
   - [x] 6.8 Add unit tests for embedding/upsert/query helpers using mocks for `env.AI` and `env.PI_VECTORS`.
 
-- [ ] 7.0 Extend `selftest` to validate R2 + Vectorize end-to-end
-  - [ ] 7.1 Implement `selftest` command handler flow:
+- [x] 7.0 Extend `selftest` to validate R2 + Vectorize end-to-end
+  - [x] 7.1 Implement `selftest` command handler flow:
     - Run repo bootstrap
     - Perform read/write/edit/bash validations using safe test file (e.g., `.blob/selftest.txt`)
-  - [ ] 7.2 Add learned record generation as part of selftest, flush to R2, and verify read-back/metadata.
-  - [ ] 7.3 Add Vectorize portion of selftest:
+  - [x] 7.2 Add learned record generation as part of selftest, flush to R2, and verify read-back/metadata.
+  - [x] 7.3 Add Vectorize portion of selftest:
     - Embed learned text
     - Upsert into Vectorize with metadata referencing the R2 key
     - Query Vectorize for a term unique to the learned record
     - Confirm the inserted record is returned (match vector id or metadata).
-  - [ ] 7.4 Ensure selftest does not modify user code:
+  - [x] 7.4 Ensure selftest does not modify user code:
     - Create `.blob/` directory if missing
     - Only touch `.blob/selftest.txt` (or similar) and optional `.blob/selftest.log`
-  - [ ] 7.5 Ensure `selftest` output is concise in Minimal mode and includes step-by-step ledger in Verbose mode.
-  - [ ] 7.6 Add tests for selftest command routing and step sequencing (mock tool exec + R2 + Vectorize).
+  - [x] 7.5 Ensure `selftest` output is concise in Minimal mode and includes step-by-step ledger in Verbose mode.
+  - [x] 7.6 Add tests for selftest command routing and step sequencing (mock tool exec + R2 + Vectorize).
 
 - [ ] 8.0 Add tests, docs, and runbook updates
   - [ ] 8.1 Update `docs/architecture.md` to reflect:
