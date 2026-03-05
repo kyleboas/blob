@@ -69,7 +69,7 @@ export async function getModelCatalog(env: Env): Promise<Record<string, { name: 
     return data.catalog;
   } catch {
     return {
-      "claude-sonnet-4-6-20250514": {
+      "anthropic/claude-sonnet-4-5": {
         name: "Claude Sonnet 4.6",
         description: "Best-in-class tool calling and code generation via AI Gateway.",
         maxTokens: 8192
