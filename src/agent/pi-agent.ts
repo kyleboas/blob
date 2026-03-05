@@ -239,7 +239,12 @@ Stop when done and provide a concise summary.`;
     await ensureSandboxSession(sandboxId, this.env);
 
     const authPrefix = this.env.GITHUB_TOKEN
-      ? `export GITHUB_TOKEN=${shellQuote(this.env.GITHUB_TOKEN)}; export GIT_ASKPASS=/usr/local/bin/blob-git-askpass; export GIT_TERMINAL_PROMPT=0;`
+      ? [
+          `export GITHUB_TOKEN=${shellQuote(this.env.GITHUB_TOKEN)}`,
+          "export GIT_ASKPASS=/usr/local/bin/blob-git-askpass",
+          "export GIT_TERMINAL_PROMPT=0",
+          `git config --global url.${shellQuote(`https://x-access-token:${encodeURIComponent(this.env.GITHUB_TOKEN)}@github.com/`)}.insteadOf https://github.com/`,
+        ].join("; ") + ";"
       : "";
 
     const result = await executeInSandbox(`${authPrefix} ${buildBootstrapScript(this.repoDir, this.repo)}`.trim(), this.env, {
