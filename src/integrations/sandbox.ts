@@ -16,7 +16,12 @@ interface ToolOptions {
 }
 
 const SANDBOX_STARTUP_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
-const SANDBOX_STARTUP_RETRYABLE_MESSAGES = ["container is not running", "container startup failed", "createSession"];
+const SANDBOX_STARTUP_RETRYABLE_MESSAGES = [
+  "container is not running",
+  "container startup failed",
+  "createSession",
+  "there is no container instance that can be provided",
+];
 const SANDBOX_STATE_PREFIX = "sandbox-state/";
 const WORKSPACE_STATE_DIR = "/workspace/blob_state";
 
