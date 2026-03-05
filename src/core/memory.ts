@@ -69,10 +69,10 @@ export async function getModelCatalog(env: Env): Promise<Record<string, { name: 
     return data.catalog;
   } catch {
     return {
-      "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast": {
-        name: "Llama 3.3 70B Fast",
-        description: "Fast, capable model for most coding tasks. Free tier.",
-        maxTokens: 4096
+      "claude-sonnet-4-6-20250514": {
+        name: "Claude Sonnet 4.6",
+        description: "Best-in-class tool calling and code generation via AI Gateway.",
+        maxTokens: 8192
       }
     };
   }

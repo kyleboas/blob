@@ -1,5 +1,5 @@
 import type { Env } from "./types";
-import { DEFAULT_MODEL, getCatalog } from "./models";
+import { DEFAULT_MODEL, WORKERS_AI_FALLBACK_MODEL, getCatalog } from "./models";
 
 interface CatalogModel {
   name: string;
@@ -48,13 +48,19 @@ function isDifficultTask(prompt: string): boolean {
   return hasKeyword || isLongPrompt;
 }
 
-function pickModel(catalog: Record<string, CatalogModel>, userMessage: string): { modelId: string; modelName: string; maxTokens: number } {
+function pickModel(catalog: Record<string, CatalogModel>, userMessage: string, env?: Env): { modelId: string; modelName: string; maxTokens: number } {
+  // Allow env override for model selection
+  const envModel = env?.LLM_MODEL;
+  if (envModel) {
+    return { modelId: envModel, modelName: envModel, maxTokens: 8192 };
+  }
+
   const entries = Object.entries(catalog);
   if (entries.length === 0) {
     return {
       modelId: DEFAULT_MODEL,
       modelName: DEFAULT_MODEL,
-      maxTokens: 4096
+      maxTokens: 8192
     };
   }
 
@@ -84,7 +90,7 @@ export async function callLLMWithModelSelection(
 ): Promise<LLMResponse> {
   const userMessage = messages.find(m => m.role === "user")?.content ?? "";
   const catalog = await getCachedCatalog(env);
-  const selection = pickModel(catalog, userMessage);
+  const selection = pickModel(catalog, userMessage, env);
   
   const response = await callLLMRaw(messages, selection.modelId, opts.maxTokens ?? selection.maxTokens, env);
 
@@ -108,7 +114,7 @@ async function callLLMRaw(
     if (!ai) {
       throw new Error("Neither AI Gateway nor Workers AI available");
     }
-    const result = await ai.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+    const result = await ai.run(WORKERS_AI_FALLBACK_MODEL, {
       messages,
       max_tokens: maxTokens,
     });
