@@ -2,7 +2,15 @@ import type { Env } from "../core/types";
 import { DEFAULT_MODEL } from "../core/models";
 import { appendWorkspaceState, editTool, ensureSandboxSession, executeInSandbox, readTool, writeTool } from "../integrations/sandbox";
 import { logEvent } from "../core/observability";
-import { appendLearnedRecord, flushLearnedRecordsToR2, updateLearnedMemoryStatus } from "../core/memory";
+import {
+  appendLearnedRecord,
+  buildSemanticMemoryContext,
+  flushLearnedRecordsToR2,
+  querySemanticMemory,
+  updateLearnedMemoryStatus,
+  updateVectorizeMemoryStatus,
+  upsertSemanticMemory,
+} from "../core/memory";
 
 interface PiMessage {
   role: "system" | "user" | "assistant";
@@ -378,6 +386,16 @@ Stop when done and provide a concise summary.`;
         lastRecordTimestamp: flushed.lastRecord?.timestamp,
         lastRecordSummary: flushed.lastRecord?.summary,
       });
+      const upsert = await upsertSemanticMemory(this.env, {
+        conversationKey,
+        record,
+        r2Key: flushed.key,
+      }).catch((err: unknown) => ({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+      await updateVectorizeMemoryStatus(this.env, {
+        lastUpsertAt: new Date().toISOString(),
+        lastUpsertOk: upsert.ok,
+        lastUpsertError: upsert.ok ? undefined : upsert.error,
+      });
     }
   }
 
@@ -411,6 +429,20 @@ Stop when done and provide a concise summary.`;
 
     const verbosity = opts.verbosity ?? "verbose";
     const conversationKey = opts.conversationKey ?? this.repoDir;
+
+    const semanticMatches = await querySemanticMemory(this.env, {
+      conversationKey,
+      query: userMessage,
+      topK: 5,
+    }).catch(() => []);
+    await updateVectorizeMemoryStatus(this.env, {
+      lastQueryAt: new Date().toISOString(),
+      lastQueryCount: semanticMatches.length,
+    });
+    const semanticContext = await buildSemanticMemoryContext(this.env, semanticMatches, 1200).catch(() => "");
+    if (semanticContext) {
+      this.messages.splice(1, 0, { role: "system", content: semanticContext });
+    }
 
     while (modelCalls < maxCalls) {
       modelCalls += 1;

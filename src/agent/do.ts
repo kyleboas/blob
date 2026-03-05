@@ -30,6 +30,13 @@ interface BlobState {
     lastRecordTimestamp?: string;
     lastRecordSummary?: string;
   };
+  vectorizeMemory?: {
+    lastUpsertAt?: string;
+    lastUpsertOk?: boolean;
+    lastUpsertError?: string;
+    lastQueryAt?: string;
+    lastQueryCount?: number;
+  };
 }
 
 const DEFAULT_CATALOG: Record<string, { name: string; description: string; maxTokens: number }> = {
@@ -300,6 +307,32 @@ export class AgentDO {
       };
       await this.save();
       return json({ saved: true, learnedMemory: this.data.learnedMemory });
+    }
+
+    if (url.pathname === "/memory/vectorize/status" && request.method === "GET") {
+      return json({
+        lastUpsertAt: this.data.vectorizeMemory?.lastUpsertAt ?? null,
+        lastUpsertOk: this.data.vectorizeMemory?.lastUpsertOk ?? null,
+        lastUpsertError: this.data.vectorizeMemory?.lastUpsertError ?? null,
+        lastQueryAt: this.data.vectorizeMemory?.lastQueryAt ?? null,
+        lastQueryCount: this.data.vectorizeMemory?.lastQueryCount ?? 0,
+      });
+    }
+
+    if (url.pathname === "/memory/vectorize/status" && request.method === "POST") {
+      const body = (await request.json()) as {
+        lastUpsertAt?: string;
+        lastUpsertOk?: boolean;
+        lastUpsertError?: string;
+        lastQueryAt?: string;
+        lastQueryCount?: number;
+      };
+      this.data.vectorizeMemory = {
+        ...(this.data.vectorizeMemory ?? {}),
+        ...body,
+      };
+      await this.save();
+      return json({ saved: true, vectorizeMemory: this.data.vectorizeMemory });
     }
 
     if (url.pathname === "/events/check" && request.method === "POST") {

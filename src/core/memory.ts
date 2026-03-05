@@ -2,6 +2,16 @@ import type { Env } from "./types";
 
 const BLOB_ID = "blob";
 const LEARNED_FILE_PATH = "/workspace/blob_state/learned.jsonl";
+const EMBEDDING_MODEL = "@cf/baai/bge-small-en-v1.5";
+
+export interface SemanticMemoryMatch {
+  id: string;
+  score: number;
+  conversationKey?: string;
+  r2Key?: string;
+  snippet?: string;
+  timestamp?: string;
+}
 
 export interface LearnedRecord {
   timestamp: string;
@@ -151,5 +161,139 @@ export async function getLearnedMemoryStatus(env: Env): Promise<{ lastFlushAt: s
     };
   } catch {
     return { lastFlushAt: null, lastFlushCount: 0 };
+  }
+}
+
+export async function embedText(env: Env, text: string): Promise<number[] | null> {
+  if (!env.AI) return null;
+  const response = await env.AI.run(EMBEDDING_MODEL, { text }) as { data?: number[][] };
+  return response.data?.[0] ?? null;
+}
+
+export function buildVectorId(conversationKey: string, timestamp: string): string {
+  return `conv:${conversationKey}:${timestamp}`;
+}
+
+export async function upsertSemanticMemory(env: Env, params: {
+  conversationKey: string;
+  record: LearnedRecord;
+  r2Key: string;
+}): Promise<{ ok: boolean; id?: string; error?: string }> {
+  if (!env.PI_VECTORS) {
+    return { ok: false, error: "PI_VECTORS binding missing" };
+  }
+  const vector = await embedText(env, `${params.record.summary}\n${params.record.tags.join(" ")}`);
+  if (!vector) {
+    return { ok: false, error: "embedding generation failed" };
+  }
+  const id = buildVectorId(params.conversationKey, params.record.timestamp);
+  await env.PI_VECTORS.upsert([
+    {
+      id,
+      values: vector,
+      metadata: {
+        conversationKey: params.conversationKey,
+        r2Key: params.r2Key,
+        snippet: params.record.summary.slice(0, 240),
+        timestamp: params.record.timestamp,
+      },
+    },
+  ]);
+  return { ok: true, id };
+}
+
+export async function querySemanticMemory(env: Env, params: {
+  conversationKey: string;
+  query: string;
+  topK?: number;
+}): Promise<SemanticMemoryMatch[]> {
+  if (!env.PI_VECTORS) return [];
+  const vector = await embedText(env, params.query);
+  if (!vector) return [];
+  const result = await env.PI_VECTORS.query(vector, {
+    topK: params.topK ?? 5,
+    returnMetadata: "all",
+    filter: { conversationKey: params.conversationKey },
+  });
+
+  return (result.matches ?? []).map((match) => {
+    const metadata = (match.metadata ?? {}) as Record<string, unknown>;
+    return {
+      id: String(match.id),
+      score: Number(match.score ?? 0),
+      conversationKey: typeof metadata.conversationKey === "string" ? metadata.conversationKey : undefined,
+      r2Key: typeof metadata.r2Key === "string" ? metadata.r2Key : undefined,
+      snippet: typeof metadata.snippet === "string" ? metadata.snippet : undefined,
+      timestamp: typeof metadata.timestamp === "string" ? metadata.timestamp : undefined,
+    };
+  });
+}
+
+export async function buildSemanticMemoryContext(env: Env, matches: SemanticMemoryMatch[], maxChars = 1200): Promise<string> {
+  const lines: string[] = [];
+  let total = 0;
+  for (const match of matches) {
+    let snippet = match.snippet ?? "";
+    if (!snippet && match.r2Key) {
+      const obj = await env.REPO_STORE.get(match.r2Key);
+      if (obj) {
+        const firstLine = (await obj.text()).split("\n").find((line) => line.trim().length > 0) ?? "";
+        snippet = firstLine.slice(0, 240);
+      }
+    }
+    if (!snippet) continue;
+    const line = `- ${snippet}`;
+    if (total + line.length > maxChars) break;
+    lines.push(line);
+    total += line.length;
+  }
+
+  return lines.length > 0 ? `Relevant learned memory:\n${lines.join("\n")}` : "";
+}
+
+export async function updateVectorizeMemoryStatus(env: Env, payload: {
+  lastUpsertAt?: string;
+  lastUpsertOk?: boolean;
+  lastUpsertError?: string;
+  lastQueryAt?: string;
+  lastQueryCount?: number;
+}): Promise<void> {
+  try {
+    const do_ = await getAgentDO(env);
+    await do_.fetch("http://do/memory/vectorize/status", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    // best effort
+  }
+}
+
+export async function getVectorizeMemoryStatus(env: Env): Promise<{
+  lastUpsertAt: string | null;
+  lastUpsertOk: boolean | null;
+  lastUpsertError: string | null;
+  lastQueryAt: string | null;
+  lastQueryCount: number;
+}> {
+  try {
+    const do_ = await getAgentDO(env);
+    const res = await do_.fetch("http://do/memory/vectorize/status");
+    const data = await res.json() as {
+      lastUpsertAt: string | null;
+      lastUpsertOk: boolean | null;
+      lastUpsertError: string | null;
+      lastQueryAt: string | null;
+      lastQueryCount: number;
+    };
+    return data;
+  } catch {
+    return {
+      lastUpsertAt: null,
+      lastUpsertOk: null,
+      lastUpsertError: null,
+      lastQueryAt: null,
+      lastQueryCount: 0,
+    };
   }
 }

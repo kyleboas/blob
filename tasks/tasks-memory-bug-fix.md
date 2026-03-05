@@ -97,28 +97,28 @@ Update the file after completing each sub-task, not just after completing an ent
     - count since last flush (or last known count)
   - [x] 5.6 Add tests for learned record creation and DO metadata updates (mock R2 + DO fetch).
 
-- [ ] 6.0 Add Cloudflare Vectorize semantic memory (bindings + embeddings + upsert + query + context injection)
-  - [ ] 6.1 Add Vectorize binding to `wrangler.agent.toml`:
+- [x] 6.0 Add Cloudflare Vectorize semantic memory (bindings + embeddings + upsert + query + context injection)
+  - [x] 6.1 Add Vectorize binding to `wrangler.agent.toml`:
     - `[[vectorize]]`
     - `binding = "PI_VECTORS"`
     - `index_name = "<your-index-name>"`
-  - [ ] 6.2 Implement embedding helper using Workers AI (`env.AI.run` with an embedding-capable model) to convert text → vector.
-  - [ ] 6.3 Implement Vectorize upsert helper:
+  - [x] 6.2 Implement embedding helper using Workers AI (`env.AI.run` with an embedding-capable model) to convert text → vector.
+  - [x] 6.3 Implement Vectorize upsert helper:
     - Use a stable vector id scheme (e.g., `conv:<conversationKey>:<timestamp>`).
     - Store metadata that references the R2 key (do not store full content in Vectorize).
-  - [ ] 6.4 Implement Vectorize query helper:
+  - [x] 6.4 Implement Vectorize query helper:
     - Embed query text
     - Query Vectorize for top K results
     - Return metadata references (R2 keys + short snippet, if stored separately)
-  - [ ] 6.5 Decide what to inject into model context:
+  - [x] 6.5 Decide what to inject into model context:
     - Fetch referenced artifact(s) from R2 (or a stored snippet field) and inject only a capped amount.
-  - [ ] 6.6 Integrate semantic recall into request handling:
+  - [x] 6.6 Integrate semantic recall into request handling:
     - For normal chat/tool runs, query Vectorize using the user message and inject top-K relevant memory into the prompt/context builder.
     - Enforce caps (e.g., K=5, max chars total) to avoid context bloat.
-  - [ ] 6.7 Track Vectorize health metadata in DO state:
+  - [x] 6.7 Track Vectorize health metadata in DO state:
     - last upsert timestamp + success/failure
     - last query timestamp + result count
-  - [ ] 6.8 Add unit tests for embedding/upsert/query helpers using mocks for `env.AI` and `env.PI_VECTORS`.
+  - [x] 6.8 Add unit tests for embedding/upsert/query helpers using mocks for `env.AI` and `env.PI_VECTORS`.
 
 - [ ] 7.0 Extend `selftest` to validate R2 + Vectorize end-to-end
   - [ ] 7.1 Implement `selftest` command handler flow:

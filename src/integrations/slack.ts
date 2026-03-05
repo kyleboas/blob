@@ -6,7 +6,7 @@ import { PiAgent } from "../agent/pi-agent";
 import { deriveRoutingKey, verifySlackSignature } from "./slack-routing";
 import { createLogRef, logEvent } from "../core/observability";
 import { redactSecrets } from "../core/safety";
-import { getLearnedMemoryStatus } from "../core/memory";
+import { getLearnedMemoryStatus, getVectorizeMemoryStatus } from "../core/memory";
 
 const inFlightEvents = new Set<string>();
 
@@ -228,10 +228,16 @@ async function processSlackEvent(body: {
       if (keywordCommand === "status") {
         const verbosity = await getConversationVerbosity(conversationDO);
         const learned = await getLearnedMemoryStatus(env);
+        const vectorize = await getVectorizeMemoryStatus(env);
         const flushText = learned.lastFlushAt ? learned.lastFlushAt : "never";
+        const upsert = vectorize.lastUpsertOk === null
+          ? "unknown"
+          : vectorize.lastUpsertOk
+            ? "success"
+            : `failure (${vectorize.lastUpsertError ?? "error"})`;
         await postToSlack(
           channel,
-          `Status: ready. Current verbosity is ${verbosity}. Learned memory last flush: ${flushText}. Learned entries in last flush: ${learned.lastFlushCount}.`,
+          `Status: ready. Current verbosity is ${verbosity}. Learned memory last flush: ${flushText}. Learned entries in last flush: ${learned.lastFlushCount}. Vectorize upsert: ${upsert} at ${vectorize.lastUpsertAt ?? "never"}. Vectorize last query count: ${vectorize.lastQueryCount} at ${vectorize.lastQueryAt ?? "never"}.`,
           env,
         );
         return;
