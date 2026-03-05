@@ -136,14 +136,14 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 7.5 Ensure `selftest` output is concise in Minimal mode and includes step-by-step ledger in Verbose mode.
   - [x] 7.6 Add tests for selftest command routing and step sequencing (mock tool exec + R2 + Vectorize).
 
-- [ ] 8.0 Add tests, docs, and runbook updates
-  - [ ] 8.1 Update `docs/architecture.md` to reflect:
+- [x] 8.0 Add tests, docs, and runbook updates
+  - [x] 8.1 Update `docs/architecture.md` to reflect:
     - Slack keyword commands
     - verbosity settings
     - memory pipeline: R2 artifacts + Vectorize semantic index
-  - [ ] 8.2 Update `docs/runbook.md` with:
+  - [x] 8.2 Update `docs/runbook.md` with:
     - How to use `settings`, `status`, `selftest`
     - How to configure Vectorize binding and index name
     - Common failure modes (missing binding, embedding model errors, sandbox auth issues)
-  - [ ] 8.3 Add/confirm unit tests run in CI (ensure test command includes new tests).
-  - [ ] 8.4 Add a short “smoke test” checklist to docs for manual validation in Slack.
+  - [x] 8.3 Add/confirm unit tests run in CI (ensure test command includes new tests).
+  - [x] 8.4 Add a short “smoke test” checklist to docs for manual validation in Slack.

@@ -1,4 +1,4 @@
-# Pi Autonomy Architecture (Phase 1)
+# Pi Autonomy Architecture (Phase 8)
 
 ## Canonical request flow
 
@@ -8,8 +8,28 @@
 4. DO persists/updates job state and enqueues work.
 5. Job execution runs in sandbox-backed Pi loop with tools: `read`, `write`, `edit`, `bash`.
 6. Model loop iterates tool calls and reasoning until completion/stop conditions.
-7. Worker posts progress and final summary back to Slack.
-8. State + memory are persisted and indexed for future recall.
+7. Worker posts progress/final summary to Slack according to conversation verbosity.
+8. State + memory artifacts are persisted in R2 and semantically indexed in Vectorize.
+
+## Slack keyword command surface
+
+Exact, case-insensitive keyword commands are intercepted before normal chat handling:
+
+- `settings` → returns current verbosity and how to change it.
+- `set minimal` / `set verbose` → updates per-conversation verbosity in Durable Object state.
+- `status` → reports sandbox/repo state, recent tool ledger, R2 memory flush info, and Vectorize health.
+- `selftest` → runs an end-to-end validation flow for bootstrap, tools, R2 persistence, and Vectorize queryability.
+
+Commands only trigger on exact text matches (trimmed), so messages like `status please` are treated as normal chat.
+
+## Verbosity model
+
+Durable Object state stores `verbosity` with allowed values:
+
+- `minimal` (default): only lightweight acknowledgement (if needed) and final response.
+- `verbose`: emits one-line tool ledger entries including tool name, success/failure, and duration; includes short failure excerpts.
+
+Verbosity is conversation-scoped and survives Worker/DO restarts.
 
 ## Deterministic DO keying rules
 
@@ -21,17 +41,6 @@ Use exactly one key strategy per inbound message:
 
 This ensures deterministic routing, strong conversation isolation, and resumability.
 
-## Thread-to-channel migration behavior
-
-**Chosen approach: copy-on-first-thread-message.**
-
-When a thread starts from a top-level message, initialize thread state by copying relevant channel-level context once, then treat the thread as isolated state.
-
-Rationale:
-- Predictable context snapshot at thread creation.
-- Avoid repeated lazy reads from channel state.
-- Better auditability for thread-specific execution and memory.
-
 ## Tool surface (strict)
 
 Only these tools are exposed to autonomous execution:
@@ -41,7 +50,32 @@ Only these tools are exposed to autonomous execution:
 - `edit(path, oldText, newText)`
 - `bash(command)`
 
-No additional pseudo-tools or HTTP-template tools are part of the canonical surface.
+## Memory architecture (R2 + Vectorize)
+
+Memory pipeline:
+
+1. Workspace-local ephemeral state accumulates learned entries during execution.
+2. End-of-job (or scheduled) flush writes learned artifacts to R2 as the source of truth.
+3. Embeddings are generated with Workers AI for memory text.
+4. Vectorize stores lightweight semantic references (ID + metadata such as R2 key, timestamp, conversation key, tags).
+5. Query-time recall fetches top-K Vectorize hits and injects bounded semantic context into prompts.
+
+Constraints:
+
+- Full memory content remains in R2 artifacts.
+- Vectorize stores references/metadata only.
+- Semantic injection is capped (for example top K and max characters) to avoid context bloat.
+
+## Self-test architecture path
+
+`selftest` validates the full path with safe operations:
+
+1. Repo bootstrap (`/workspace/<repoDir>` exists; clone/update as needed).
+2. Tool checks (`read`, `write`, `edit`, `bash`) using `.blob/selftest.txt` only.
+3. Learned record creation and R2 persistence verification.
+4. Embedding generation and Vectorize upsert.
+5. Vectorize query for inserted semantic term and hit verification.
+6. Concise pass/fail response (plus step-by-step details in verbose mode).
 
 ## Scheduling model
 
@@ -49,38 +83,6 @@ Two-tier scheduling:
 
 1. **DO alarm heartbeat** every 10 minutes for interactive/autonomous job lifecycle work.
 2. **Wrangler cron triggers** for heavy periodic maintenance tasks.
-
-Heartbeat responsibilities:
-- Resume paused jobs with remaining budget.
-- Start queued jobs oldest-first.
-- Respect per-heartbeat model call limits.
-- Defer heavy jobs exceeding cycle budget.
-- Emit daily summary once after UTC midnight (if enabled).
-
-## Memory architecture
-
-Memory pipeline:
-
-1. Workspace-local ephemeral state (`/workspace/blob_state/log.jsonl`, `context.jsonl`).
-2. R2 as source of truth for durable memory artifacts.
-3. Vectorize as semantic index referencing R2 items.
-4. Daily learned flush to JSONL + upload to R2.
-5. Compaction/reconciliation jobs to control growth and quality.
-
-Constraint: full content remains in R2; Vectorize metadata stores lightweight references only.
-
-## Cost control model
-
-Apply layered safeguards (env-configurable):
-
-- Per-job token budget.
-- Per-heartbeat model call limit.
-- Daily aggregate token ceiling.
-
-Enforcement outcomes:
-- Exhausted budget → pause/defer job.
-- Daily ceiling breach → skip non-critical work and notify.
-- Logs emit usage for audit and tuning.
 
 ## Architecture diagram
 
@@ -90,33 +92,14 @@ flowchart TD
   B --> C[Signature verify + 3s ack]
   C --> D[Derive DO key]
   D --> E[Conversation DO]
-  E --> F[Job queue + lifecycle state]
+  E --> F[Job queue + lifecycle state\nverbosity + tool ledger]
   F --> G[Heartbeat alarm\n10-min cadence]
   G --> H[Pi model/tool loop]
   H --> I[Sandbox tools\nread/write/edit/bash]
-  H --> J[Slack progress/final posts]
-  H --> K[Workspace state JSONL]
-  K --> L[R2 durable memory]
-  L --> M[Vectorize index]
-  L --> N[Daily learned JSONL]
-  N --> O[Compaction/Reconciliation cron]
+  H --> J[Slack progress/final posts\nMinimal vs Verbose]
+  H --> K[Learned memory staging]
+  K --> L[R2 durable artifacts]
+  L --> M[Workers AI embeddings]
+  M --> N[Vectorize semantic index\nmetadata refs to R2]
+  N --> O[Top-K semantic recall injection]
 ```
-
-## Happy-path walkthrough
-
-1. User posts a threaded Slack request to modify a repo file.
-2. Worker validates signature and immediately ACKs.
-3. Worker computes key `team:channel:thread_ts` and routes to DO.
-4. DO creates/updates a queued job with resume state.
-5. Heartbeat picks the job, provisions/reuses sandbox.
-6. Pi loop reads target file, edits code, validates with `bash` command.
-7. Job reaches completion condition and persists final outputs.
-8. Worker posts completion summary (and PR/deploy status when enabled).
-9. Memory artifacts are appended to workspace logs, flushed to R2, and indexed.
-
-## Runtime boundaries
-
-- Worker handles ingress/egress, routing, and lightweight orchestration.
-- DO is authoritative for job state transitions and heartbeat ownership.
-- Sandbox executes filesystem/shell operations only via four tools.
-- Cron handles heavy maintenance outside interactive loops.
