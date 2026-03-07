@@ -3,6 +3,7 @@ import { AgentDO } from "./agent/do";
 import { handleSlackEvent } from "./integrations/slack";
 import { dispatchCronTask } from "./jobs/cron-jobs";
 import { createLogRef, logEvent } from "./core/observability";
+import { getRuntimeControls } from "./core/runtime-controls";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -34,6 +35,14 @@ export default {
     logEvent(env, "cron_runs", "scheduled_trigger", { cron });
 
     try {
+      const controls = await getRuntimeControls(env);
+      if (controls.paused) {
+        logEvent(env, "cron_runs", "scheduled_skipped_paused", {
+          cron,
+          reason: controls.reason || "paused via config/runtime-controls.json",
+        });
+        return;
+      }
       const cronOutcome = await dispatchCronTask(cron, env);
       if (cronOutcome) {
         logEvent(env, "cron_runs", "scheduled_outcome", { cron, ...cronOutcome });

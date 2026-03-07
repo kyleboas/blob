@@ -241,3 +241,37 @@ test("selftest command runs full workflow and posts result", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+
+test("chat requests are paused when runtime controls file sets paused", async () => {
+  const { env, posts } = makeEnv();
+  await env.REPO_STORE.put("config/runtime-controls.json", JSON.stringify({ paused: true, reason: "maintenance window" }));
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes("slack.com/api/chat.postMessage")) {
+      const body = JSON.parse(String(init?.body)) as { text: string };
+      posts.push(body.text);
+      return Response.json({ ok: true });
+    }
+    return new Response("unexpected", { status: 500 });
+  }) as typeof fetch;
+
+  try {
+    const req = new Request("https://example.com/slack/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "event_callback",
+        event_id: "E-paused",
+        team_id: "T1",
+        event: { type: "message", text: "fix this bug", channel: "C1", ts: "4" },
+      }),
+    });
+
+    await handleSlackEvent(req, env);
+    assert.match(posts[0], /Blob is currently paused/i);
+    assert.match(posts[0], /maintenance window/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

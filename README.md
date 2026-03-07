@@ -60,6 +60,7 @@ Operational controls:
 - `DAILY_TOKEN_CEILING` — daily aggregate cap.
 - `CRON_FAIL_THRESHOLD` — alert threshold for consecutive cron failures.
 - `CRON_STALL_MULTIPLIER` — expected cadence multiplier for stall detection.
+- `config/runtime-controls.json` in GitHub — set `"paused": true` to pause cron and Slack task execution without redeploying.
 
 ## Slack configuration
 
