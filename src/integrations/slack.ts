@@ -7,6 +7,7 @@ import { deriveRoutingKey, verifySlackSignature } from "./slack-routing";
 import { createLogRef, logEvent } from "../core/observability";
 import { redactSecrets } from "../core/safety";
 import { getLearnedMemoryStatus, getVectorizeMemoryStatus } from "../core/memory";
+import { getRuntimeControls } from "../core/runtime-controls";
 
 const inFlightEvents = new Set<string>();
 
@@ -240,6 +241,7 @@ async function processSlackEvent(body: {
 
     const key = deriveRoutingKey(body);
     const conversationDO = env.AGENT_DO ? env.AGENT_DO.get(env.AGENT_DO.idFromName(key)) : null;
+    const runtimeControls = await getRuntimeControls(env);
     const keywordCommand = getExactKeywordCommand(originalText);
     if (keywordCommand) {
       if (keywordCommand === "settings") {
@@ -295,6 +297,12 @@ async function processSlackEvent(body: {
     }
 
     const intent = await classifyIntent(originalText, env);
+
+    if (runtimeControls.paused) {
+      const reasonText = runtimeControls.reason ? ` Reason: ${runtimeControls.reason}` : "";
+      await postToSlack(channel, `⏸️ Blob is currently paused via config/runtime-controls.json.${reasonText}`, env);
+      return;
+    }
 
     if (intent.intent === "list_cron") {
       const jobs = await getCronJobs(env);

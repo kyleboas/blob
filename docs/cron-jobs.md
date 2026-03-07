@@ -21,6 +21,19 @@ Configured crons are declared in `wrangler.agent.toml`.
 3. Remove stale tests/fixtures.
 4. Deploy agent worker.
 
+## Pause control
+
+Blob supports a GitHub-managed runtime toggle in `config/runtime-controls.json`:
+
+```json
+{
+  "paused": true,
+  "reason": "optional note shown in logs and Slack"
+}
+```
+
+When `paused` is `true`, scheduled cron dispatch is skipped.
+
 ## Scan target configuration
 
 Scan targets are data-configured in R2 using `config/scan-targets.json`.
