@@ -105,6 +105,21 @@ export class AgentDO {
       )
     `);
 
+    this.state.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at INTEGER NOT NULL,
+        author TEXT,
+        sitename TEXT,
+        ext TEXT,
+        message TEXT NOT NULL DEFAULT ''
+      )
+    `);
+
+    this.ensureColumn("logs", "author", "TEXT");
+    this.ensureColumn("logs", "sitename", "TEXT");
+    this.ensureColumn("logs", "ext", "TEXT");
+
     const existingAlarm = await this.state.storage.getAlarm();
     if (!existingAlarm) {
       await this.state.storage.setAlarm(Date.now() + 10 * 60 * 1000);
@@ -461,6 +476,14 @@ export class AgentDO {
 
   private async save(): Promise<void> {
     await this.state.storage.put("data", this.data);
+  }
+
+  private ensureColumn(table: string, column: string, typeDefinition: string): void {
+    const tableInfo = this.state.storage.sql.exec(`PRAGMA table_info(${table})`).toArray();
+    const hasColumn = tableInfo.some((row) => String(row.name) === column);
+    if (!hasColumn) {
+      this.state.storage.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeDefinition}`);
+    }
   }
 
 
