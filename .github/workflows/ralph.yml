@@ -4,7 +4,7 @@
 # Trigger from iPhone: GitHub app → Actions → "PRD Agent" → Run workflow
 #
 # Required secrets:
-#   CF_GATEWAY_URL   -- Cloudflare AI Gateway base URL
+#   CF_GATEWAY_URL   -- Cloudflare AI Gateway Workers AI chat URL
 #   CF_GATEWAY_TOKEN -- Cloudflare AI Gateway token
 
 name: Ralph
@@ -107,28 +107,8 @@ jobs:
           const DRY_RUN = process.env.DRY_RUN === "true";
           const PARENT_TASK = process.env.PARENT_TASK || "1";
 
-          function buildGatewayUrl(rawUrl, model) {
-            const base = (rawUrl || "").replace(/\/$/, "");
-            if (!base) throw new Error("CF_GATEWAY_URL is not set");
-
-            if (base.endsWith("/chat/completions")) return base;
-
-            // Workers AI models (@cf/*) require the workers-ai provider path.
-            // Other models use the openai-compatible provider path.
-            const isWorkersAI = (model || "").startsWith("@cf/");
-
-            if (isWorkersAI) {
-              if (/\/workers-ai(?:\/v1)?$/.test(base)) return `${base.replace(/\/v1$/, "")}/v1/chat/completions`;
-              if (/\/workers-ai\//.test(base)) return `${base}/chat/completions`;
-              return `${base}/workers-ai/v1/chat/completions`;
-            } else {
-              if (base.endsWith("/openai")) return `${base}/chat/completions`;
-              if (/\/openai(?:\/|$)/.test(base)) return `${base}/chat/completions`;
-              return `${base}/openai/chat/completions`;
-            }
-          }
-
-          const API_URL = buildGatewayUrl(CF_GATEWAY_URL, MODEL);
+          if (!CF_GATEWAY_URL) throw new Error("CF_GATEWAY_URL is not set");
+          const API_URL = CF_GATEWAY_URL;
 
           function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
