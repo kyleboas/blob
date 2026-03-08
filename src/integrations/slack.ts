@@ -73,11 +73,14 @@ const TOKEN_PATTERNS = [
   /^([A-Z][A-Z0-9_]{2,}(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL))\s*[=:]\s*(\S{8,})$/,
 ];
 
+function globalDO(env: Env): DurableObjectStub | null {
+  return env.AGENT_DO ? env.AGENT_DO.get(env.AGENT_DO.idFromName("blob")) : null;
+}
+
 async function detectAndStoreSecret(
   text: string,
   _channel: string,
   env: Env,
-  conversationDO: DurableObjectStub | null,
 ): Promise<{ message: string } | null> {
   const trimmed = text.trim();
 
@@ -86,9 +89,10 @@ async function detectAndStoreSecret(
     if (match) {
       const [, name, value] = match;
       if (!name || !value || value.length < 8) continue;
-      if (!conversationDO) return null;
+      const do_ = globalDO(env);
+      if (!do_) return null;
 
-      await conversationDO.fetch("http://do/secrets", {
+      await do_.fetch("http://do/secrets", {
         method: "POST",
         body: JSON.stringify({ name, value }),
       });
@@ -313,11 +317,12 @@ async function processSlackEvent(body: {
         return;
       }
       if (keywordCommand === "secrets") {
-        if (!conversationDO) {
+        const do_ = globalDO(env);
+        if (!do_) {
           await postToSlack(channel, "No secrets stored.", env);
           return;
         }
-        const res = await conversationDO.fetch("http://do/secrets");
+        const res = await do_.fetch("http://do/secrets");
         const { secrets } = await res.json() as { secrets: string[] };
         if (secrets.length === 0) {
           await postToSlack(channel, "No secrets stored. Paste a token like:\nGOOGLE_TOKEN=your-token-here", env);
@@ -348,18 +353,21 @@ async function processSlackEvent(body: {
 
     // Detect "delete secret MY_TOKEN_NAME"
     const deleteSecretMatch = originalText.trim().match(/^delete secret ([A-Z][A-Z0-9_]{2,})$/i);
-    if (deleteSecretMatch && conversationDO) {
-      const name = deleteSecretMatch[1].toUpperCase();
-      await conversationDO.fetch("http://do/secrets/delete", {
-        method: "POST",
-        body: JSON.stringify({ name }),
-      });
-      await postToSlack(channel, `Deleted ${name}.`, env);
-      return;
+    if (deleteSecretMatch) {
+      const do_ = globalDO(env);
+      if (do_) {
+        const name = deleteSecretMatch[1].toUpperCase();
+        await do_.fetch("http://do/secrets/delete", {
+          method: "POST",
+          body: JSON.stringify({ name }),
+        });
+        await postToSlack(channel, `Deleted ${name}.`, env);
+        return;
+      }
     }
 
     // Detect token/secret being provided and store it securely
-    const secretStore = await detectAndStoreSecret(originalText, channel, env, conversationDO);
+    const secretStore = await detectAndStoreSecret(originalText, channel, env);
     if (secretStore) {
       await postToSlack(channel, secretStore.message, env);
       return;
