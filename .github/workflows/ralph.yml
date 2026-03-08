@@ -107,23 +107,28 @@ jobs:
           const DRY_RUN = process.env.DRY_RUN === "true";
           const PARENT_TASK = process.env.PARENT_TASK || "1";
 
-          function buildGatewayUrl(rawUrl) {
+          function buildGatewayUrl(rawUrl, model) {
             const base = (rawUrl || "").replace(/\/$/, "");
             if (!base) throw new Error("CF_GATEWAY_URL is not set");
 
             if (base.endsWith("/chat/completions")) return base;
-            if (base.endsWith("/openai")) return `${base}/chat/completions`;
 
-            const hasProviderPath = /\/(openai|workers-ai)(?:\/|$)/.test(base);
-            if (hasProviderPath) return `${base}/chat/completions`;
+            // Workers AI models (@cf/*) require the workers-ai provider path.
+            // Other models use the openai-compatible provider path.
+            const isWorkersAI = (model || "").startsWith("@cf/");
 
-            // Cloudflare AI Gateway requires a provider path.
-            // Default to OpenAI-compatible route so Workers AI models such as
-            // @cf/meta/llama-3.3-70b-instruct-fp8-fast are accepted.
-            return `${base}/openai/chat/completions`;
+            if (isWorkersAI) {
+              if (/\/workers-ai(?:\/v1)?$/.test(base)) return `${base.replace(/\/v1$/, "")}/v1/chat/completions`;
+              if (/\/workers-ai\//.test(base)) return `${base}/chat/completions`;
+              return `${base}/workers-ai/v1/chat/completions`;
+            } else {
+              if (base.endsWith("/openai")) return `${base}/chat/completions`;
+              if (/\/openai(?:\/|$)/.test(base)) return `${base}/chat/completions`;
+              return `${base}/openai/chat/completions`;
+            }
           }
 
-          const API_URL = buildGatewayUrl(CF_GATEWAY_URL);
+          const API_URL = buildGatewayUrl(CF_GATEWAY_URL, MODEL);
 
           function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
