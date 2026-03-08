@@ -23,6 +23,8 @@ interface BlobState {
   cronOutcomes?: Record<string, CronOutcomeRecord>;
   settings?: {
     verbosity?: "minimal" | "verbose";
+    heartbeatIntervalMs?: number;
+    heartbeatModelCallLimit?: number;
   };
   learnedMemory?: {
     lastFlushAt?: string;
@@ -72,6 +74,13 @@ export class AgentDO {
   constructor(state: DurableObjectState, env: { SLACK_BOT_TOKEN?: string; SLACK_SUMMARY_CHANNEL?: string; REPO_STORE?: R2Bucket; CRON_FAIL_THRESHOLD?: string; CRON_STALL_MULTIPLIER?: string; HEARTBEAT_MODEL_CALL_LIMIT?: string; HEARTBEAT_INTERVAL_MS?: string; AGENT_DO?: DurableObjectNamespace }) {
     this.state = state;
     this.env = env;
+  }
+
+  private getEffectiveHeartbeatConfig(): { intervalMs: number; modelCallLimit: number } {
+    return {
+      intervalMs: this.data.settings?.heartbeatIntervalMs ?? Number(this.env.HEARTBEAT_INTERVAL_MS || "600000"),
+      modelCallLimit: this.data.settings?.heartbeatModelCallLimit ?? Number(this.env.HEARTBEAT_MODEL_CALL_LIMIT || "10"),
+    };
   }
 
   private async init(): Promise<void> {
@@ -131,7 +140,7 @@ export class AgentDO {
 
     const existingAlarm = await this.state.storage.getAlarm();
     if (!existingAlarm) {
-      const intervalMs = Number(this.env.HEARTBEAT_INTERVAL_MS || "600000");
+      const { intervalMs } = this.getEffectiveHeartbeatConfig();
       await this.state.storage.setAlarm(Date.now() + intervalMs);
     }
 
@@ -143,7 +152,7 @@ export class AgentDO {
     const startedAt = new Date().toISOString();
     this.data.heartbeat = { ...(this.data.heartbeat ?? {}), lastStartedAt: startedAt };
     logEvent(this.env, "heartbeat", "alarm_start");
-    const maxCalls = Number(this.env.HEARTBEAT_MODEL_CALL_LIMIT || "10");
+    const { intervalMs, modelCallLimit: maxCalls } = this.getEffectiveHeartbeatConfig();
     const now = Date.now();
     let callsRemaining = maxCalls;
 
@@ -194,7 +203,6 @@ export class AgentDO {
     };
     await this.save();
 
-    const intervalMs = Number(this.env.HEARTBEAT_INTERVAL_MS || "600000");
     logEvent(this.env, "heartbeat", "alarm_complete", { callsRemaining, intervalMs, maxCalls });
     await this.state.storage.setAlarm(Date.now() + intervalMs);
   }
@@ -325,6 +333,32 @@ export class AgentDO {
       return json({ saved: true, verbosity });
     }
 
+    if (url.pathname === "/settings/heartbeat" && request.method === "GET") {
+      const config = this.getEffectiveHeartbeatConfig();
+      return json({
+        intervalMs: config.intervalMs,
+        modelCallLimit: config.modelCallLimit,
+        source: {
+          intervalMs: this.data.settings?.heartbeatIntervalMs !== undefined ? "stored" : "env",
+          modelCallLimit: this.data.settings?.heartbeatModelCallLimit !== undefined ? "stored" : "env",
+        },
+      });
+    }
+
+    if (url.pathname === "/settings/heartbeat" && request.method === "POST") {
+      const body = (await request.json()) as { intervalMs?: number; modelCallLimit?: number };
+      const update: { heartbeatIntervalMs?: number; heartbeatModelCallLimit?: number } = {};
+      if (typeof body.intervalMs === "number" && body.intervalMs > 0) {
+        update.heartbeatIntervalMs = body.intervalMs;
+      }
+      if (typeof body.modelCallLimit === "number" && body.modelCallLimit > 0) {
+        update.heartbeatModelCallLimit = body.modelCallLimit;
+      }
+      this.data.settings = { ...(this.data.settings ?? {}), ...update };
+      await this.save();
+      return json({ saved: true, ...this.getEffectiveHeartbeatConfig() });
+    }
+
     if (url.pathname === "/memory/learned/status" && request.method === "GET") {
       return json({
         lastFlushAt: this.data.learnedMemory?.lastFlushAt ?? null,
@@ -397,10 +431,7 @@ export class AgentDO {
         lastCompletedAt: this.data.heartbeat?.lastCompletedAt ?? null,
         callsRemaining: this.data.heartbeat?.callsRemaining ?? null,
         jobs: jobCounts,
-        config: {
-          intervalMs: Number(this.env.HEARTBEAT_INTERVAL_MS || "600000"),
-          modelCallLimit: Number(this.env.HEARTBEAT_MODEL_CALL_LIMIT || "10"),
-        },
+        config: this.getEffectiveHeartbeatConfig(),
       });
     }
 

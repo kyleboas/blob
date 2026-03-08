@@ -21,9 +21,9 @@ interface IntentResult {
 
 type Verbosity = "minimal" | "verbose";
 
-function getExactKeywordCommand(text: string): "settings" | "status" | "selftest" | "set minimal" | "set verbose" | "secrets" | null {
+function getExactKeywordCommand(text: string): "settings" | "status" | "selftest" | "set minimal" | "set verbose" | "secrets" | "heartbeat config" | null {
   const normalized = text.trim().toLowerCase();
-  if (["settings", "status", "selftest", "set minimal", "set verbose", "secrets"].includes(normalized)) {
+  if (["settings", "status", "selftest", "set minimal", "set verbose", "secrets", "heartbeat config"].includes(normalized)) {
     return normalized as ReturnType<typeof getExactKeywordCommand>;
   }
   return null;
@@ -127,6 +127,68 @@ async function setConversationVerbosity(conversationDO: DurableObjectStub | null
   } catch {
     return verbosity;
   }
+}
+
+async function getHeartbeatConfig(conversationDO: DurableObjectStub | null): Promise<{ intervalMs: number; modelCallLimit: number }> {
+  if (!conversationDO) return { intervalMs: 600000, modelCallLimit: 10 };
+  try {
+    const res = await conversationDO.fetch("http://do/settings/heartbeat");
+    const data = await res.json() as { intervalMs?: number; modelCallLimit?: number };
+    return { intervalMs: data.intervalMs ?? 600000, modelCallLimit: data.modelCallLimit ?? 10 };
+  } catch {
+    return { intervalMs: 600000, modelCallLimit: 10 };
+  }
+}
+
+async function setHeartbeatConfig(conversationDO: DurableObjectStub | null, config: { intervalMs?: number; modelCallLimit?: number }): Promise<boolean> {
+  if (!conversationDO) return false;
+  try {
+    const res = await conversationDO.fetch("http://do/settings/heartbeat", {
+      method: "POST",
+      body: JSON.stringify(config),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+function mightBeHeartbeatConfig(text: string): boolean {
+  const t = text.toLowerCase();
+  if (!t.includes("heartbeat")) return false;
+  return /interval|every|\bcall|\blimit|\bminut|\bhour|\bsecond|\bfrequenc|configur|\bset\b|change|adjust/.test(t);
+}
+
+async function parseHeartbeatConfig(text: string, env: Env): Promise<{ intervalMs?: number; modelCallLimit?: number } | null> {
+  const prompt = `Extract heartbeat configuration changes from this message. Return JSON only.
+
+Fields (only include if explicitly specified):
+- intervalMs: interval in milliseconds. Examples: "every 5 minutes"=300000, "hourly"=3600000, "every 30 seconds"=30000, "every 15 minutes"=900000, "every 2 hours"=7200000
+- modelCallLimit: max model API calls per heartbeat cycle. Examples: "call limit 5"=5, "10 calls"=10, "limit to 3"=3
+
+Return {} if no config values found.
+Message: "${text}"`;
+  try {
+    const response = await callLLM([{ role: "user", content: prompt }], env, { maxTokens: 100 });
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]) as { intervalMs?: number; modelCallLimit?: number };
+      if (typeof parsed.intervalMs === "number" || typeof parsed.modelCallLimit === "number") {
+        return parsed;
+      }
+    }
+  } catch { /* fall through */ }
+  return null;
+}
+
+function formatHeartbeatInterval(ms: number): string {
+  if (ms < 60000) return `${Math.round(ms / 1000)} second${Math.round(ms / 1000) === 1 ? "" : "s"}`;
+  if (ms < 3600000) {
+    const mins = Math.round(ms / 60000);
+    return `${mins} minute${mins === 1 ? "" : "s"}`;
+  }
+  const hours = Math.round(ms / 3600000);
+  return `${hours} hour${hours === 1 ? "" : "s"}`;
 }
 
 async function getHeartbeatStatus(conversationDO: DurableObjectStub | null): Promise<{
@@ -285,9 +347,10 @@ async function processSlackEvent(body: {
     if (keywordCommand) {
       if (keywordCommand === "settings") {
         const verbosity = await getConversationVerbosity(conversationDO);
+        const hbConfig = await getHeartbeatConfig(conversationDO);
         await postToSlack(
           channel,
-          `Current mode: ${verbosity}. Use "set minimal" for concise updates or "set verbose" for tool-by-tool updates.`,
+          `Current mode: ${verbosity}. Use "set minimal" for concise updates or "set verbose" for tool-by-tool updates.\nHeartbeat: every ${formatHeartbeatInterval(hbConfig.intervalMs)}, call limit ${hbConfig.modelCallLimit}. Say e.g. "set heartbeat to every 5 minutes" or "set heartbeat call limit to 5" to change.`,
           env,
         );
         return;
@@ -332,6 +395,16 @@ async function processSlackEvent(body: {
         return;
       }
 
+      if (keywordCommand === "heartbeat config") {
+        const hbConfig = await getHeartbeatConfig(conversationDO);
+        await postToSlack(
+          channel,
+          `Heartbeat config: interval every ${formatHeartbeatInterval(hbConfig.intervalMs)}, call limit ${hbConfig.modelCallLimit}.\n\nTo change, just say it in plain English:\n• "set heartbeat to every 5 minutes"\n• "set heartbeat call limit to 5"\n• "heartbeat every hour"\n• "reduce heartbeat calls to 3"`,
+          env,
+        );
+        return;
+      }
+
       if (keywordCommand === "selftest") {
         const repos = await getRepos(env);
         const repo = repos[0] ?? "default";
@@ -371,6 +444,23 @@ async function processSlackEvent(body: {
     if (secretStore) {
       await postToSlack(channel, secretStore.message, env);
       return;
+    }
+
+    // Detect plain-English heartbeat configuration changes
+    if (mightBeHeartbeatConfig(originalText)) {
+      const heartbeatUpdate = await parseHeartbeatConfig(originalText, env);
+      if (heartbeatUpdate && (heartbeatUpdate.intervalMs !== undefined || heartbeatUpdate.modelCallLimit !== undefined)) {
+        await setHeartbeatConfig(conversationDO, heartbeatUpdate);
+        const parts: string[] = [];
+        if (heartbeatUpdate.intervalMs !== undefined) {
+          parts.push(`interval set to ${formatHeartbeatInterval(heartbeatUpdate.intervalMs)}`);
+        }
+        if (heartbeatUpdate.modelCallLimit !== undefined) {
+          parts.push(`call limit set to ${heartbeatUpdate.modelCallLimit}`);
+        }
+        await postToSlack(channel, `Got it — heartbeat ${parts.join(", ")}.`, env);
+        return;
+      }
     }
 
     const intent = await classifyIntent(originalText, env);
