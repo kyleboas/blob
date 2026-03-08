@@ -1,5 +1,3 @@
-# .github/workflows/prd.yml
-#
 # Provider-agnostic PRD agent. Runs any PRD/task from the /tasks directory
 # using a Cloudflare AI Gateway endpoint.
 #
@@ -9,7 +7,7 @@
 #   CF_GATEWAY_URL   -- Cloudflare AI Gateway base URL
 #   CF_GATEWAY_TOKEN -- Cloudflare AI Gateway token
 
-name: PRD Agent
+name: Ralph
 
 on:
   workflow_dispatch:
