@@ -6,8 +6,8 @@
 # Trigger from iPhone: GitHub app → Actions → "PRD Agent" → Run workflow
 #
 # Required secrets:
-#   AI_GATEWAY_BASE_URL -- Cloudflare AI Gateway base URL
-#   AI_GATEWAY_TOKEN    -- Cloudflare AI Gateway token
+#   CF_GATEWAY_URL   -- Cloudflare AI Gateway base URL
+#   CF_GATEWAY_TOKEN -- Cloudflare AI Gateway token
 
 name: PRD Agent
 
@@ -66,8 +66,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      AI_GATEWAY_BASE_URL: ${{ secrets.AI_GATEWAY_BASE_URL }}
-      AI_GATEWAY_TOKEN: ${{ secrets.AI_GATEWAY_TOKEN }}
+      CF_GATEWAY_URL: ${{ secrets.CF_GATEWAY_URL }}
+      CF_GATEWAY_TOKEN: ${{ secrets.CF_GATEWAY_TOKEN }}
       MODEL: ${{ inputs.model }}
       MAX_RETRIES: ${{ inputs.max_retries || '2' }}
       TASK_FILE: tasks/tasks-${{ inputs.prd }}.md
@@ -100,8 +100,8 @@ jobs:
           import { execSync } from "child_process";
           import { dirname } from "path";
 
-          const AI_GATEWAY_BASE_URL = process.env.AI_GATEWAY_BASE_URL;
-          const AI_GATEWAY_TOKEN = process.env.AI_GATEWAY_TOKEN;
+          const CF_GATEWAY_URL = process.env.CF_GATEWAY_URL;
+          const CF_GATEWAY_TOKEN = process.env.CF_GATEWAY_TOKEN;
           const MODEL = process.env.MODEL || "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
           const MAX_RETRIES = parseInt(process.env.MAX_RETRIES || "2");
           const TASK_FILE = process.env.TASK_FILE;
@@ -109,13 +109,13 @@ jobs:
           const DRY_RUN = process.env.DRY_RUN === "true";
           const PARENT_TASK = process.env.PARENT_TASK || "1";
 
-          const API_URL = AI_GATEWAY_BASE_URL;
+          const API_URL = CF_GATEWAY_URL;
 
           function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
           async function callLLM(messages, maxTokens = 4096) {
             const body = { model: MODEL, messages, max_tokens: maxTokens };
-            const headers = { "Content-Type": "application/json", Authorization: `Bearer ${AI_GATEWAY_TOKEN}` };
+            const headers = { "Content-Type": "application/json", Authorization: `Bearer ${CF_GATEWAY_TOKEN}` };
 
             for (let i = 0; i < 3; i++) {
               const res = await fetch(API_URL, { method: "POST", headers, body: JSON.stringify(body) });
