@@ -1,36 +1,38 @@
-# .github/workflows/blob-hardening.yml
+# .github/workflows/prd.yml
 #
-# Lightweight agent that implements hardening sub-tasks using Cloudflare Workers AI.
-# Runs Llama 3.3 70B via your existing Cloudflare account. ~$0.50-0.80 per full PRD.
+# Provider-agnostic PRD agent. Runs any PRD/task from the /tasks directory
+# using a Cloudflare AI Gateway endpoint.
 #
-# Trigger from iPhone: GitHub app → Actions → "Blob Hardening" → Run workflow
+# Trigger from iPhone: GitHub app → Actions → "PRD Agent" → Run workflow
 #
 # Required secrets:
-#   CF_ACCOUNT_ID       -- Cloudflare account ID
-#   CF_API_TOKEN        -- Cloudflare API token with Workers AI permission
-#
-# Optional secrets:
-#   AI_GATEWAY_BASE_URL -- Route through AI Gateway for caching/logging
+#   CF_GATEWAY_URL   -- Cloudflare AI Gateway base URL
+#   CF_GATEWAY_TOKEN -- Cloudflare AI Gateway token
 
-name: Blob Hardening
+name: PRD Agent
 
 on:
   workflow_dispatch:
     inputs:
-      parent_task:
-        description: "Parent task to run (1-7, or 'all')"
+      prd:
+        description: "PRD to run (name from tasks/ directory)"
         required: true
-        default: "1"
+        default: "assistant"
         type: choice
         options:
-          - "1"
-          - "2"
-          - "3"
-          - "4"
-          - "5"
-          - "6"
-          - "7"
-          - "all"
+          - "assistant"
+          - "memory-bug-fix"
+          - "pi-autonomy"
+      parent_task:
+        description: "Parent task number to run (e.g. 1, 5, 19), or 'all'"
+        required: true
+        default: "1"
+        type: string
+      branch:
+        description: "Branch to checkout and push commits to"
+        required: true
+        default: "main"
+        type: string
       model:
         description: "Model"
         required: true
@@ -60,23 +62,23 @@ permissions:
   contents: write
 
 jobs:
-  hardening:
+  agent:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      CF_GATEWAY_URL: ${{ secrets.CF_GATEWAY_URL }}
+      CF_GATEWAY_TOKEN: ${{ secrets.CF_GATEWAY_TOKEN }}
       MODEL: ${{ inputs.model }}
       MAX_RETRIES: ${{ inputs.max_retries || '2' }}
-      TASK_FILE: tasks/tasks-blob-hardening.md
-      PRD_FILE: tasks/prd-blob-hardening.md
+      TASK_FILE: tasks/tasks-${{ inputs.prd }}.md
+      PRD_FILE: tasks/prd-${{ inputs.prd }}.md
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: feature/blob-hardening
+          ref: ${{ inputs.branch }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -98,8 +100,8 @@ jobs:
           import { execSync } from "child_process";
           import { dirname } from "path";
 
-          const CF_ACCOUNT_ID = process.env.CF_ACCOUNT_ID;
-          const CF_API_TOKEN = process.env.CF_API_TOKEN;
+          const CF_GATEWAY_URL = process.env.CF_GATEWAY_URL;
+          const CF_GATEWAY_TOKEN = process.env.CF_GATEWAY_TOKEN;
           const MODEL = process.env.MODEL || "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
           const MAX_RETRIES = parseInt(process.env.MAX_RETRIES || "2");
           const TASK_FILE = process.env.TASK_FILE;
@@ -107,17 +109,13 @@ jobs:
           const DRY_RUN = process.env.DRY_RUN === "true";
           const PARENT_TASK = process.env.PARENT_TASK || "1";
 
-          const API_URL = process.env.AI_GATEWAY_BASE_URL
-            ? process.env.AI_GATEWAY_BASE_URL
-            : `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/${MODEL}`;
+          const API_URL = CF_GATEWAY_URL;
 
           function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
           async function callLLM(messages, maxTokens = 4096) {
-            const isGateway = !!process.env.AI_GATEWAY_BASE_URL;
-            const body = { messages, max_tokens: maxTokens };
-            if (isGateway) body.model = MODEL;
-            const headers = { "Content-Type": "application/json", Authorization: `Bearer ${CF_API_TOKEN}` };
+            const body = { model: MODEL, messages, max_tokens: maxTokens };
+            const headers = { "Content-Type": "application/json", Authorization: `Bearer ${CF_GATEWAY_TOKEN}` };
 
             for (let i = 0; i < 3; i++) {
               const res = await fetch(API_URL, { method: "POST", headers, body: JSON.stringify(body) });
@@ -315,7 +313,7 @@ jobs:
                 console.log(`  ✅ ${task.id} done`);
                 checkOff(task.id);
                 ok++;
-                if (!DRY_RUN) { sh("git add -A"); sh(`git commit -m "feat(hardening): ${task.id}"`); }
+                if (!DRY_RUN) { sh("git add -A"); sh(`git commit -m "feat(prd): ${task.id}"`); }
               } else {
                 console.log(`  ❌ ${task.id} failed`);
                 fail++;
@@ -334,18 +332,18 @@ jobs:
         env:
           PARENT_TASK: ${{ inputs.parent_task }}
           DRY_RUN: ${{ inputs.dry_run }}
-          AI_GATEWAY_BASE_URL: ${{ secrets.AI_GATEWAY_BASE_URL }}
         run: node /tmp/agent.mjs
 
       - name: Push
         if: inputs.dry_run != true
-        run: git push origin feature/blob-hardening || echo "Nothing to push"
+        run: git push origin ${{ inputs.branch }} || echo "Nothing to push"
 
       - name: Summary
         if: always()
         run: |
-          echo "## Task ${{ inputs.parent_task }} Results" >> $GITHUB_STEP_SUMMARY
+          echo "## PRD: ${{ inputs.prd }} — Task ${{ inputs.parent_task }} Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          TASK_FILE="tasks/tasks-${{ inputs.prd }}.md"
           if [ "${{ inputs.parent_task }}" = "all" ]; then
             DONE=$(grep -cE '^\s*- \[x\] [0-9]+\.[1-9]' "$TASK_FILE" || true)
             LEFT=$(grep -cE '^\s*- \[ \] [0-9]+\.[1-9]' "$TASK_FILE" || true)
@@ -355,4 +353,6 @@ jobs:
           fi
           echo "✅ Completed: $DONE" >> $GITHUB_STEP_SUMMARY
           echo "⬜ Remaining: $LEFT" >> $GITHUB_STEP_SUMMARY
+          echo "**PRD:** \`${{ inputs.prd }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Model:** \`${{ inputs.model }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** \`${{ inputs.branch }}\`" >> $GITHUB_STEP_SUMMARY
