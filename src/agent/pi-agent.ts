@@ -229,9 +229,36 @@ export class PiAgent {
 If the verification fails, read the error output carefully, fix the issues, and re-run verification. Repeat until all errors are resolved or you have exhausted your reasonable attempts. Never consider a task complete if verification is failing.`
       : `\n\nAfter making code changes, verify your work by running the project's test and type-check commands (e.g. npm test, tsc --noEmit, or whatever the project uses). If errors appear, read the output carefully, fix the issues, and re-run verification. Repeat until all errors are resolved. Never consider a task complete if verification is failing.`;
 
+    const toolFramework = `
+
+## Self-Tool-Creation Framework
+
+Your workspace includes a tool framework at /workspace/${this.repoDir}/.blob/:
+
+- /workspace/${this.repoDir}/.blob/tools/manifest.json — registry of all self-created tools
+- /workspace/${this.repoDir}/.blob/tools/ — directory of tool scripts you build
+- /workspace/${this.repoDir}/.blob/config/services.json — API endpoints and auth details for external services
+- /workspace/${this.repoDir}/.blob/memory/context.md — rolling context about the user (preferences, patterns, recurring tasks)
+- /workspace/${this.repoDir}/.blob/memory/journal.md — log of what you have done
+- /workspace/${this.repoDir}/.blob/scratch/ — temporary workspace for testing new tools before promoting them
+
+When you need a capability you don't have, BUILD it:
+
+1. read .blob/tools/manifest.json to check if you already built a tool for this task
+2. If a matching tool exists: read the tool file, bash to execute it
+3. If no matching tool exists: read .blob/config/services.json for API details, write a new script to .blob/scratch/, bash to test it, then write the working version to .blob/tools/ and edit .blob/tools/manifest.json to register it
+
+Before promoting a new tool, ALWAYS test it in .blob/scratch/ first.
+After each task, edit .blob/memory/journal.md with a brief log of what you did.
+When you learn something about the user, edit .blob/memory/context.md.
+
+If a tool script fails (non-zero exit or API error), read the error, edit the script to fix it, and re-run. After 3 failures, log the error to .blob/memory/journal.md and report that you are stuck.
+
+Reuse existing tools before rebuilding. Your .blob/tools/ directory is your growing skillset.`;
+
     return `You are a versatile assistant with access to a workspace at /workspace/${this.repoDir}.
 
-You have 4 tools — read, write, edit, bash — which together give you full capability to accomplish any task. The bash tool lets you run arbitrary commands: install packages, fetch URLs, run scripts, use git, compile code, query APIs, and anything else a Linux shell can do. Never say you cannot do something — figure out how to accomplish it with your tools.${verifyBlock}
+You have 4 tools — read, write, edit, bash — which together give you full capability to accomplish any task. The bash tool lets you run arbitrary commands: install packages, fetch URLs, run scripts, use git, compile code, query APIs, and anything else a Linux shell can do. Never say you cannot do something — figure out how to accomplish it with your tools.${toolFramework}${verifyBlock}
 
 When calling tools, output exactly:\nTOOL: <name>\nARG: <json>
 Stop when done and provide a concise summary.`;
@@ -263,9 +290,47 @@ Stop when done and provide a concise summary.`;
       throw new Error(`repo bootstrap failed (${this.repoDir}): ${excerpt}`);
     }
 
+    await this.ensureToolFramework(sandboxId);
+
     if (verbosity === "verbose" && onProgress) {
       await onProgress(`Bootstrap ready for /workspace/${this.repoDir}`);
     }
+  }
+
+  private async ensureToolFramework(sandboxId: string): Promise<void> {
+    const blobDir = `/workspace/${this.repoDir}/.blob`;
+    const initScript = `set -eu
+mkdir -p ${blobDir}/tools ${blobDir}/config ${blobDir}/memory ${blobDir}/scratch
+
+# Seed manifest.json if missing
+if [ ! -f ${blobDir}/tools/manifest.json ]; then
+  cat > ${blobDir}/tools/manifest.json << 'SEED'
+{"tools":[]}
+SEED
+fi
+
+# Seed services.json if missing
+if [ ! -f ${blobDir}/config/services.json ]; then
+  cat > ${blobDir}/config/services.json << 'SEED'
+{"services":{}}
+SEED
+fi
+
+# Seed context.md if missing
+if [ ! -f ${blobDir}/memory/context.md ]; then
+  cat > ${blobDir}/memory/context.md << 'SEED'
+# User Context
+SEED
+fi
+
+# Seed journal.md if missing
+if [ ! -f ${blobDir}/memory/journal.md ]; then
+  cat > ${blobDir}/memory/journal.md << 'SEED'
+# Journal
+SEED
+fi
+`;
+    await executeInSandbox(initScript, this.env, { sandboxId });
   }
 
   private async callLLM(): Promise<LLMResponse> {
