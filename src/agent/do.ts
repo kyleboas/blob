@@ -116,6 +116,15 @@ export class AgentDO {
       )
     `);
 
+    this.state.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS service_secrets (
+        name TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+
     this.ensureColumn("logs", "author", "TEXT");
     this.ensureColumn("logs", "sitename", "TEXT");
     this.ensureColumn("logs", "ext", "TEXT");
@@ -469,6 +478,51 @@ export class AgentDO {
       }
       this.state.storage.sql.exec("INSERT INTO daily_token_usage (date, total_tokens) VALUES (?, ?)", date, tokens);
       return json({ date, totalTokens: tokens });
+    }
+
+    if (url.pathname === "/secrets" && request.method === "GET") {
+      const rows = this.state.storage.sql.exec(
+        "SELECT name FROM service_secrets ORDER BY name ASC",
+      );
+      return json({ secrets: [...rows].map((r) => String(r.name)) });
+    }
+
+    if (url.pathname === "/secrets" && request.method === "POST") {
+      const { name, value } = (await request.json()) as { name: string; value: string };
+      if (!name || !value) return json({ error: "name and value required" }, 400);
+      const now = Date.now();
+      const existing = this.state.storage.sql.exec(
+        "SELECT name FROM service_secrets WHERE name=?", name,
+      ).toArray();
+      if (existing.length > 0) {
+        this.state.storage.sql.exec(
+          "UPDATE service_secrets SET value=?, updated_at=? WHERE name=?",
+          value, now, name,
+        );
+      } else {
+        this.state.storage.sql.exec(
+          "INSERT INTO service_secrets (name, value, created_at, updated_at) VALUES (?, ?, ?, ?)",
+          name, value, now, now,
+        );
+      }
+      return json({ saved: name });
+    }
+
+    if (url.pathname === "/secrets/values" && request.method === "GET") {
+      const rows = this.state.storage.sql.exec(
+        "SELECT name, value FROM service_secrets ORDER BY name ASC",
+      );
+      const secrets: Record<string, string> = {};
+      for (const row of rows) {
+        secrets[String(row.name)] = String(row.value);
+      }
+      return json({ secrets });
+    }
+
+    if (url.pathname === "/secrets/delete" && request.method === "POST") {
+      const { name } = (await request.json()) as { name: string };
+      this.state.storage.sql.exec("DELETE FROM service_secrets WHERE name=?", name);
+      return json({ deleted: name });
     }
 
     return new Response("Not found", { status: 404 });

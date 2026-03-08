@@ -254,7 +254,18 @@ When you learn something about the user, edit .blob/memory/context.md.
 
 If a tool script fails (non-zero exit or API error), read the error, edit the script to fix it, and re-run. After 3 failures, log the error to .blob/memory/journal.md and report that you are stuck.
 
-Reuse existing tools before rebuilding. Your .blob/tools/ directory is your growing skillset.`;
+Reuse existing tools before rebuilding. Your .blob/tools/ directory is your growing skillset.
+
+## Secrets and Authentication
+
+Stored API tokens are available as environment variables via .blob/config/.env. Before running any tool script that needs authentication, source this file: \`. .blob/config/.env\`
+
+When a tool fails due to missing authentication (401, 403, "unauthorized", missing token), do NOT keep retrying. Instead:
+1. Tell the user which service needs a token and what kind of token is needed
+2. Ask them to paste the token directly in this chat
+3. Once they provide it, confirm you received it and it will be stored securely
+
+Never echo back or display a secret/token the user provides. Just confirm receipt.`;
 
     return `You are a versatile assistant with access to a workspace at /workspace/${this.repoDir}.
 
@@ -297,6 +308,18 @@ Stop when done and provide a concise summary.`;
     }
   }
 
+  private async fetchStoredSecrets(): Promise<Record<string, string>> {
+    if (!this.env.AGENT_DO) return {};
+    try {
+      const do_ = this.env.AGENT_DO.get(this.env.AGENT_DO.idFromName("blob"));
+      const res = await do_.fetch("http://do/secrets/values");
+      const data = await res.json() as { secrets: Record<string, string> };
+      return data.secrets ?? {};
+    } catch {
+      return {};
+    }
+  }
+
   private async ensureToolFramework(sandboxId: string): Promise<void> {
     const blobDir = `/workspace/${this.repoDir}/.blob`;
     const initScript = `set -eu
@@ -331,6 +354,18 @@ SEED
 fi
 `;
     await executeInSandbox(initScript, this.env, { sandboxId });
+
+    // Write stored secrets as a sourceable .env file
+    const secrets = await this.fetchStoredSecrets();
+    const envLines = Object.entries(secrets)
+      .map(([k, v]) => `export ${k}=${shellQuote(v)}`)
+      .join("\n");
+    if (envLines) {
+      await writeTool(".blob/config/.env", `${envLines}\n`, this.env, {
+        sandboxId,
+        workspaceRoot: `/workspace/${this.repoDir}`,
+      });
+    }
   }
 
   private async callLLM(): Promise<LLMResponse> {

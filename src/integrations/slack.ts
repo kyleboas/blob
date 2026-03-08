@@ -66,6 +66,44 @@ Message: "${text}"`;
   return { intent: "chat", needsSandbox: false };
 }
 
+// Known token patterns: "SERVICE_TOKEN=value", "xoxb-...", "sk-...", etc.
+const TOKEN_PATTERNS = [
+  // Explicit key=value format: MY_TOKEN=abc123
+  /^([A-Z][A-Z0-9_]+(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL))\s*[=:]\s*(\S+)$/im,
+  // Slack bot tokens
+  /^(SLACK_BOT_TOKEN)\s*[=:]\s*(xoxb-\S+)$/im,
+  // Generic "set TOKEN_NAME to VALUE" / "TOKEN_NAME is VALUE"
+  /^(?:set\s+)?([A-Z][A-Z0-9_]+(?:TOKEN|KEY|SECRET))\s+(?:to|is)\s+(\S+)$/im,
+];
+
+async function detectAndStoreSecret(
+  text: string,
+  _channel: string,
+  env: Env,
+  conversationDO: DurableObjectStub | null,
+): Promise<{ message: string } | null> {
+  const trimmed = text.trim();
+
+  for (const pattern of TOKEN_PATTERNS) {
+    const match = trimmed.match(pattern);
+    if (match) {
+      const [, name, value] = match;
+      if (!name || !value || value.length < 8) continue;
+      if (!conversationDO) return null;
+
+      await conversationDO.fetch("http://do/secrets", {
+        method: "POST",
+        body: JSON.stringify({ name, value }),
+      });
+
+      logEvent(env, "slack_ingest", "secret_stored", { name, channel: _channel });
+      return { message: `Got it — stored ${name} securely. It will be available next time I run a tool.` };
+    }
+  }
+
+  return null;
+}
+
 async function getConversationVerbosity(conversationDO: DurableObjectStub | null): Promise<Verbosity> {
   if (!conversationDO) return "minimal";
   try {
@@ -294,6 +332,13 @@ async function processSlackEvent(body: {
         await postToSlack(channel, selftestResult, env);
         return;
       }
+    }
+
+    // Detect token/secret being provided and store it securely
+    const secretStore = await detectAndStoreSecret(originalText, channel, env, conversationDO);
+    if (secretStore) {
+      await postToSlack(channel, secretStore.message, env);
+      return;
     }
 
     const intent = await classifyIntent(originalText, env);
