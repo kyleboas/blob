@@ -1,0 +1,358 @@
+# .github/workflows/blob-hardening.yml
+#
+# Lightweight agent that implements hardening sub-tasks using Cloudflare Workers AI.
+# Runs Llama 3.3 70B via your existing Cloudflare account. ~$0.50-0.80 per full PRD.
+#
+# Trigger from iPhone: GitHub app → Actions → "Blob Hardening" → Run workflow
+#
+# Required secrets:
+#   CF_ACCOUNT_ID       -- Cloudflare account ID
+#   CF_API_TOKEN        -- Cloudflare API token with Workers AI permission
+#
+# Optional secrets:
+#   AI_GATEWAY_BASE_URL -- Route through AI Gateway for caching/logging
+
+name: Blob Hardening
+
+on:
+  workflow_dispatch:
+    inputs:
+      parent_task:
+        description: "Parent task to run (1-7, or 'all')"
+        required: true
+        default: "1"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "3"
+          - "4"
+          - "5"
+          - "6"
+          - "7"
+          - "all"
+      model:
+        description: "Model"
+        required: true
+        default: "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+        type: choice
+        options:
+          - "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+          - "@cf/meta/llama-3.1-70b-instruct-fp8-fast"
+          - "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b"
+          - "@cf/meta/llama-3.1-8b-instruct-fp8-fast"
+      max_retries:
+        description: "Max fix attempts per sub-task"
+        required: false
+        default: "2"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "3"
+      dry_run:
+        description: "Dry run (no commits/push)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  hardening:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      MODEL: ${{ inputs.model }}
+      MAX_RETRIES: ${{ inputs.max_retries || '2' }}
+      TASK_FILE: tasks/tasks-blob-hardening.md
+      PRD_FILE: tasks/prd-blob-hardening.md
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: feature/blob-hardening
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Configure git
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
+      - name: Create agent script
+        run: |
+          cat > /tmp/agent.mjs << 'AGENT_SCRIPT_EOF'
+          import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+          import { execSync } from "child_process";
+          import { dirname } from "path";
+
+          const CF_ACCOUNT_ID = process.env.CF_ACCOUNT_ID;
+          const CF_API_TOKEN = process.env.CF_API_TOKEN;
+          const MODEL = process.env.MODEL || "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+          const MAX_RETRIES = parseInt(process.env.MAX_RETRIES || "2");
+          const TASK_FILE = process.env.TASK_FILE;
+          const PRD_FILE = process.env.PRD_FILE;
+          const DRY_RUN = process.env.DRY_RUN === "true";
+          const PARENT_TASK = process.env.PARENT_TASK || "1";
+
+          const API_URL = process.env.AI_GATEWAY_BASE_URL
+            ? process.env.AI_GATEWAY_BASE_URL
+            : `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/${MODEL}`;
+
+          function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+          async function callLLM(messages, maxTokens = 4096) {
+            const isGateway = !!process.env.AI_GATEWAY_BASE_URL;
+            const body = { messages, max_tokens: maxTokens };
+            if (isGateway) body.model = MODEL;
+            const headers = { "Content-Type": "application/json", Authorization: `Bearer ${CF_API_TOKEN}` };
+
+            for (let i = 0; i < 3; i++) {
+              const res = await fetch(API_URL, { method: "POST", headers, body: JSON.stringify(body) });
+              if (!res.ok) {
+                const t = await res.text();
+                if ((res.status === 429 || res.status >= 500) && i < 2) { await sleep(3000 * (i + 1)); continue; }
+                throw new Error(`API ${res.status}: ${t.slice(0, 300)}`);
+              }
+              const data = await res.json();
+              if (data.result?.response) return data.result.response;
+              if (data.choices?.[0]?.message?.content) return data.choices[0].message.content;
+              if (data.response) return data.response;
+              throw new Error("Empty response: " + JSON.stringify(data).slice(0, 200));
+            }
+          }
+
+          function readFile(p) { try { return readFileSync(p, "utf-8"); } catch { return null; } }
+
+          function safeWrite(p, content) {
+            const d = dirname(p);
+            if (!existsSync(d)) mkdirSync(d, { recursive: true });
+            writeFileSync(p, content);
+          }
+
+          function sh(cmd) {
+            try { return { out: execSync(cmd, { encoding: "utf-8", timeout: 60000 }).trim(), ok: true }; }
+            catch (e) { return { out: (e.stdout || "").trim(), err: (e.stderr || "").trim(), ok: false }; }
+          }
+
+          function parseOps(response) {
+            const ops = [];
+            let m;
+            const fileRe = /FILE:\s*(\S+)\s*\n```[\w]*\n([\s\S]*?)```/g;
+            while ((m = fileRe.exec(response))) ops.push({ t: "write", p: m[1], c: m[2] });
+            const createRe = /(?:CREATE|WRITE)\s+(\S+)\s*\n```[\w]*\n([\s\S]*?)```/g;
+            while ((m = createRe.exec(response))) { if (!ops.some(o => o.p === m[1])) ops.push({ t: "write", p: m[1], c: m[2] }); }
+            const editRe = /EDIT\s+(\S+)\nOLD:\n```\n([\s\S]*?)```\nNEW:\n```\n([\s\S]*?)```/g;
+            while ((m = editRe.exec(response))) ops.push({ t: "edit", p: m[1], old: m[2], rep: m[3] });
+            const delRe = /DELETE:\s*(\S+)/g;
+            while ((m = delRe.exec(response))) ops.push({ t: "del", p: m[1] });
+            const bashRe = /BASH:\s*(.+)/g;
+            while ((m = bashRe.exec(response))) {
+              const c = m[1].trim();
+              if (!/rm\s+-rf\s+\/|shutdown|reboot|curl.*\|.*sh/.test(c)) ops.push({ t: "bash", c });
+            }
+            return ops;
+          }
+
+          function applyOps(ops) {
+            const r = [];
+            for (const op of ops) {
+              try {
+                if (op.t === "write") { safeWrite(op.p, op.c); r.push(`  ✅ Wrote ${op.p}`); }
+                else if (op.t === "edit") {
+                  const cur = readFile(op.p);
+                  if (!cur) { r.push(`  ❌ ${op.p} not found`); continue; }
+                  if (!cur.includes(op.old)) { r.push(`  ❌ oldText not found in ${op.p}`); continue; }
+                  safeWrite(op.p, cur.replace(op.old, op.rep)); r.push(`  ✅ Edited ${op.p}`);
+                } else if (op.t === "del") { sh(`rm -f ${op.p}`); r.push(`  ✅ Deleted ${op.p}`); }
+                else if (op.t === "bash") { const x = sh(op.c); r.push(x.ok ? `  ✅ ${op.c}` : `  ⚠️ ${op.c}: ${(x.err||"").slice(0,150)}`); }
+              } catch (e) { r.push(`  ❌ ${e.message}`); }
+            }
+            return r;
+          }
+
+          function guessFiles(desc) {
+            const d = desc.toLowerCase();
+            const map = [
+              [/do\.ts|durable object/,"src/agent/do.ts"],[/pi-agent/,"src/agent/pi-agent.ts"],
+              [/deploy(?!-)/,"src/agent/deploy.ts"],[/memory\.ts[^-]/,"src/core/memory.ts"],
+              [/memory-system/,"src/core/memory-system.ts"],[/safety/,"src/core/safety.ts"],
+              [/\bllm\b/,"src/core/llm.ts"],[/types\.ts/,"src/core/types.ts"],
+              [/slack\.ts[^-]/,"src/integrations/slack.ts"],[/sandbox\.ts/,"src/integrations/sandbox.ts"],
+              [/github\.ts/,"src/integrations/github.ts"],[/cron-jobs/,"src/jobs/cron-jobs.ts"],
+              [/index\.ts/,"src/index.ts"],[/do-router/,"src/agent/do-router.ts"],
+              [/slack-commands/,"src/integrations/slack-commands.ts"],
+              [/slack-rate/,"src/integrations/slack-rate-limit.ts"],
+              [/deploy-approval/,"src/agent/deploy-approval.ts"],
+              [/deploy-rollback/,"src/agent/deploy-rollback.ts"],
+              [/tool-lifecycle/,"src/agent/tool-lifecycle.ts"],
+              [/tokens\.ts/,"src/core/tokens.ts"],
+            ];
+            const files = [];
+            for (const [re, p] of map) { if (re.test(d) && existsSync(p) && !files.includes(p)) files.push(p); }
+            if (/extract|handler/i.test(d) && existsSync("src/agent/do.ts") && !files.includes("src/agent/do.ts")) files.push("src/agent/do.ts");
+            if (existsSync("src/core/types.ts") && !files.includes("src/core/types.ts")) files.push("src/core/types.ts");
+            return files.slice(0, 5);
+          }
+
+          function checks() {
+            const tc = sh("npm run typecheck 2>&1");
+            if (!tc.ok) return { ok: false, err: `Typecheck:\n${(tc.err || tc.out).slice(0, 1500)}` };
+            const t = sh("npm test 2>&1");
+            if (!t.ok) return { ok: false, err: `Tests:\n${(t.err || t.out).slice(0, 1500)}` };
+            return { ok: true };
+          }
+
+          function checkOff(id) {
+            const c = readFileSync(TASK_FILE, "utf-8");
+            writeFileSync(TASK_FILE, c.replace(`- [ ] ${id} `, `- [x] ${id} `));
+          }
+
+          function getSubtasks() {
+            const lines = readFileSync(TASK_FILE, "utf-8").split("\n");
+            return lines
+              .map(l => l.match(/^\s*- \[ \] (\d+)\.(\d+)\s+(.+)/))
+              .filter(Boolean)
+              .filter(m => parseInt(m[2]) > 0)
+              .filter(m => PARENT_TASK === "all" || m[1] === PARENT_TASK)
+              .map(m => ({ id: `${m[1]}.${m[2]}`, desc: `${m[1]}.${m[2]} ${m[3]}` }));
+          }
+
+          async function main() {
+            const prd = readFile(PRD_FILE) || "";
+            const tasks = getSubtasks();
+            console.log(`\n📋 ${tasks.length} sub-tasks for parent ${PARENT_TASK}\n`);
+            let ok = 0, fail = 0;
+
+            for (const task of tasks) {
+              console.log(`\n${"━".repeat(60)}\n🔧 ${task.desc}\n${"━".repeat(60)}`);
+
+              if (/^[\d.]+ Run .*(typecheck|npm test)/i.test(task.desc)) {
+                const c = checks();
+                if (c.ok) { console.log("  ✅ Passed"); checkOff(task.id); ok++; } else { console.log(`  ❌ ${c.err.slice(0,200)}`); fail++; }
+                continue;
+              }
+
+              const files = guessFiles(task.desc);
+              console.log(`  📂 ${files.join(", ") || "none"}`);
+              let success = false;
+
+              for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+                console.log(attempt ? `  🔄 Fix ${attempt}/${MAX_RETRIES}` : "  🤖 Calling LLM...");
+
+                let prompt;
+                if (attempt === 0) {
+                  const fc = files.map(f => { const c = readFile(f); return c ? `--- ${f} ---\n${c.slice(0, 6000)}\n--- end ---` : ""; }).filter(Boolean).join("\n");
+                  prompt = `Implement this sub-task for the Blob project (TypeScript, Cloudflare Workers).
+
+          PRD (summary):
+          ${prd.slice(0, 2500)}
+
+          Task list (checked=done):
+          ${(readFile(TASK_FILE) || "").slice(0, 3500)}
+
+          Current sub-task: ${task.desc}
+
+          Source files:
+          ${fc || "(none)"}
+
+          Respond ONLY with FILE/EDIT/DELETE/BASH operations. Complete file contents, no placeholders.
+
+          FILE: path/to/file.ts
+          \`\`\`typescript
+          content
+          \`\`\`
+
+          EDIT path/to/file.ts
+          OLD:
+          \`\`\`
+          exact old text
+          \`\`\`
+          NEW:
+          \`\`\`
+          new text
+          \`\`\``;
+                } else {
+                  const errInfo = checks().err || "Unknown";
+                  const fc = guessFiles(task.desc).map(f => { const c = readFile(f); return c ? `--- ${f} ---\n${c.slice(0, 4000)}` : ""; }).filter(Boolean).join("\n");
+                  prompt = `Fix errors from sub-task ${task.id}.\n\nErrors:\n\`\`\`\n${errInfo.slice(0, 2000)}\n\`\`\`\n\nCurrent files:\n${fc}\n\nRespond with FILE/EDIT operations only.`;
+                }
+
+                try {
+                  const resp = await callLLM([
+                    { role: "system", content: "You are a senior TypeScript developer. Respond ONLY with file operations. No explanations outside code comments." },
+                    { role: "user", content: prompt },
+                  ], 8000);
+
+                  const ops = parseOps(resp);
+                  if (ops.length === 0) { console.log("  ⚠️ No ops parsed"); if (attempt < MAX_RETRIES) continue; break; }
+                  console.log(`  📝 ${ops.length} operations`);
+                  applyOps(ops).forEach(r => console.log(r));
+
+                  const c = checks();
+                  if (c.ok) { success = true; break; }
+                  if (attempt === MAX_RETRIES) console.log(`  ❌ Failed after ${MAX_RETRIES} fixes`);
+                } catch (e) {
+                  console.log(`  ❌ ${e.message}`);
+                  if (attempt === MAX_RETRIES) break;
+                  await sleep(3000);
+                }
+              }
+
+              if (success) {
+                console.log(`  ✅ ${task.id} done`);
+                checkOff(task.id);
+                ok++;
+                if (!DRY_RUN) { sh("git add -A"); sh(`git commit -m "feat(hardening): ${task.id}"`); }
+              } else {
+                console.log(`  ❌ ${task.id} failed`);
+                fail++;
+                sh("git checkout -- .");
+              }
+            }
+
+            console.log(`\n${"━".repeat(60)}\n📊 ${ok} completed, ${fail} failed / ${tasks.length} total\n${"━".repeat(60)}\n`);
+            if (fail > 0) process.exit(1);
+          }
+
+          main().catch(e => { console.error("Fatal:", e); process.exit(1); });
+          AGENT_SCRIPT_EOF
+
+      - name: Run agent
+        env:
+          PARENT_TASK: ${{ inputs.parent_task }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          AI_GATEWAY_BASE_URL: ${{ secrets.AI_GATEWAY_BASE_URL }}
+        run: node /tmp/agent.mjs
+
+      - name: Push
+        if: inputs.dry_run != true
+        run: git push origin feature/blob-hardening || echo "Nothing to push"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Task ${{ inputs.parent_task }} Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.parent_task }}" = "all" ]; then
+            DONE=$(grep -cE '^\s*- \[x\] [0-9]+\.[1-9]' "$TASK_FILE" || true)
+            LEFT=$(grep -cE '^\s*- \[ \] [0-9]+\.[1-9]' "$TASK_FILE" || true)
+          else
+            DONE=$(grep -cE "^\s*- \[x\] ${{ inputs.parent_task }}\.[1-9]" "$TASK_FILE" || true)
+            LEFT=$(grep -cE "^\s*- \[ \] ${{ inputs.parent_task }}\.[1-9]" "$TASK_FILE" || true)
+          fi
+          echo "✅ Completed: $DONE" >> $GITHUB_STEP_SUMMARY
+          echo "⬜ Remaining: $LEFT" >> $GITHUB_STEP_SUMMARY
+          echo "**Model:** \`${{ inputs.model }}\`" >> $GITHUB_STEP_SUMMARY
