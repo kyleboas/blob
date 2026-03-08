@@ -23,6 +23,8 @@ interface BlobState {
   cronOutcomes?: Record<string, CronOutcomeRecord>;
   settings?: {
     verbosity?: "minimal" | "verbose";
+    heartbeatIntervalMs?: number;
+    heartbeatModelCallLimit?: number;
   };
   learnedMemory?: {
     lastFlushAt?: string;
@@ -59,7 +61,7 @@ const DEFAULT_CATALOG: Record<string, { name: string; description: string; maxTo
 
 export class AgentDO {
   private state: DurableObjectState;
-  private env: { SLACK_BOT_TOKEN?: string; SLACK_SUMMARY_CHANNEL?: string; REPO_STORE?: R2Bucket; CRON_FAIL_THRESHOLD?: string; CRON_STALL_MULTIPLIER?: string; AGENT_DO?: DurableObjectNamespace };
+  private env: { SLACK_BOT_TOKEN?: string; SLACK_SUMMARY_CHANNEL?: string; REPO_STORE?: R2Bucket; CRON_FAIL_THRESHOLD?: string; CRON_STALL_MULTIPLIER?: string; HEARTBEAT_MODEL_CALL_LIMIT?: string; HEARTBEAT_INTERVAL_MS?: string; AGENT_DO?: DurableObjectNamespace };
   private data: BlobState = {
     repos: ["kyleboas/blob"],
     goals: {},
@@ -69,9 +71,16 @@ export class AgentDO {
   };
   private initialized = false;
 
-  constructor(state: DurableObjectState, env: { SLACK_BOT_TOKEN?: string; SLACK_SUMMARY_CHANNEL?: string; REPO_STORE?: R2Bucket; CRON_FAIL_THRESHOLD?: string; CRON_STALL_MULTIPLIER?: string; AGENT_DO?: DurableObjectNamespace }) {
+  constructor(state: DurableObjectState, env: { SLACK_BOT_TOKEN?: string; SLACK_SUMMARY_CHANNEL?: string; REPO_STORE?: R2Bucket; CRON_FAIL_THRESHOLD?: string; CRON_STALL_MULTIPLIER?: string; HEARTBEAT_MODEL_CALL_LIMIT?: string; HEARTBEAT_INTERVAL_MS?: string; AGENT_DO?: DurableObjectNamespace }) {
     this.state = state;
     this.env = env;
+  }
+
+  private getEffectiveHeartbeatConfig(): { intervalMs: number; modelCallLimit: number } {
+    return {
+      intervalMs: this.data.settings?.heartbeatIntervalMs ?? Number(this.env.HEARTBEAT_INTERVAL_MS || "600000"),
+      modelCallLimit: this.data.settings?.heartbeatModelCallLimit ?? Number(this.env.HEARTBEAT_MODEL_CALL_LIMIT || "10"),
+    };
   }
 
   private async init(): Promise<void> {
@@ -116,13 +125,23 @@ export class AgentDO {
       )
     `);
 
+    this.state.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS service_secrets (
+        name TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+
     this.ensureColumn("logs", "author", "TEXT");
     this.ensureColumn("logs", "sitename", "TEXT");
     this.ensureColumn("logs", "ext", "TEXT");
 
     const existingAlarm = await this.state.storage.getAlarm();
     if (!existingAlarm) {
-      await this.state.storage.setAlarm(Date.now() + 10 * 60 * 1000);
+      const { intervalMs } = this.getEffectiveHeartbeatConfig();
+      await this.state.storage.setAlarm(Date.now() + intervalMs);
     }
 
     this.initialized = true;
@@ -133,7 +152,7 @@ export class AgentDO {
     const startedAt = new Date().toISOString();
     this.data.heartbeat = { ...(this.data.heartbeat ?? {}), lastStartedAt: startedAt };
     logEvent(this.env, "heartbeat", "alarm_start");
-    const maxCalls = 10;
+    const { intervalMs, modelCallLimit: maxCalls } = this.getEffectiveHeartbeatConfig();
     const now = Date.now();
     let callsRemaining = maxCalls;
 
@@ -184,8 +203,8 @@ export class AgentDO {
     };
     await this.save();
 
-    logEvent(this.env, "heartbeat", "alarm_complete", { callsRemaining });
-    await this.state.storage.setAlarm(Date.now() + 10 * 60 * 1000);
+    logEvent(this.env, "heartbeat", "alarm_complete", { callsRemaining, intervalMs, maxCalls });
+    await this.state.storage.setAlarm(Date.now() + intervalMs);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -314,6 +333,32 @@ export class AgentDO {
       return json({ saved: true, verbosity });
     }
 
+    if (url.pathname === "/settings/heartbeat" && request.method === "GET") {
+      const config = this.getEffectiveHeartbeatConfig();
+      return json({
+        intervalMs: config.intervalMs,
+        modelCallLimit: config.modelCallLimit,
+        source: {
+          intervalMs: this.data.settings?.heartbeatIntervalMs !== undefined ? "stored" : "env",
+          modelCallLimit: this.data.settings?.heartbeatModelCallLimit !== undefined ? "stored" : "env",
+        },
+      });
+    }
+
+    if (url.pathname === "/settings/heartbeat" && request.method === "POST") {
+      const body = (await request.json()) as { intervalMs?: number; modelCallLimit?: number };
+      const update: { heartbeatIntervalMs?: number; heartbeatModelCallLimit?: number } = {};
+      if (typeof body.intervalMs === "number" && body.intervalMs > 0) {
+        update.heartbeatIntervalMs = body.intervalMs;
+      }
+      if (typeof body.modelCallLimit === "number" && body.modelCallLimit > 0) {
+        update.heartbeatModelCallLimit = body.modelCallLimit;
+      }
+      this.data.settings = { ...(this.data.settings ?? {}), ...update };
+      await this.save();
+      return json({ saved: true, ...this.getEffectiveHeartbeatConfig() });
+    }
+
     if (url.pathname === "/memory/learned/status" && request.method === "GET") {
       return json({
         lastFlushAt: this.data.learnedMemory?.lastFlushAt ?? null,
@@ -386,6 +431,7 @@ export class AgentDO {
         lastCompletedAt: this.data.heartbeat?.lastCompletedAt ?? null,
         callsRemaining: this.data.heartbeat?.callsRemaining ?? null,
         jobs: jobCounts,
+        config: this.getEffectiveHeartbeatConfig(),
       });
     }
 
@@ -469,6 +515,51 @@ export class AgentDO {
       }
       this.state.storage.sql.exec("INSERT INTO daily_token_usage (date, total_tokens) VALUES (?, ?)", date, tokens);
       return json({ date, totalTokens: tokens });
+    }
+
+    if (url.pathname === "/secrets" && request.method === "GET") {
+      const rows = this.state.storage.sql.exec(
+        "SELECT name FROM service_secrets ORDER BY name ASC",
+      );
+      return json({ secrets: [...rows].map((r) => String(r.name)) });
+    }
+
+    if (url.pathname === "/secrets" && request.method === "POST") {
+      const { name, value } = (await request.json()) as { name: string; value: string };
+      if (!name || !value) return json({ error: "name and value required" }, 400);
+      const now = Date.now();
+      const existing = this.state.storage.sql.exec(
+        "SELECT name FROM service_secrets WHERE name=?", name,
+      ).toArray();
+      if (existing.length > 0) {
+        this.state.storage.sql.exec(
+          "UPDATE service_secrets SET value=?, updated_at=? WHERE name=?",
+          value, now, name,
+        );
+      } else {
+        this.state.storage.sql.exec(
+          "INSERT INTO service_secrets (name, value, created_at, updated_at) VALUES (?, ?, ?, ?)",
+          name, value, now, now,
+        );
+      }
+      return json({ saved: name });
+    }
+
+    if (url.pathname === "/secrets/values" && request.method === "GET") {
+      const rows = this.state.storage.sql.exec(
+        "SELECT name, value FROM service_secrets ORDER BY name ASC",
+      );
+      const secrets: Record<string, string> = {};
+      for (const row of rows) {
+        secrets[String(row.name)] = String(row.value);
+      }
+      return json({ secrets });
+    }
+
+    if (url.pathname === "/secrets/delete" && request.method === "POST") {
+      const { name } = (await request.json()) as { name: string };
+      this.state.storage.sql.exec("DELETE FROM service_secrets WHERE name=?", name);
+      return json({ deleted: name });
     }
 
     return new Response("Not found", { status: 404 });
