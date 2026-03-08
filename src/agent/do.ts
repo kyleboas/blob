@@ -59,7 +59,7 @@ const DEFAULT_CATALOG: Record<string, { name: string; description: string; maxTo
 
 export class AgentDO {
   private state: DurableObjectState;
-  private env: { SLACK_BOT_TOKEN?: string; SLACK_SUMMARY_CHANNEL?: string; REPO_STORE?: R2Bucket; CRON_FAIL_THRESHOLD?: string; CRON_STALL_MULTIPLIER?: string; AGENT_DO?: DurableObjectNamespace };
+  private env: { SLACK_BOT_TOKEN?: string; SLACK_SUMMARY_CHANNEL?: string; REPO_STORE?: R2Bucket; CRON_FAIL_THRESHOLD?: string; CRON_STALL_MULTIPLIER?: string; HEARTBEAT_MODEL_CALL_LIMIT?: string; HEARTBEAT_INTERVAL_MS?: string; AGENT_DO?: DurableObjectNamespace };
   private data: BlobState = {
     repos: ["kyleboas/blob"],
     goals: {},
@@ -69,7 +69,7 @@ export class AgentDO {
   };
   private initialized = false;
 
-  constructor(state: DurableObjectState, env: { SLACK_BOT_TOKEN?: string; SLACK_SUMMARY_CHANNEL?: string; REPO_STORE?: R2Bucket; CRON_FAIL_THRESHOLD?: string; CRON_STALL_MULTIPLIER?: string; AGENT_DO?: DurableObjectNamespace }) {
+  constructor(state: DurableObjectState, env: { SLACK_BOT_TOKEN?: string; SLACK_SUMMARY_CHANNEL?: string; REPO_STORE?: R2Bucket; CRON_FAIL_THRESHOLD?: string; CRON_STALL_MULTIPLIER?: string; HEARTBEAT_MODEL_CALL_LIMIT?: string; HEARTBEAT_INTERVAL_MS?: string; AGENT_DO?: DurableObjectNamespace }) {
     this.state = state;
     this.env = env;
   }
@@ -131,7 +131,8 @@ export class AgentDO {
 
     const existingAlarm = await this.state.storage.getAlarm();
     if (!existingAlarm) {
-      await this.state.storage.setAlarm(Date.now() + 10 * 60 * 1000);
+      const intervalMs = Number(this.env.HEARTBEAT_INTERVAL_MS || "600000");
+      await this.state.storage.setAlarm(Date.now() + intervalMs);
     }
 
     this.initialized = true;
@@ -142,7 +143,7 @@ export class AgentDO {
     const startedAt = new Date().toISOString();
     this.data.heartbeat = { ...(this.data.heartbeat ?? {}), lastStartedAt: startedAt };
     logEvent(this.env, "heartbeat", "alarm_start");
-    const maxCalls = 10;
+    const maxCalls = Number(this.env.HEARTBEAT_MODEL_CALL_LIMIT || "10");
     const now = Date.now();
     let callsRemaining = maxCalls;
 
@@ -193,8 +194,9 @@ export class AgentDO {
     };
     await this.save();
 
-    logEvent(this.env, "heartbeat", "alarm_complete", { callsRemaining });
-    await this.state.storage.setAlarm(Date.now() + 10 * 60 * 1000);
+    const intervalMs = Number(this.env.HEARTBEAT_INTERVAL_MS || "600000");
+    logEvent(this.env, "heartbeat", "alarm_complete", { callsRemaining, intervalMs, maxCalls });
+    await this.state.storage.setAlarm(Date.now() + intervalMs);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -395,6 +397,10 @@ export class AgentDO {
         lastCompletedAt: this.data.heartbeat?.lastCompletedAt ?? null,
         callsRemaining: this.data.heartbeat?.callsRemaining ?? null,
         jobs: jobCounts,
+        config: {
+          intervalMs: Number(this.env.HEARTBEAT_INTERVAL_MS || "600000"),
+          modelCallLimit: Number(this.env.HEARTBEAT_MODEL_CALL_LIMIT || "10"),
+        },
       });
     }
 
