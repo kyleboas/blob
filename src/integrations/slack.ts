@@ -21,9 +21,9 @@ interface IntentResult {
 
 type Verbosity = "minimal" | "verbose";
 
-function getExactKeywordCommand(text: string): "settings" | "status" | "selftest" | "set minimal" | "set verbose" | null {
+function getExactKeywordCommand(text: string): "settings" | "status" | "selftest" | "set minimal" | "set verbose" | "secrets" | null {
   const normalized = text.trim().toLowerCase();
-  if (["settings", "status", "selftest", "set minimal", "set verbose"].includes(normalized)) {
+  if (["settings", "status", "selftest", "set minimal", "set verbose", "secrets"].includes(normalized)) {
     return normalized as ReturnType<typeof getExactKeywordCommand>;
   }
   return null;
@@ -66,14 +66,11 @@ Message: "${text}"`;
   return { intent: "chat", needsSandbox: false };
 }
 
-// Known token patterns: "SERVICE_TOKEN=value", "xoxb-...", "sk-...", etc.
+// Known token patterns — must be unambiguous: entire message is just "KEY=value"
+// Case-sensitive, no multiline, single-line only so we don't swallow normal messages.
 const TOKEN_PATTERNS = [
-  // Explicit key=value format: MY_TOKEN=abc123
-  /^([A-Z][A-Z0-9_]+(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL))\s*[=:]\s*(\S+)$/im,
-  // Slack bot tokens
-  /^(SLACK_BOT_TOKEN)\s*[=:]\s*(xoxb-\S+)$/im,
-  // Generic "set TOKEN_NAME to VALUE" / "TOKEN_NAME is VALUE"
-  /^(?:set\s+)?([A-Z][A-Z0-9_]+(?:TOKEN|KEY|SECRET))\s+(?:to|is)\s+(\S+)$/im,
+  // Exact "UPPER_SNAKE_CASE_KEY=value" or "UPPER_SNAKE_CASE_KEY: value" (entire message)
+  /^([A-Z][A-Z0-9_]{2,}(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL))\s*[=:]\s*(\S{8,})$/,
 ];
 
 async function detectAndStoreSecret(
@@ -315,6 +312,21 @@ async function processSlackEvent(body: {
         );
         return;
       }
+      if (keywordCommand === "secrets") {
+        if (!conversationDO) {
+          await postToSlack(channel, "No secrets stored.", env);
+          return;
+        }
+        const res = await conversationDO.fetch("http://do/secrets");
+        const { secrets } = await res.json() as { secrets: string[] };
+        if (secrets.length === 0) {
+          await postToSlack(channel, "No secrets stored. Paste a token like:\nGOOGLE_TOKEN=your-token-here", env);
+        } else {
+          await postToSlack(channel, `Stored secrets (names only):\n${secrets.map((s) => `• ${s}`).join("\n")}\n\nTo delete one, type: delete secret MY_TOKEN_NAME`, env);
+        }
+        return;
+      }
+
       if (keywordCommand === "selftest") {
         const repos = await getRepos(env);
         const repo = repos[0] ?? "default";
@@ -332,6 +344,18 @@ async function processSlackEvent(body: {
         await postToSlack(channel, selftestResult, env);
         return;
       }
+    }
+
+    // Detect "delete secret MY_TOKEN_NAME"
+    const deleteSecretMatch = originalText.trim().match(/^delete secret ([A-Z][A-Z0-9_]{2,})$/i);
+    if (deleteSecretMatch && conversationDO) {
+      const name = deleteSecretMatch[1].toUpperCase();
+      await conversationDO.fetch("http://do/secrets/delete", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      });
+      await postToSlack(channel, `Deleted ${name}.`, env);
+      return;
     }
 
     // Detect token/secret being provided and store it securely
