@@ -107,7 +107,23 @@ jobs:
           const DRY_RUN = process.env.DRY_RUN === "true";
           const PARENT_TASK = process.env.PARENT_TASK || "1";
 
-          const API_URL = CF_GATEWAY_URL;
+          function buildGatewayUrl(rawUrl) {
+            const base = (rawUrl || "").replace(/\/$/, "");
+            if (!base) throw new Error("CF_GATEWAY_URL is not set");
+
+            if (base.endsWith("/chat/completions")) return base;
+            if (base.endsWith("/openai")) return `${base}/chat/completions`;
+
+            const hasProviderPath = /\/(openai|workers-ai)(?:\/|$)/.test(base);
+            if (hasProviderPath) return `${base}/chat/completions`;
+
+            // Cloudflare AI Gateway requires a provider path.
+            // Default to OpenAI-compatible route so Workers AI models such as
+            // @cf/meta/llama-3.3-70b-instruct-fp8-fast are accepted.
+            return `${base}/openai/chat/completions`;
+          }
+
+          const API_URL = buildGatewayUrl(CF_GATEWAY_URL);
 
           function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
