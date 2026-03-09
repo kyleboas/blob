@@ -173,6 +173,12 @@ jobs:
               const c = m[1].trim();
               if (!/rm\s+-rf\s+\/|shutdown|reboot|curl.*\|.*sh/.test(c)) ops.push({ t: "bash", c });
             }
+            // Downgrade EDIT ops to write ops for files that don't yet exist (avoids "oldText not found")
+            for (let i = 0; i < ops.length; i++) {
+              if (ops[i].t === "edit" && !existsSync(ops[i].p)) {
+                ops[i] = { t: "write", p: ops[i].p, c: ops[i].rep };
+              }
+            }
             // Fallback: any code block preceded by a line containing a file path
             if (ops.length === 0) {
               const fallbackRe = /(\S+\.(?:ts|js|json|toml|yml|yaml))\s*\n```[\w]*\n([\s\S]*?)```/g;
@@ -196,7 +202,20 @@ jobs:
                   if (!cur.includes(op.old)) { r.push(`  ❌ oldText not found in ${op.p}`); continue; }
                   safeWrite(op.p, cur.replace(op.old, op.rep)); r.push(`  ✅ Edited ${op.p}`);
                 } else if (op.t === "del") { sh(`rm -f ${op.p}`); r.push(`  ✅ Deleted ${op.p}`); }
-                else if (op.t === "bash") { const x = sh(op.c); r.push(x.ok ? `  ✅ ${op.c}` : `  ⚠️ ${op.c}: ${(x.err||"").slice(0,150)}`); }
+                else if (op.t === "bash") {
+                  // Validate npm install packages exist before running to avoid E404 failures
+                  if (/npm\s+(install|i)\b/.test(op.c)) {
+                    const pkgs = op.c.replace(/^npm\s+(install|i)\s+/, "").split(/\s+/)
+                      .filter(a => a && !a.startsWith("-"));
+                    const bad = [];
+                    for (const pkg of pkgs) {
+                      const chk = sh(`npm view "${pkg}" name 2>&1`);
+                      if (!chk.ok) bad.push(pkg);
+                    }
+                    if (bad.length) { r.push(`  ❌ npm packages not in registry: ${bad.join(", ")}`); continue; }
+                  }
+                  const x = sh(op.c); r.push(x.ok ? `  ✅ ${op.c}` : `  ⚠️ ${op.c}: ${(x.err||"").slice(0,150)}`);
+                }
               } catch (e) { r.push(`  ❌ ${e.message}`); }
             }
             return r;
@@ -308,14 +327,22 @@ jobs:
                 } else {
                   const errInfo = checks().err || "Unknown";
                   const opFailures = lastOpsResults.filter(r => r.trim().startsWith('❌')).join('\n').trim();
+                  // Files where EDIT failed with "oldText not found" must use FILE: (full rewrite) — EDIT: is banned for them
+                  const editFailedFiles = lastOpsResults
+                    .filter(r => r.includes('oldText not found in'))
+                    .map(r => r.match(/oldText not found in (\S+)/)?.[1])
+                    .filter(Boolean);
                   const allFixFiles = [...new Set([...guessFiles(task.desc), ...lastOps.filter(o => o.p).map(o => o.p)])].slice(0, 6);
                   const fc = allFixFiles.map(f => { const c = readFile(f); return c ? `--- ${f} ---\n${c.slice(0, 3500)}` : ""; }).filter(Boolean).join("\n");
-                  prompt = `Fix errors from sub-task ${task.id}.${opFailures ? `\n\nFailed operations from last attempt (prefer FILE: writes over EDIT: for these files):\n${opFailures}` : ''}\n\nBuild/test errors:\n\`\`\`\n${errInfo.slice(0, 1800)}\n\`\`\`\n\nCurrent files:\n${fc}\n\nRespond ONLY with FILE/EDIT/DELETE/BASH operations. Use this exact format:\n\nFILE: path/to/file.ts\n\`\`\`typescript\ncontent\n\`\`\`\n\nEDIT path/to/file.ts\nOLD:\n\`\`\`\nexact old text\n\`\`\`\nNEW:\n\`\`\`\nnew text\n\`\`\``;
+                  const editBanNote = editFailedFiles.length
+                    ? `\n\n⚠️ EDIT: failed on these files because your old text did not match. You MUST use FILE: (full rewrite) for them — do NOT use EDIT: on them:\n${editFailedFiles.map(f => `  - ${f}`).join('\n')}`
+                    : '';
+                  prompt = `Fix errors from sub-task ${task.id}.${editBanNote}${opFailures ? `\n\nOther failed operations:\n${opFailures}` : ''}\n\nBuild/test errors:\n\`\`\`\n${errInfo.slice(0, 1800)}\n\`\`\`\n\nCurrent files:\n${fc}\n\nRespond ONLY with FILE/EDIT/DELETE/BASH operations. Use this exact format:\n\nFILE: path/to/file.ts\n\`\`\`typescript\ncontent\n\`\`\`\n\nEDIT path/to/file.ts\nOLD:\n\`\`\`\nexact old text\n\`\`\`\nNEW:\n\`\`\`\nnew text\n\`\`\``;
                 }
 
                 try {
                   const resp = await callLLM([
-                    { role: "system", content: "You are a senior TypeScript developer. Respond ONLY with file operations. No explanations outside code comments." },
+                    { role: "system", content: "You are a senior TypeScript developer. Respond ONLY with file operations. No explanations outside code comments. Prefer FILE: (full rewrite) over EDIT: — only use EDIT: when you are certain of the exact current text. Never invent npm packages; only install packages you know exist in the npm registry." },
                     { role: "user", content: prompt },
                   ], 8000);
 
