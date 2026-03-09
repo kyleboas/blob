@@ -1,25 +1,14 @@
 /**
  * propose-change.ts — Reads eval results and proposes a targeted improvement.
  *
- * Invoked by the autoresearch cron task via:
- *   node --experimental-strip-types evals/propose-change.ts
- *
- * Expects env vars:
- *   AI_GATEWAY_BASE_URL, AI_GATEWAY_TOKEN — for LLM calls
- *   EVAL_PROPOSER_MODEL — model for proposals (defaults to Llama 3.3)
- *
- * Reads evals/results.json and key source files, asks the LLM to propose
- * a change, and writes the proposal to evals/proposal.json.
+ * Runs inside the Cloudflare Worker. Given eval results and key source files,
+ * asks the LLM to propose a single targeted code change.
  */
 
-import { readFileSync, writeFileSync, existsSync } from "fs";
+import type { Env } from "../src/core/types";
+import type { EvalOutput } from "./run-eval";
 
-const GATEWAY_URL = process.env.AI_GATEWAY_BASE_URL ?? "";
-const GATEWAY_TOKEN = process.env.AI_GATEWAY_TOKEN ?? "";
-const PROPOSER_MODEL = process.env.EVAL_PROPOSER_MODEL ?? "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-const WORKSPACE = "/workspace/blob";
-
-interface Proposal {
+export interface Proposal {
   hypothesis: string;
   target_file?: string;
   change_type?: string;
@@ -29,99 +18,109 @@ interface Proposal {
   skip?: boolean;
 }
 
-async function callModel(messages: Array<{ role: string; content: string }>, maxTokens = 4096): Promise<string> {
-  const url = GATEWAY_URL.endsWith("/chat/completions")
-    ? GATEWAY_URL
-    : `${GATEWAY_URL.replace(/\/$/, "")}/chat/completions`;
+const PROPOSER_PROMPT = `You are an AI researcher improving a coding agent. You analyze eval results and propose targeted code changes to improve performance.
+
+## Rules
+
+1. Propose exactly ONE change per experiment
+2. The change must be small and targeted (one file, under 50 lines changed)
+3. Focus on the lowest-scoring eval dimension or scenario
+4. Do not propose changes that would break existing passing tests
+5. Do not modify eval infrastructure (evals/ directory)
+6. Only propose changes to files under src/
+
+## Output Format
+
+Respond with ONLY valid JSON:
+
+{"hypothesis": "<what you think will improve and why>", "target_file": "<path relative to repo root>", "change_type": "edit", "old_text": "<exact text to replace>", "new_text": "<replacement text>", "expected_improvement": "<which eval scenario should improve>"}
+
+If no improvement is needed (all scores >= 4), respond:
+
+{"hypothesis": "no improvement needed", "skip": true}`;
+
+async function callProposer(
+  env: Env,
+  messages: Array<{ role: string; content: string }>,
+): Promise<string> {
+  const baseUrl = (env.AI_GATEWAY_BASE_URL ?? "").replace(/\/$/, "");
+  const url = baseUrl.endsWith("/chat/completions") ? baseUrl : `${baseUrl}/chat/completions`;
+  const model = env.LLM_MODEL ?? "anthropic/claude-sonnet-4-6";
 
   const res = await fetch(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      Authorization: `Bearer ${GATEWAY_TOKEN}`,
+      Authorization: `Bearer ${env.AI_GATEWAY_TOKEN ?? ""}`,
     },
-    body: JSON.stringify({ model: PROPOSER_MODEL, messages, max_tokens: maxTokens }),
+    body: JSON.stringify({ model, messages, max_tokens: 4096 }),
   });
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Model call failed: ${res.status} ${text}`);
+    throw new Error(`Proposer call failed: ${res.status} ${text}`);
   }
 
-  const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+  const data = (await res.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
   return data.choices?.[0]?.message?.content ?? "";
 }
 
-function readFileSafe(path: string): string {
-  try {
-    return readFileSync(path, "utf-8");
-  } catch {
-    return "(file not found)";
-  }
-}
-
-async function main() {
-  const resultsPath = `${WORKSPACE}/evals/results.json`;
-  if (!existsSync(resultsPath)) {
-    console.error("No eval results found. Run evals/run-eval.ts first.");
-    process.exit(1);
-  }
-
-  const results = JSON.parse(readFileSync(resultsPath, "utf-8"));
-  const experimentPrompt = readFileSync(`${WORKSPACE}/evals/experiment-prompt.md`, "utf-8");
-  const experiments = readFileSafe(`${WORKSPACE}/evals/experiments.tsv`);
-
-  // Gather key source files for context
-  const sourceFiles: Record<string, string> = {};
-  const keyFiles = [
-    "src/agent/pi-agent.ts",
-    "src/core/llm.ts",
-    "src/core/types.ts",
-    "src/integrations/sandbox.ts",
-    "src/jobs/cron-jobs.ts",
+/**
+ * Gather key source files from the sandbox for context.
+ */
+async function gatherSourceContext(env: Env): Promise<Record<string, string>> {
+  const files: Record<string, string> = {};
+  const keyPaths = [
+    "/workspace/blob/src/agent/pi-agent.ts",
+    "/workspace/blob/src/core/types.ts",
+    "/workspace/blob/src/core/models.ts",
+    "/workspace/blob/src/integrations/sandbox.ts",
+    "/workspace/blob/src/core/safety.ts",
   ];
 
-  for (const file of keyFiles) {
-    const content = readFileSafe(`${WORKSPACE}/${file}`);
-    if (content !== "(file not found)") {
-      // Truncate large files to keep context manageable
-      sourceFiles[file] = content.length > 3000 ? `${content.slice(0, 3000)}\n... (truncated)` : content;
+  for (const path of keyPaths) {
+    try {
+      const content = await env.SANDBOX.readFile(path);
+      // Truncate to keep context manageable
+      const relPath = path.replace("/workspace/blob/", "");
+      files[relPath] = content.length > 4000 ? `${content.slice(0, 4000)}\n... (truncated)` : content;
+    } catch {
+      // File not available — skip
     }
   }
 
-  const response = await callModel([
-    { role: "system", content: experimentPrompt },
+  return files;
+}
+
+/**
+ * Propose a single targeted improvement based on eval results.
+ */
+export async function proposeChange(
+  env: Env,
+  evalResults: EvalOutput,
+  experimentHistory: string,
+): Promise<Proposal> {
+  const sourceFiles = await gatherSourceContext(env);
+
+  const response = await callProposer(env, [
+    { role: "system", content: PROPOSER_PROMPT },
     {
       role: "user",
       content: JSON.stringify({
-        eval_results: results,
+        eval_results: evalResults,
         source_files: sourceFiles,
-        past_experiments: experiments,
+        past_experiments: experimentHistory,
       }),
     },
   ]);
 
-  let proposal: Proposal;
   try {
     const jsonMatch = response.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error("No JSON in proposer response");
-    proposal = JSON.parse(jsonMatch[0]) as Proposal;
+    return JSON.parse(jsonMatch[0]) as Proposal;
   } catch {
-    proposal = { hypothesis: "Failed to parse proposal", skip: true };
-  }
-
-  writeFileSync(`${WORKSPACE}/evals/proposal.json`, JSON.stringify(proposal, null, 2));
-  console.log(`Proposal: ${proposal.hypothesis}`);
-
-  if (proposal.skip) {
-    console.log("PROPOSAL_SKIP=true");
-  } else {
-    console.log(`PROPOSAL_FILE=${proposal.target_file}`);
-    console.log("PROPOSAL_SKIP=false");
+    return { hypothesis: "Failed to parse proposal", skip: true };
   }
 }
-
-main().catch((err) => {
-  console.error("Propose failed:", err);
-  process.exit(1);
-});
