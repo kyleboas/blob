@@ -4,6 +4,7 @@ import { logEvent } from "../core/observability";
 import type { Env } from "../core/types";
 import type { BlobState, CronJob } from "./do";
 import { handleCreateJob, handleListJobs, handleTransitionJob } from "./handlers/jobs";
+import { handleListMessages, handleStoreMessage } from "./handlers/messages";
 
 export type RouterCtx = {
   state: DurableObjectState;
@@ -75,25 +76,11 @@ export async function routeRequest(
   }
 
   if (pathname === "/messages" && method === "POST") {
-    const { role, content } = (await request.json()) as { role: string; content: string };
-    data.messages.push({ role, content, timestamp: Date.now() });
-    if (data.messages.length > 100) {
-      data.messages = data.messages.slice(-100);
-      await save();
-    } else if (data.messages.length > 25) {
-      const toSummarize = data.messages.slice(0, -20);
-      const summary = `[${toSummarize.length} older messages summarized]`;
-      data.messages = [{ role: "system", content: summary, timestamp: Date.now() }, ...data.messages.slice(-20)];
-      await save();
-    } else {
-      await save();
-    }
-    return json({ saved: true });
+    return handleStoreMessage(request, ctx);
   }
 
   if (pathname === "/messages" && method === "GET") {
-    const limit = parseInt(url.searchParams.get("limit") || "10");
-    return json({ messages: data.messages.slice(-limit) });
+    return handleListMessages(url, ctx);
   }
 
   if (pathname === "/settings/verbosity" && method === "GET") {
