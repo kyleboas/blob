@@ -267,6 +267,8 @@ jobs:
               const files = guessFiles(task.desc);
               console.log(`  📂 ${files.join(", ") || "none"}`);
               let success = false;
+              let lastOpsResults = [];
+              let lastOps = [];
 
               for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
                 console.log(attempt ? `  🔄 Fix ${attempt}/${MAX_RETRIES}` : "  🤖 Calling LLM...");
@@ -305,8 +307,10 @@ jobs:
           \`\`\``;
                 } else {
                   const errInfo = checks().err || "Unknown";
-                  const fc = guessFiles(task.desc).map(f => { const c = readFile(f); return c ? `--- ${f} ---\n${c.slice(0, 4000)}` : ""; }).filter(Boolean).join("\n");
-                  prompt = `Fix errors from sub-task ${task.id}.\n\nErrors:\n\`\`\`\n${errInfo.slice(0, 2000)}\n\`\`\`\n\nCurrent files:\n${fc}\n\nRespond ONLY with FILE/EDIT/DELETE/BASH operations. Use this exact format:\n\nFILE: path/to/file.ts\n\`\`\`typescript\ncontent\n\`\`\`\n\nEDIT path/to/file.ts\nOLD:\n\`\`\`\nexact old text\n\`\`\`\nNEW:\n\`\`\`\nnew text\n\`\`\``;
+                  const opFailures = lastOpsResults.filter(r => r.trim().startsWith('❌')).join('\n').trim();
+                  const allFixFiles = [...new Set([...guessFiles(task.desc), ...lastOps.filter(o => o.p).map(o => o.p)])].slice(0, 6);
+                  const fc = allFixFiles.map(f => { const c = readFile(f); return c ? `--- ${f} ---\n${c.slice(0, 3500)}` : ""; }).filter(Boolean).join("\n");
+                  prompt = `Fix errors from sub-task ${task.id}.${opFailures ? `\n\nFailed operations from last attempt (prefer FILE: writes over EDIT: for these files):\n${opFailures}` : ''}\n\nBuild/test errors:\n\`\`\`\n${errInfo.slice(0, 1800)}\n\`\`\`\n\nCurrent files:\n${fc}\n\nRespond ONLY with FILE/EDIT/DELETE/BASH operations. Use this exact format:\n\nFILE: path/to/file.ts\n\`\`\`typescript\ncontent\n\`\`\`\n\nEDIT path/to/file.ts\nOLD:\n\`\`\`\nexact old text\n\`\`\`\nNEW:\n\`\`\`\nnew text\n\`\`\``;
                 }
 
                 try {
@@ -318,7 +322,9 @@ jobs:
                   const ops = parseOps(resp);
                   if (ops.length === 0) { console.log("  ⚠️ No ops parsed"); if (attempt < MAX_RETRIES) continue; break; }
                   console.log(`  📝 ${ops.length} operations`);
-                  applyOps(ops).forEach(r => console.log(r));
+                  lastOps = ops;
+                  lastOpsResults = applyOps(ops);
+                  lastOpsResults.forEach(r => console.log(r));
 
                   const c = checks();
                   if (c.ok) { success = true; break; }
