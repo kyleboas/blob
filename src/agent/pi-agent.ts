@@ -2,6 +2,7 @@ import type { Env } from "../core/types";
 import { DEFAULT_MODEL } from "../core/models";
 import { appendWorkspaceState, editTool, ensureSandboxSession, executeInSandbox, readTool, writeTool } from "../integrations/sandbox";
 import { logEvent } from "../core/observability";
+import { estimateTokens } from "../core/tokens";
 import {
   appendLearnedRecord,
   buildSemanticMemoryContext,
@@ -66,10 +67,6 @@ interface BudgetState {
 }
 
 const dailyTokenUsageLocal = new Map<string, number>();
-
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
 
 function isTransientError(error: string): boolean {
   const lower = error.toLowerCase();
