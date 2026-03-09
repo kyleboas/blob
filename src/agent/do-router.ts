@@ -1,8 +1,9 @@
-import { assertTransition, shouldForcePause, type JobStatus } from "../jobs/job-model";
+import { shouldForcePause } from "../jobs/job-model";
 import { type CronOutcomeRecord } from "../jobs/cron-jobs";
 import { logEvent } from "../core/observability";
 import type { Env } from "../core/types";
 import type { BlobState, CronJob } from "./do";
+import { handleCreateJob, handleListJobs, handleTransitionJob } from "./handlers/jobs";
 
 export type RouterCtx = {
   state: DurableObjectState;
@@ -25,58 +26,15 @@ export async function routeRequest(
   const { pathname } = url;
 
   if (pathname === "/jobs" && method === "POST") {
-    const now = Date.now();
-    const { id, sandboxId, estimatedCalls } = (await request.json()) as { id?: string; sandboxId?: string; estimatedCalls?: number };
-    const jobId = id ?? crypto.randomUUID();
-    state.storage.sql.exec(
-      "INSERT INTO jobs (id, status, created_at, updated_at, current_step, tool_history, partial_outputs, sandbox_id, token_usage, model_call_count, estimated_calls) VALUES (?, 'queued', ?, ?, '', '[]', '[]', ?, 0, 0, ?)",
-      jobId,
-      now,
-      now,
-      sandboxId ?? null,
-      estimatedCalls ?? 1,
-    );
-    return json({ id: jobId, status: "queued" });
+    return handleCreateJob(request, ctx);
   }
 
   if (pathname === "/jobs/transition" && method === "POST") {
-    const { id, to, resumeState, tokenUsage, modelCallCount } = (await request.json()) as {
-      id: string;
-      to: JobStatus;
-      resumeState?: { currentStep?: string; toolHistory?: string; partialOutputs?: string; sandboxId?: string };
-      tokenUsage?: number;
-      modelCallCount?: number;
-    };
-    const existing = state.storage.sql.exec("SELECT status FROM jobs WHERE id=?", id).one();
-    if (!existing) return json({ error: "Job not found" }, 404);
-    const from = String(existing.status) as JobStatus;
-    assertTransition(from, to);
-    const now = Date.now();
-    state.storage.sql.exec(
-      `UPDATE jobs SET status=?, updated_at=?, current_step=?, tool_history=?, partial_outputs=?, sandbox_id=?, token_usage=?, model_call_count=? WHERE id=?`,
-      to,
-      now,
-      resumeState?.currentStep ?? "",
-      resumeState?.toolHistory ?? "[]",
-      resumeState?.partialOutputs ?? "[]",
-      resumeState?.sandboxId ?? null,
-      tokenUsage ?? 0,
-      modelCallCount ?? 0,
-      id,
-    );
-    logEvent(env, "job_lifecycle", "job_transition", { id, from, to, tokenUsage: tokenUsage ?? 0, modelCallCount: modelCallCount ?? 0 });
-    const rows = state.storage.sql.exec("SELECT SUM(token_usage) AS total FROM jobs");
-    const total = Number(rows.one()?.total ?? 0);
-    const day = new Date().toISOString().slice(0, 10);
-    logEvent(env, "cost", "token_usage_aggregate", { day, totalTokens: total });
-    return json({ id, from, to });
+    return handleTransitionJob(request, ctx);
   }
 
   if (pathname === "/jobs" && method === "GET") {
-    const rows = state.storage.sql.exec(
-      "SELECT id, status, created_at, updated_at, current_step, tool_history, partial_outputs, sandbox_id, token_usage, model_call_count, estimated_calls FROM jobs ORDER BY created_at ASC",
-    );
-    return json({ jobs: [...rows] });
+    return handleListJobs(request, ctx);
   }
 
   if (pathname === "/state/migrate" && method === "POST") {
