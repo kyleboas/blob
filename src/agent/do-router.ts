@@ -1,10 +1,10 @@
-import { shouldForcePause } from "../jobs/job-model";
 import { type CronOutcomeRecord } from "../jobs/cron-jobs";
 import { logEvent } from "../core/observability";
 import type { Env } from "../core/types";
 import type { BlobState, CronJob } from "./do";
 import { handleCreateJob, handleListJobs, handleTransitionJob } from "./handlers/jobs";
 import { handleListMessages, handleStoreMessage } from "./handlers/messages";
+import { handleGetHeartbeatSettings, handleGetVerbosity, handleSetHeartbeatSettings, handleSetVerbosity } from "./handlers/settings";
 
 export type RouterCtx = {
   state: DurableObjectState;
@@ -84,46 +84,19 @@ export async function routeRequest(
   }
 
   if (pathname === "/settings/verbosity" && method === "GET") {
-    return json({ verbosity: data.settings?.verbosity ?? "minimal" });
+    return handleGetVerbosity(ctx);
   }
 
   if (pathname === "/settings/verbosity" && method === "POST") {
-    const { verbosity } = (await request.json()) as { verbosity: "minimal" | "verbose" };
-    if (verbosity !== "minimal" && verbosity !== "verbose") {
-      return json({ error: "invalid verbosity" }, 400);
-    }
-    data.settings = { ...(data.settings ?? {}), verbosity };
-    await save();
-    return json({ saved: true, verbosity });
+    return handleSetVerbosity(request, ctx);
   }
 
   if (pathname === "/settings/heartbeat" && method === "GET") {
-    const intervalMs = data.settings?.heartbeatIntervalMs ?? Number(env.HEARTBEAT_INTERVAL_MS || "600000");
-    const modelCallLimit = data.settings?.heartbeatModelCallLimit ?? Number(env.HEARTBEAT_MODEL_CALL_LIMIT || "10");
-    return json({
-      intervalMs,
-      modelCallLimit,
-      source: {
-        intervalMs: data.settings?.heartbeatIntervalMs !== undefined ? "stored" : "env",
-        modelCallLimit: data.settings?.heartbeatModelCallLimit !== undefined ? "stored" : "env",
-      },
-    });
+    return handleGetHeartbeatSettings(ctx);
   }
 
   if (pathname === "/settings/heartbeat" && method === "POST") {
-    const body = (await request.json()) as { intervalMs?: number; modelCallLimit?: number };
-    const update: { heartbeatIntervalMs?: number; heartbeatModelCallLimit?: number } = {};
-    if (typeof body.intervalMs === "number" && body.intervalMs > 0) {
-      update.heartbeatIntervalMs = body.intervalMs;
-    }
-    if (typeof body.modelCallLimit === "number" && body.modelCallLimit > 0) {
-      update.heartbeatModelCallLimit = body.modelCallLimit;
-    }
-    data.settings = { ...(data.settings ?? {}), ...update };
-    await save();
-    const intervalMs = data.settings?.heartbeatIntervalMs ?? Number(env.HEARTBEAT_INTERVAL_MS || "600000");
-    const modelCallLimit = data.settings?.heartbeatModelCallLimit ?? Number(env.HEARTBEAT_MODEL_CALL_LIMIT || "10");
-    return json({ saved: true, intervalMs, modelCallLimit });
+    return handleSetHeartbeatSettings(request, ctx);
   }
 
   if (pathname === "/memory/learned/status" && method === "GET") {
