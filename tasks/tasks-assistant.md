@@ -81,7 +81,7 @@ Update the file after completing each sub-task, not just after completing an ent
   - [ ] 1.2 Create `src/agent/do-router.ts`. Implement a `routeRequest(url: URL, method: string, request: Request, ctx: { state: DurableObjectState; env: Env; data: BlobState; save: () => Promise<void> })` function that maps URL+method pairs to handler functions. Return 404 for unmatched routes.
   - [x] 1.3 Create `src/agent/handlers/jobs.ts`. Extract the `/jobs` POST, `/jobs` GET, and `/jobs/transition` POST logic from `do.ts` into exported handler functions. Each function accepts the router context and returns `Response`.
   - [x] 1.4 Create `src/agent/handlers/messages.ts`. Extract `/messages` GET and POST. Fix the dead branch: the `> 25` compaction and `> 100` trim must be evaluated correctly (check `> 100` first, then `> 25`).
-  - [ ] 1.5 Create `src/agent/handlers/settings.ts`. Extract `/settings/verbosity` and `/settings/heartbeat` GET/POST.
+  - [x] 1.5 Create `src/agent/handlers/settings.ts`. Extract `/settings/verbosity` and `/settings/heartbeat` GET/POST.
   - [ ] 1.6 Create `src/agent/handlers/cron.ts`. Extract `/cron` GET/POST, `/cron/delete` POST, `/cron/outcome` POST, `/cron/outcomes` GET.
   - [ ] 1.7 Create `src/agent/handlers/secrets.ts`. Extract `/secrets` GET and POST. Do NOT extract `/secrets/values` — it will be removed in task 3. Do NOT extract `/secrets/delete` yet — move it here but keep it.
   - [ ] 1.8 Create `src/agent/handlers/memory-status.ts`. Extract `/memory/learned/status` and `/memory/vectorize/status` GET/POST.
