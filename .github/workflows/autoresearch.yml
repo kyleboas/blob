@@ -1,0 +1,161 @@
+name: Blob Autoresearch
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_experiments:
+        description: 'Max experiments to run'
+        default: '3'
+        type: string
+      target_category:
+        description: 'Eval category to focus on (or "all")'
+        default: 'all'
+        type: string
+
+concurrency:
+  group: autoresearch-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+jobs:
+  experiment-loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure git
+        run: |
+          git config user.name "blob-autoresearch"
+          git config user.email "autoresearch@users.noreply.github.com"
+
+      - name: Run experiment loop
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CF_AI_GATEWAY: ${{ secrets.CF_AI_GATEWAY }}
+          MAX_EXPERIMENTS: ${{ inputs.max_experiments }}
+          TARGET_CATEGORY: ${{ inputs.target_category }}
+        run: |
+          #!/bin/bash
+          set -euo pipefail
+
+          MAX=${MAX_EXPERIMENTS:-3}
+          CATEGORY=${TARGET_CATEGORY:-all}
+          BASELINE_SCORE=""
+
+          # Step 1: Run baseline eval on current main
+          echo "=== Running baseline eval ==="
+          BASELINE_SCORE=$(npx tsx evals/run-eval.ts --category "$CATEGORY" | tail -1)
+          echo "Baseline score: $BASELINE_SCORE"
+
+          for i in $(seq 1 "$MAX"); do
+            echo ""
+            echo "=== Experiment $i / $MAX ==="
+            BRANCH="autoresearch/exp-$(date +%Y%m%d-%H%M%S)-$i"
+
+            # Step 2: Create experiment branch
+            git checkout -b "$BRANCH"
+
+            # Step 3: Ask the coding agent to propose a change
+            npx tsx evals/propose-change.ts \
+              --experiments-log evals/experiments.tsv \
+              --category "$CATEGORY" \
+              --baseline-score "$BASELINE_SCORE"
+
+            # Step 4: Check if any files changed
+            if git diff --quiet; then
+              echo "No changes proposed, skipping"
+              git checkout main
+              git branch -D "$BRANCH"
+              continue
+            fi
+
+            # Step 5: Commit the change
+            CHANGE_DESC=$(git diff --stat | head -5)
+            git add -A
+            git commit -m "autoresearch: experiment $i
+
+          $CHANGE_DESC"
+
+            # Step 6: Deploy to Cloudflare preview
+            npx wrangler deploy \
+              --config wrangler.agent.toml \
+              --env preview \
+              --var EVAL_MODE:true
+
+            # Wait for deploy to stabilize
+            sleep 10
+
+            # Step 7: Run eval suite against preview
+            NEW_SCORE=$(npx tsx evals/run-eval.ts \
+              --category "$CATEGORY" \
+              --env preview | tail -1)
+
+            echo "Baseline: $BASELINE_SCORE → New: $NEW_SCORE"
+
+            # Step 8: Compare scores
+            IMPROVED=$(node -e "
+              const b = parseFloat('$BASELINE_SCORE');
+              const n = parseFloat('$NEW_SCORE');
+              console.log(n > b ? 'yes' : 'no');
+            ")
+
+            # Step 9: Keep or discard
+            if [ "$IMPROVED" = "yes" ]; then
+              echo "Improved! Merging to main."
+              git checkout main
+              git merge "$BRANCH" --no-ff -m "autoresearch: merge experiment $i (score: $BASELINE_SCORE -> $NEW_SCORE)"
+              BASELINE_SCORE="$NEW_SCORE"
+
+              # Log success
+              echo -e "$(date -Iseconds)\t$i\tKEPT\t$BASELINE_SCORE\t$NEW_SCORE\t$CHANGE_DESC" >> evals/experiments.tsv
+              git add evals/experiments.tsv
+              git commit -m "autoresearch: log experiment $i result"
+              git push origin main
+            else
+              echo "No improvement. Discarding."
+              git checkout main
+              git branch -D "$BRANCH"
+
+              # Log discard
+              echo -e "$(date -Iseconds)\t$i\tDISCARDED\t$BASELINE_SCORE\t$NEW_SCORE\t$CHANGE_DESC" >> evals/experiments.tsv
+              git add evals/experiments.tsv
+              git commit -m "autoresearch: log experiment $i result (discarded)"
+              git push origin main
+            fi
+          done
+
+          echo ""
+          echo "=== Autoresearch complete ==="
+          echo "Final score: $BASELINE_SCORE"
+
+      - name: Discord - Results Summary
+        if: always() && env.DISCORD_WEBHOOK_URL != ''
+        run: |
+          # Count results from this run
+          KEPT=$(grep -c "KEPT" evals/experiments.tsv || echo "0")
+          DISCARDED=$(grep -c "DISCARDED" evals/experiments.tsv || echo "0")
+
+          curl -s -H "Content-Type: application/json" \
+            -d "{\"embeds\":[{\"title\":\"Blob Autoresearch Complete\",\"color\":3447003,\"fields\":[{\"name\":\"Experiments\",\"value\":\"${{ inputs.max_experiments }}\",\"inline\":true},{\"name\":\"Kept\",\"value\":\"$KEPT\",\"inline\":true},{\"name\":\"Discarded\",\"value\":\"$DISCARDED\",\"inline\":true},{\"name\":\"Run\",\"value\":\"[View](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\",\"inline\":true}]}]}" \
+            "$DISCORD_WEBHOOK_URL"

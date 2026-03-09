@@ -4,6 +4,7 @@ import { handleSlackEvent } from "./integrations/slack";
 import { dispatchCronTask } from "./jobs/cron-jobs";
 import { createLogRef, logEvent } from "./core/observability";
 import { getRuntimeControls } from "./core/runtime-controls";
+import { handleEvalRequest } from "./eval/routes";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -20,6 +21,11 @@ export default {
     try {
       if (url.pathname === "/slack/events") {
         return handleSlackEvent(request, env, ctx);
+      }
+
+      // Eval endpoints — only active when EVAL_MODE=true
+      if (env.EVAL_MODE === "true" && url.pathname.startsWith("/eval/")) {
+        return handleEvalRequest(request, url.pathname, env);
       }
 
       return json({ error: "Not found", path: url.pathname }, 404);

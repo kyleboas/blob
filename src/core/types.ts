@@ -49,4 +49,6 @@ export interface Env {
   LLM_MODEL?: string;
   VERIFY_COMMAND?: string;
   VERIFY_MAX_ATTEMPTS?: string;
+  EVAL_MODE?: string;
+  EVAL_API_TOKEN?: string;
 }
