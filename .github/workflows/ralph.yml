@@ -159,7 +159,7 @@ jobs:
             while ((m = fileRe.exec(response))) ops.push({ t: "write", p: m[1], c: m[2] });
             const createRe = /(?:CREATE|WRITE)\s+(\S+)\s*\n```[\w]*\n([\s\S]*?)```/g;
             while ((m = createRe.exec(response))) { if (!ops.some(o => o.p === m[1])) ops.push({ t: "write", p: m[1], c: m[2] }); }
-            const editRe = /EDIT\s+(\S+)\nOLD:\n```\n([\s\S]*?)```\nNEW:\n```\n([\s\S]*?)```/g;
+            const editRe = /EDIT:?\s+(\S+)\nOLD:\n```[\w]*\n([\s\S]*?)```\nNEW:\n```[\w]*\n([\s\S]*?)```/g;
             while ((m = editRe.exec(response))) ops.push({ t: "edit", p: m[1], old: m[2], rep: m[3] });
             const delRe = /DELETE:\s*(\S+)/g;
             while ((m = delRe.exec(response))) ops.push({ t: "del", p: m[1] });
@@ -292,7 +292,7 @@ jobs:
                 } else {
                   const errInfo = checks().err || "Unknown";
                   const fc = guessFiles(task.desc).map(f => { const c = readFile(f); return c ? `--- ${f} ---\n${c.slice(0, 4000)}` : ""; }).filter(Boolean).join("\n");
-                  prompt = `Fix errors from sub-task ${task.id}.\n\nErrors:\n\`\`\`\n${errInfo.slice(0, 2000)}\n\`\`\`\n\nCurrent files:\n${fc}\n\nRespond with FILE/EDIT operations only.`;
+                  prompt = `Fix errors from sub-task ${task.id}.\n\nErrors:\n\`\`\`\n${errInfo.slice(0, 2000)}\n\`\`\`\n\nCurrent files:\n${fc}\n\nRespond ONLY with FILE/EDIT/DELETE/BASH operations. Use this exact format:\n\nFILE: path/to/file.ts\n\`\`\`typescript\ncontent\n\`\`\`\n\nEDIT path/to/file.ts\nOLD:\n\`\`\`\nexact old text\n\`\`\`\nNEW:\n\`\`\`\nnew text\n\`\`\``;
                 }
 
                 try {
