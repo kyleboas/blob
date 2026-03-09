@@ -1,6 +1,7 @@
 import type { Env } from "./types";
 import { getSecretPatterns, redactSecrets as redactWithPatterns } from "./safety";
 import { logEvent } from "./observability";
+import { estimateTokens } from "./tokens";
 
 export type MemoryScope = "thread" | "channel" | "team";
 export type MemorySource = "thread" | "cron" | "compaction";
@@ -26,10 +27,6 @@ export interface LearnedEntry {
   confidence: "high" | "medium" | "low";
 }
 
-
-function estimateTokens(text: string): number {
-  return Math.ceil(text.trim().split(/\s+/).filter(Boolean).length * 1.3);
-}
 
 async function sha256Hex(input: string): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
