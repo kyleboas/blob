@@ -26,7 +26,7 @@ tag = "v3"
 enabled = true
 
 [triggers]
-crons = ["*/15 * * * *", "0 */6 * * *", "30 */6 * * *"]
+crons = ["*/15 * * * *", "0 */6 * * *", "30 */6 * * *", "0 4 * * *"]
 
 # Vectorize is optional. Uncomment and set a valid index in the target account
 # to enable long-term semantic memory persistence.

@@ -10,6 +10,7 @@ export type LogCategory =
   | "deploy_ops"
   | "heartbeat"
   | "cron_runs"
+  | "autoresearch"
   | "cost";
 
 export function createLogRef(prefix = "log"): string {

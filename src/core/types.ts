@@ -49,4 +49,7 @@ export interface Env {
   LLM_MODEL?: string;
   VERIFY_COMMAND?: string;
   VERIFY_MAX_ATTEMPTS?: string;
+
+  AUTORESEARCH_REPO?: string;
+  AUTORESEARCH_BRANCH?: string;
 }
