@@ -3,7 +3,7 @@ import { R2MemoryStore, writeMemoryItem, compactScope, reconcileMemory } from ".
 import { logEvent } from "../core/observability";
 import { redactSecrets } from "../core/safety";
 
-export type CronTaskName = "content-scan" | "memory-compaction" | "memory-reconciliation";
+export type CronTaskName = "content-scan" | "memory-compaction" | "memory-reconciliation" | "autoresearch";
 export type CronStatus = "success" | "failure" | "running";
 
 export interface CronOutcomeRecord {
@@ -32,12 +32,14 @@ const CRON_TO_TASK: Record<string, CronTaskName> = {
   "*/15 * * * *": "content-scan",
   "0 */6 * * *": "memory-compaction",
   "30 */6 * * *": "memory-reconciliation",
+  "0 4 * * *": "autoresearch",
 };
 
 const EXPECTED_CADENCE_MS: Record<CronTaskName, number> = {
   "content-scan": 15 * 60 * 1000,
   "memory-compaction": 6 * 60 * 60 * 1000,
   "memory-reconciliation": 6 * 60 * 60 * 1000,
+  autoresearch: 24 * 60 * 60 * 1000,
 };
 
 function summarizeError(err: unknown): string {
@@ -77,6 +79,8 @@ export async function runCronTask(jobName: CronTaskName, env: Env): Promise<Cron
       summary = await runContentScan(env);
     } else if (jobName === "memory-compaction") {
       summary = await runMemoryCompaction(env);
+    } else if (jobName === "autoresearch") {
+      summary = await runAutoresearch(env);
     } else {
       summary = await runMemoryReconciliation(env);
     }
@@ -150,6 +154,200 @@ async function runMemoryReconciliation(env: Env): Promise<string> {
   const store = new R2MemoryStore(env.REPO_STORE);
   const result = await reconcileMemory(env, store, []);
   return `Reconciled memory: ${result.deletedOrphans} orphan vectors deleted, ${result.reindexed} items reindexed`;
+}
+
+// ---------------------------------------------------------------------------
+// Autoresearch: self-improving eval loop
+// ---------------------------------------------------------------------------
+
+interface AutoresearchResult {
+  baselineScore: number;
+  experimentScore: number | null;
+  hypothesis: string;
+  accepted: boolean;
+}
+
+async function sandboxExec(
+  env: Env,
+  command: string,
+  timeoutMs = 300_000,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const result = await env.SANDBOX.exec(command);
+  return result;
+}
+
+async function runAutoresearch(env: Env): Promise<string> {
+  const repo = env.AUTORESEARCH_REPO ?? "kyleboas/blob";
+  const branch = env.AUTORESEARCH_BRANCH ?? "main";
+  const workspace = "/workspace/blob";
+
+  // 1. Clone / pull latest into the sandbox
+  const cloneCheck = await sandboxExec(env, `test -d ${workspace}/.git && echo exists || echo missing`);
+  if (cloneCheck.stdout.trim() === "missing") {
+    const token = env.GITHUB_TOKEN ?? "";
+    const cloneUrl = token
+      ? `https://x-access-token:${token}@github.com/${repo}.git`
+      : `https://github.com/${repo}.git`;
+    await sandboxExec(env, `git clone --depth 1 --branch ${branch} ${cloneUrl} ${workspace}`);
+  } else {
+    await sandboxExec(env, `cd ${workspace} && git fetch origin ${branch} && git reset --hard origin/${branch}`);
+  }
+
+  // Configure git identity for experiment commits
+  await sandboxExec(env, `cd ${workspace} && git config user.email "autoresearch@blob.bot" && git config user.name "autoresearch"`);
+
+  // Pass AI Gateway creds into sandbox env for the eval scripts
+  const envVars = [
+    `AI_GATEWAY_BASE_URL="${env.AI_GATEWAY_BASE_URL ?? ""}"`,
+    `AI_GATEWAY_TOKEN="${env.AI_GATEWAY_TOKEN ?? ""}"`,
+  ].join(" ");
+
+  // 2. Run baseline eval
+  logEvent(env, "autoresearch", "baseline_eval_start", {});
+  const baselineRun = await sandboxExec(
+    env,
+    `cd ${workspace} && ${envVars} node --experimental-strip-types evals/run-eval.ts 2>&1`,
+  );
+  logEvent(env, "autoresearch", "baseline_eval_done", { stdout: baselineRun.stdout.slice(-500) });
+
+  const baselineMatch = baselineRun.stdout.match(/EVAL_AGGREGATE=([\d.]+)/);
+  const baselineScore = baselineMatch ? Number.parseFloat(baselineMatch[1]) : 0;
+
+  // 3. Propose a change
+  logEvent(env, "autoresearch", "propose_start", {});
+  const proposeRun = await sandboxExec(
+    env,
+    `cd ${workspace} && ${envVars} node --experimental-strip-types evals/propose-change.ts 2>&1`,
+  );
+  logEvent(env, "autoresearch", "propose_done", { stdout: proposeRun.stdout.slice(-500) });
+
+  const skipMatch = proposeRun.stdout.match(/PROPOSAL_SKIP=(\w+)/);
+  if (skipMatch?.[1] === "true") {
+    await storeExperimentLog(env, {
+      baselineScore,
+      experimentScore: null,
+      hypothesis: "no improvement needed",
+      accepted: false,
+    });
+    return `Autoresearch: baseline=${baselineScore}/20, no change proposed`;
+  }
+
+  // 4. Read proposal and apply the change
+  let proposal: { hypothesis: string; target_file?: string; old_text?: string; new_text?: string };
+  try {
+    const proposalJson = await env.SANDBOX.readFile(`${workspace}/evals/proposal.json`);
+    proposal = JSON.parse(proposalJson);
+  } catch {
+    return `Autoresearch: baseline=${baselineScore}/20, failed to read proposal`;
+  }
+
+  if (!proposal.target_file || !proposal.old_text || !proposal.new_text) {
+    return `Autoresearch: baseline=${baselineScore}/20, invalid proposal`;
+  }
+
+  // Create experiment branch
+  const experimentBranch = `autoresearch/${Date.now()}`;
+  await sandboxExec(env, `cd ${workspace} && git checkout -b ${experimentBranch}`);
+
+  // Apply the edit
+  const editResult = await sandboxExec(
+    env,
+    `cd ${workspace} && node -e "
+      const fs = require('fs');
+      const file = '${proposal.target_file}';
+      const content = fs.readFileSync(file, 'utf-8');
+      const oldText = ${JSON.stringify(proposal.old_text)};
+      const newText = ${JSON.stringify(proposal.new_text)};
+      if (!content.includes(oldText)) { console.error('old_text not found'); process.exit(1); }
+      fs.writeFileSync(file, content.replace(oldText, newText));
+      console.log('Edit applied');
+    " 2>&1`,
+  );
+
+  if (editResult.exitCode !== 0) {
+    await sandboxExec(env, `cd ${workspace} && git checkout ${branch} && git branch -D ${experimentBranch}`);
+    await storeExperimentLog(env, {
+      baselineScore,
+      experimentScore: null,
+      hypothesis: proposal.hypothesis,
+      accepted: false,
+    });
+    return `Autoresearch: baseline=${baselineScore}/20, edit failed: ${editResult.stderr}`;
+  }
+
+  // 5. Run typecheck
+  const typecheck = await sandboxExec(env, `cd ${workspace} && npx tsc --noEmit 2>&1`);
+  if (typecheck.exitCode !== 0) {
+    await sandboxExec(env, `cd ${workspace} && git checkout ${branch} && git branch -D ${experimentBranch}`);
+    await storeExperimentLog(env, {
+      baselineScore,
+      experimentScore: null,
+      hypothesis: proposal.hypothesis,
+      accepted: false,
+    });
+    return `Autoresearch: baseline=${baselineScore}/20, typecheck failed after edit`;
+  }
+
+  // 6. Run experiment eval
+  logEvent(env, "autoresearch", "experiment_eval_start", { hypothesis: proposal.hypothesis });
+  const experimentRun = await sandboxExec(
+    env,
+    `cd ${workspace} && ${envVars} node --experimental-strip-types evals/run-eval.ts 2>&1`,
+  );
+
+  const expMatch = experimentRun.stdout.match(/EVAL_AGGREGATE=([\d.]+)/);
+  const experimentScore = expMatch ? Number.parseFloat(expMatch[1]) : 0;
+
+  // 7. Accept or reject
+  const accepted = experimentScore > baselineScore;
+  const result: AutoresearchResult = {
+    baselineScore,
+    experimentScore,
+    hypothesis: proposal.hypothesis,
+    accepted,
+  };
+
+  if (accepted) {
+    // Commit the change on the experiment branch
+    await sandboxExec(
+      env,
+      `cd ${workspace} && git add -A && git commit -m "autoresearch: ${proposal.hypothesis.slice(0, 72)}"`,
+    );
+
+    // Merge back into the base branch
+    await sandboxExec(env, `cd ${workspace} && git checkout ${branch} && git merge ${experimentBranch}`);
+
+    // Push if we have a token
+    if (env.GITHUB_TOKEN) {
+      await sandboxExec(env, `cd ${workspace} && git push origin ${branch} 2>&1`);
+    }
+  } else {
+    // Discard the experiment
+    await sandboxExec(env, `cd ${workspace} && git checkout ${branch} && git branch -D ${experimentBranch}`);
+  }
+
+  await storeExperimentLog(env, result);
+
+  const verdict = accepted ? "ACCEPTED" : "REJECTED";
+  return `Autoresearch: baseline=${baselineScore}/20, experiment=${experimentScore}/20, ${verdict} — ${proposal.hypothesis}`;
+}
+
+async function storeExperimentLog(env: Env, result: AutoresearchResult): Promise<void> {
+  const line = [
+    new Date().toISOString(),
+    result.hypothesis,
+    "",
+    String(result.baselineScore),
+    String(result.experimentScore ?? "n/a"),
+    String(result.accepted),
+    "",
+  ].join("\t");
+
+  // Append to R2
+  const key = "autoresearch/experiments.tsv";
+  const existing = await env.REPO_STORE.get(key);
+  const prev = existing ? await existing.text() : "timestamp\thypothesis\ttarget_file\tbaseline_score\texperiment_score\taccepted\tnotes\n";
+  await env.REPO_STORE.put(key, `${prev}${line}\n`);
 }
 
 export async function recordCronOutcome(env: Env, outcome: CronTaskOutcome): Promise<void> {
