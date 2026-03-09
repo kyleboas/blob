@@ -2,7 +2,7 @@ import { assertTransition, shouldForcePause, type JobStatus } from "../jobs/job-
 import { type CronOutcomeRecord, detectCronAlerts, buildCronAlert, postCronAlertWithFallback } from "../jobs/cron-jobs";
 import { logEvent } from "../core/observability";
 
-interface CronJob {
+export interface CronJob {
   id: string;
   schedule: string;
   task: string;
@@ -10,7 +10,7 @@ interface CronJob {
   createdAt: number;
 }
 
-interface BlobState {
+export interface BlobState {
   repos: string[];
   goals: Record<string, string[]>;
   messages: Array<{ role: string; content: string; timestamp: number }>;
