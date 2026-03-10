@@ -155,6 +155,13 @@ export async function processIntentOrChat(params: {
     return;
   }
 
+  // Override needsSandbox for real-time data queries that the LLM cannot answer without tools.
+  // This guards against misclassification by the intent classifier.
+  const REALTIME_KEYWORDS = /\b(weather|forecast|temperature|rain|snow|wind|humidity|sunrise|sunset|stock price|stock quote|sports score|breaking news|latest news|current time|what time is it|exchange rate)\b/i;
+  if (!intent.needsSandbox && REALTIME_KEYWORDS.test(text)) {
+    intent.needsSandbox = true;
+  }
+
   try {
     const conversationHistory = await getConversationHistory(conversationDO, env);
     if (intent.needsSandbox) {
