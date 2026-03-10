@@ -53,6 +53,89 @@ test("structured tool-call parser handles valid and invalid payloads", () => {
   assert.equal(invalid, null);
 });
 
+
+
+test("tool-avoidance claim detector catches no-access language", () => {
+  assert.equal(__piAgentTestUtils.containsToolAvoidanceClaim("I don't have access to real-time weather data."), true);
+  assert.equal(__piAgentTestUtils.containsToolAvoidanceClaim("I cannot access that right now."), true);
+  assert.equal(__piAgentTestUtils.containsToolAvoidanceClaim("Here is the result."), false);
+});
+
+test("agent prompts for tool usage when classifier says sandbox is needed", async () => {
+  const env = makeEnv();
+  const agent = new PiAgent(env, "acme/repo");
+
+  let callCount = 0;
+  (agent as any).callLLM = async () => {
+    callCount += 1;
+    if (callCount === 1) {
+      return { content: "Here is my best guess.", toolCalls: [] };
+    }
+    if (callCount === 2) {
+      return { content: "", toolCalls: [{ function: { name: "bash", arguments: '{"command":"echo live-data"}' } }] };
+    }
+    return { content: "Fetched live-data.", toolCalls: [] };
+  };
+
+  (agent as any).shouldRequireSandboxForMessage = async () => true;
+  (agent as any).ensureRepoBootstrapped = async () => undefined;
+  (agent as any).executeToolWithRetry = async () => ({ output: "live-data" });
+
+  const result = await agent.run("give me latest exchange rate");
+
+  assert.equal(result, "Fetched live-data.");
+  assert.equal(callCount, 3);
+});
+
+test("agent prompts for tool usage when model claims no access on uncovered topic", async () => {
+  const env = makeEnv();
+  const agent = new PiAgent(env, "acme/repo");
+
+  let callCount = 0;
+  (agent as any).callLLM = async () => {
+    callCount += 1;
+    if (callCount === 1) {
+      return { content: "I don't have access to real-time exchange-rate data.", toolCalls: [] };
+    }
+    if (callCount === 2) {
+      return { content: "", toolCalls: [{ function: { name: "bash", arguments: '{"command":"echo 0.92"}' } }] };
+    }
+    return { content: "USD/EUR is 0.92.", toolCalls: [] };
+  };
+
+  (agent as any).ensureRepoBootstrapped = async () => undefined;
+  (agent as any).executeToolWithRetry = async () => ({ output: "0.92" });
+
+  const result = await agent.run("exchange rate usd eur");
+
+  assert.equal(result, "USD/EUR is 0.92.");
+  assert.equal(callCount, 3);
+});
+
+test("agent prompts for tool usage when external data request gets no tool call", async () => {
+  const env = makeEnv();
+  const agent = new PiAgent(env, "acme/repo");
+
+  let callCount = 0;
+  (agent as any).callLLM = async () => {
+    callCount += 1;
+    if (callCount === 1) {
+      return { content: "I don't have access to real-time weather data.", toolCalls: [] };
+    }
+    if (callCount === 2) {
+      return { content: "", toolCalls: [{ function: { name: "bash", arguments: '{"command":"echo sunny"}' } }] };
+    }
+    return { content: "It is sunny.", toolCalls: [] };
+  };
+
+  (agent as any).ensureRepoBootstrapped = async () => undefined;
+  (agent as any).executeToolWithRetry = async () => ({ output: "sunny" });
+
+  const result = await agent.run("what is the weather in london right now");
+
+  assert.equal(result, "It is sunny.");
+  assert.equal(callCount, 3);
+});
 test("agent run executes structured tool calls and emits tool ledger entries", async () => {
   const env = makeEnv();
   const agent = new PiAgent(env, "acme/repo");
@@ -131,6 +214,7 @@ test("verification loop re-enters agent when VERIFY_COMMAND fails", async () => 
   try {
     const progress: string[] = [];
     const agent = new PiAgent(env, "blob");
+    (agent as any).shouldRequireSandboxForMessage = async () => false;
     const result = await agent.run("fix tests", {
       sandboxId: "verify-1",
       verbosity: "verbose",
@@ -204,6 +288,7 @@ test("verification stops retrying after max attempts", async () => {
 
   try {
     const agent = new PiAgent(env, "blob");
+    (agent as any).shouldRequireSandboxForMessage = async () => false;
     const result = await agent.run("fix it", { sandboxId: "verify-max" });
 
     // After 2 failed verify attempts, the 3rd "done" goes through without verify

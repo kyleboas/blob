@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isRecoverableSandboxError, runSandboxOperation } from "../integrations/sandbox-retry";
+import { isRecoverableSandboxError, resetSandboxStartedState, runSandboxOperation } from "../integrations/sandbox-retry";
 
 test("isRecoverableSandboxError detects shell/session restart errors", () => {
   assert.equal(isRecoverableSandboxError(new Error("Session 'sandbox-agent' is not ready or shell has died")), true);
@@ -9,6 +9,7 @@ test("isRecoverableSandboxError detects shell/session restart errors", () => {
 });
 
 test("runSandboxOperation retries once on recoverable error", async () => {
+  resetSandboxStartedState();
   let starts = 0;
   let calls = 0;
   const sandbox = {
@@ -29,6 +30,7 @@ test("runSandboxOperation retries once on recoverable error", async () => {
 });
 
 test("runSandboxOperation does not retry non-recoverable errors", async () => {
+  resetSandboxStartedState();
   let starts = 0;
   let calls = 0;
   const sandbox = {

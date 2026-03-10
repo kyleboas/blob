@@ -3,6 +3,7 @@ import { DEFAULT_MODEL, WORKERS_AI_FALLBACK_MODEL } from "../core/models";
 import { appendWorkspaceState, editTool, ensureSandboxSession, executeInSandbox, readTool, writeTool } from "../integrations/sandbox";
 import { logEvent } from "../core/observability";
 import { estimateTokens } from "../core/tokens";
+import { classifyNeedsSandbox } from "../core/intent-classifier";
 import { withDOAuth } from "../core/do-auth";
 import { expireUnusedTools } from "./tool-lifecycle";
 import {
@@ -140,6 +141,12 @@ function summarizeArgs(args: Record<string, unknown>): string {
     .slice(0, 3)
     .map(([key, value]) => `${key}=${summarizeText(String(value), 80)}`);
   return parts.join(", ");
+}
+
+const TOOL_AVOIDANCE_CLAIMS = /\b(i\s+(?:do\s*not|don't|cannot|can't)\s+(?:access|get|retrieve|provide)|no\s+access|unable\s+to\s+(?:access|get|retrieve)|don't\s+have\s+access|real\s*[- ]?time\s+data)\b/i;
+
+function containsToolAvoidanceClaim(message: string): boolean {
+  return TOOL_AVOIDANCE_CLAIMS.test(message);
 }
 
 function shellQuote(value: string): string {
@@ -706,6 +713,14 @@ fi
     }
   }
 
+  private async shouldRequireSandboxForMessage(userMessage: string): Promise<boolean> {
+    try {
+      return await classifyNeedsSandbox(userMessage, this.env);
+    } catch (_err) {
+      return false;
+    }
+  }
+
   async run(userMessage: string, opts: RunOptions = {}): Promise<string> {
     const sandboxId = opts.sandboxId ?? "default";
     const usage: BudgetState = { inputTokens: 0, outputTokens: 0, warned: false, halted: false };
@@ -725,6 +740,9 @@ fi
     let consecutiveFailures = 0;
     let bootstrapAttempted = false;
     let verifyAttempts = 0;
+    let toolCallsExecuted = 0;
+    let externalDataGuardAttempts = 0;
+    let needsSandboxForMessage: boolean | null = null;
     const maxVerifyAttempts = Number.parseInt(this.env.VERIFY_MAX_ATTEMPTS ?? "3", 10);
 
     const verbosity = opts.verbosity ?? "verbose";
@@ -777,6 +795,25 @@ fi
       const structuredToolCall = llmResponse.toolCalls.length > 0 ? parseStructuredToolCall(llmResponse.toolCalls[0]) : null;
       const toolCall = structuredToolCall;
       if (!toolCall) {
+        if (needsSandboxForMessage === null) {
+          needsSandboxForMessage = await this.shouldRequireSandboxForMessage(userMessage);
+        }
+        const claimedNoAccess = containsToolAvoidanceClaim(responseText);
+        const shouldForceToolAttempt =
+          toolCallsExecuted === 0 && externalDataGuardAttempts < 2 && (needsSandboxForMessage || claimedNoAccess);
+        if (shouldForceToolAttempt) {
+          externalDataGuardAttempts += 1;
+          this.messages.push({ role: "assistant", content: responseText });
+          this.messages.push({
+            role: "user",
+            content: "Before finalizing, use an available tool (typically bash with curl) to fetch real external data for this request, then answer using the result. Do not claim lack of access without attempting a tool call.",
+          });
+          if (opts.onProgress && verbosity === "verbose") {
+            await opts.onProgress("🔎 External/fresh-data request detected: prompting model to call tools before final answer.");
+          }
+          continue;
+        }
+
         // No tool call — the model thinks it's done. Run verification if configured.
         const verifyResult = await this.runVerification(sandboxId, bootstrapAttempted, verifyAttempts, maxVerifyAttempts, opts);
         if (verifyResult.passed || verifyResult.skipped) {
@@ -849,6 +886,7 @@ fi
           return this.finishRun(userMessage, pauseMsg, conversationKey, sandboxId);
         }
       } else {
+        toolCallsExecuted += 1;
         consecutiveFailures = 0;
         this.messages.push({
           role: "user",
@@ -868,4 +906,5 @@ export const __piAgentTestUtils = {
   TOOL_SCHEMAS,
   isTransientError,
   buildBootstrapScript,
+  containsToolAvoidanceClaim,
 };
