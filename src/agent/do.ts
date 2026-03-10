@@ -8,6 +8,12 @@ import {
   handleListCronOutcomes,
   handleSaveCronOutcome,
 } from "./handlers/cron";
+import {
+  handleCheckEvent,
+  handleGetDailyTokens,
+  handleGetHeartbeatStatus,
+  handleIncrementDailyTokens,
+} from "./handlers/heartbeat";
 import { handleDeleteSecret, handleListSecrets, handleSaveSecret } from "./handlers/secrets";
 
 export interface CronJob {
@@ -418,43 +424,21 @@ export class AgentDO {
     }
 
     if (url.pathname === "/heartbeat/status" && request.method === "GET") {
-      const nextAlarm = await this.state.storage.getAlarm();
-      const rows = this.state.storage.sql.exec(
-        "SELECT status, COUNT(*) AS count FROM jobs GROUP BY status",
-      );
-      const jobCounts = {
-        queued: 0,
-        paused: 0,
-        running: 0,
-      };
-      for (const row of rows) {
-        const status = String(row.status) as keyof typeof jobCounts;
-        if (status in jobCounts) {
-          jobCounts[status] = Number(row.count);
-        }
-      }
-      return json({
-        nextAlarmAt: nextAlarm ? new Date(nextAlarm).toISOString() : null,
-        lastStartedAt: this.data.heartbeat?.lastStartedAt ?? null,
-        lastCompletedAt: this.data.heartbeat?.lastCompletedAt ?? null,
-        callsRemaining: this.data.heartbeat?.callsRemaining ?? null,
-        jobs: jobCounts,
-        config: this.getEffectiveHeartbeatConfig(),
+      return handleGetHeartbeatStatus({
+        state: this.state,
+        data: this.data,
+        getEffectiveHeartbeatConfig: this.getEffectiveHeartbeatConfig.bind(this),
+        save: this.save.bind(this),
       });
     }
 
     if (url.pathname === "/events/check" && request.method === "POST") {
-      const { eventId } = (await request.json()) as { eventId: string };
-      const events = this.data.processedEvents || [];
-      const now = Date.now();
-      const validEvents = events.filter((e) => now - e.timestamp < 5 * 60 * 1000);
-      if (validEvents.some((e) => e.id === eventId)) {
-        return json({ processed: true });
-      }
-      validEvents.push({ id: eventId, timestamp: now });
-      this.data.processedEvents = validEvents;
-      await this.save();
-      return json({ processed: false });
+      return handleCheckEvent(request, {
+        state: this.state,
+        data: this.data,
+        getEffectiveHeartbeatConfig: this.getEffectiveHeartbeatConfig.bind(this),
+        save: this.save.bind(this),
+      });
     }
 
     if (url.pathname === "/cron" && request.method === "GET") {
@@ -479,22 +463,21 @@ export class AgentDO {
     }
 
     if (url.pathname === "/daily-tokens" && request.method === "GET") {
-      const date = url.searchParams.get("date") ?? new Date().toISOString().slice(0, 10);
-      const row = this.state.storage.sql.exec("SELECT total_tokens FROM daily_token_usage WHERE date=?", date).toArray();
-      const total = row.length > 0 ? Number(row[0].total_tokens) : 0;
-      return json({ date, totalTokens: total });
+      return handleGetDailyTokens(url, {
+        state: this.state,
+        data: this.data,
+        getEffectiveHeartbeatConfig: this.getEffectiveHeartbeatConfig.bind(this),
+        save: this.save.bind(this),
+      });
     }
 
     if (url.pathname === "/daily-tokens" && request.method === "POST") {
-      const { date, tokens } = (await request.json()) as { date: string; tokens: number };
-      const existing = this.state.storage.sql.exec("SELECT total_tokens FROM daily_token_usage WHERE date=?", date).toArray();
-      if (existing.length > 0) {
-        const newTotal = Number(existing[0].total_tokens) + tokens;
-        this.state.storage.sql.exec("UPDATE daily_token_usage SET total_tokens=? WHERE date=?", newTotal, date);
-        return json({ date, totalTokens: newTotal });
-      }
-      this.state.storage.sql.exec("INSERT INTO daily_token_usage (date, total_tokens) VALUES (?, ?)", date, tokens);
-      return json({ date, totalTokens: tokens });
+      return handleIncrementDailyTokens(request, {
+        state: this.state,
+        data: this.data,
+        getEffectiveHeartbeatConfig: this.getEffectiveHeartbeatConfig.bind(this),
+        save: this.save.bind(this),
+      });
     }
 
     if (url.pathname === "/secrets" && request.method === "GET") {
