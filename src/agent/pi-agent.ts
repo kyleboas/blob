@@ -1,5 +1,5 @@
 import type { Env } from "../core/types";
-import { DEFAULT_MODEL } from "../core/models";
+import { DEFAULT_MODEL, WORKERS_AI_FALLBACK_MODEL } from "../core/models";
 import { appendWorkspaceState, editTool, ensureSandboxSession, executeInSandbox, readTool, writeTool } from "../integrations/sandbox";
 import { logEvent } from "../core/observability";
 import { estimateTokens } from "../core/tokens";
@@ -355,7 +355,7 @@ fi
               "content-type": "application/json",
               Authorization: `Bearer ${this.env.AI_GATEWAY_TOKEN}`,
             },
-            body: JSON.stringify({ model: this.env.LLM_MODEL ?? DEFAULT_MODEL, messages: this.messages, tools: TOOL_SCHEMAS }),
+            body: JSON.stringify({ model: this.env.LLM_MODEL ?? DEFAULT_MODEL, messages: this.messages, tools: TOOL_SCHEMAS, max_tokens: 4096 }),
           });
 
           if (!response.ok) {
@@ -392,7 +392,19 @@ fi
       throw new Error("LLM retries exhausted");
     }
 
-    throw new Error("AI gateway is required");
+    // Fallback to Workers AI when AI Gateway is not configured
+    const ai = (this.env as any).AI as { run: (model: string, inputs: { messages: PiMessage[]; max_tokens: number }) => Promise<{ response?: string }> } | undefined;
+    if (!ai) {
+      throw new Error("Neither AI Gateway nor Workers AI available");
+    }
+    const result = await ai.run(WORKERS_AI_FALLBACK_MODEL, {
+      messages: this.messages,
+      max_tokens: 4096,
+    });
+    return {
+      content: result.response ?? "",
+      toolCalls: [],
+    };
   }
 
   private async executeToolWithRetry(call: ToolCall, sandboxId: string): Promise<ToolResult> {
