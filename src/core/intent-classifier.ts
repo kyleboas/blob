@@ -1,5 +1,5 @@
 import { logEvent } from "./observability";
-import { AI_WORKERS_MODEL } from "./models";
+import { WORKERS_AI_FALLBACK_MODEL } from "./models";
 import type { Env } from "./types";
 
 export interface IntentResult {
@@ -36,15 +36,13 @@ Message: "${text}"`;
 
   try {
     if (!env.AI) {
-      throw new Error("Workers AI binding unavailable for intent classification");
+      throw new Error("Workers AI binding not available");
     }
-
-    const response = await env.AI.run(AI_WORKERS_MODEL, {
+    const result = await env.AI.run(WORKERS_AI_FALLBACK_MODEL, {
       messages: [{ role: "user", content: prompt }],
       max_tokens: 200,
     }) as { response?: string };
-
-    const jsonMatch = String(response.response ?? "").match(/\{[\s\S]*\}/);
+    const jsonMatch = (result.response ?? "").match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       return JSON.parse(jsonMatch[0]) as IntentResult;
     }
