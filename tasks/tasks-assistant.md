@@ -78,7 +78,7 @@ Update the file after completing each sub-task, not just after completing an ent
 
 - [ ] 1.0 Decompose the Durable Object and Slack handler (FR-1, FR-3)
   - [x] 1.1 Create `src/core/tokens.ts` with a single `estimateTokens(text: string): number` function. Use the word-count-based estimator from `memory-system.ts` (`Math.ceil(text.trim().split(/\s+/).filter(Boolean).length * 1.3)`). Export it as the sole token estimator for the project.
-  - [ ] 1.2 Create `src/agent/do-router.ts`. Implement a `routeRequest(url: URL, method: string, request: Request, ctx: { state: DurableObjectState; env: Env; data: BlobState; save: () => Promise<void> })` function that maps URL+method pairs to handler functions. Return 404 for unmatched routes.
+  - [x] 1.2 Create `src/agent/do-router.ts`. Implement a `routeRequest(url: URL, method: string, request: Request, ctx: { state: DurableObjectState; env: Env; data: BlobState; save: () => Promise<void> })` function that maps URL+method pairs to handler functions. Return 404 for unmatched routes.
   - [x] 1.3 Create `src/agent/handlers/jobs.ts`. Extract the `/jobs` POST, `/jobs` GET, and `/jobs/transition` POST logic from `do.ts` into exported handler functions. Each function accepts the router context and returns `Response`.
   - [x] 1.4 Create `src/agent/handlers/messages.ts`. Extract `/messages` GET and POST. Fix the dead branch: the `> 25` compaction and `> 100` trim must be evaluated correctly (check `> 100` first, then `> 25`).
   - [x] 1.5 Create `src/agent/handlers/settings.ts`. Extract `/settings/verbosity` and `/settings/heartbeat` GET/POST.
