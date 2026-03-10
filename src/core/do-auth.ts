@@ -5,9 +5,15 @@ export function withDOAuth(env: Pick<Env, "DO_AUTH_SECRET"> | undefined, init?: 
     return init;
   }
 
-  const currentHeaders = init?.headers && !(init.headers instanceof Headers) ? init.headers : {};
-  if (env?.DO_AUTH_SECRET) {
-    return { ...init, headers: { ...currentHeaders, "x-do-auth": env.DO_AUTH_SECRET } };
+  // Normalize existing headers to a plain object so we can spread them
+  let currentHeaders: Record<string, string> = {};
+  if (init?.headers) {
+    if (init.headers instanceof Headers) {
+      init.headers.forEach((value, key) => { currentHeaders[key] = value; });
+    } else {
+      currentHeaders = init.headers as Record<string, string>;
+    }
   }
-  return init;
+
+  return { ...init, headers: { ...currentHeaders, "x-do-auth": env.DO_AUTH_SECRET } };
 }
