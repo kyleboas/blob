@@ -1,8 +1,9 @@
 import type { Env } from "../core/types";
+import { withDOAuth } from "../core/do-auth";
 
 export async function monitorPostDeploy(env: Env, heartbeatCount: number): Promise<"healthy" | "unhealthy"> {
   const do_ = env.AGENT_DO.get(env.AGENT_DO.idFromName("blob"));
-  const res = await do_.fetch("http://do/heartbeat/status");
+  const res = await do_.fetch("http://do/heartbeat/status", withDOAuth(env));
   if (!res.ok) return "unhealthy";
   const data = await res.json() as { jobs?: { running?: number }; consecutiveHeartbeatFailures?: number };
   const failures = data.consecutiveHeartbeatFailures ?? 0;
@@ -28,7 +29,7 @@ export async function rollback(env: Env): Promise<void> {
   }
 
   if (env.SLACK_BOT_TOKEN && env.SLACK_SUMMARY_CHANNEL) {
-    await fetch("https://slack.com/api/chat.postMessage", {
+    const slackRes = await fetch("https://slack.com/api/chat.postMessage", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${env.SLACK_BOT_TOKEN}`,
@@ -39,5 +40,8 @@ export async function rollback(env: Env): Promise<void> {
         text: "🚨 Auto-rollback executed after consecutive post-deploy heartbeat failures.",
       }),
     });
+    if (!slackRes.ok) {
+      console.error(`Rollback Slack alert failed: ${slackRes.status} ${await slackRes.text()}`);
+    }
   }
 }
