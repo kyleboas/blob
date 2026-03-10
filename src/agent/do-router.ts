@@ -3,6 +3,7 @@ import { logEvent } from "../core/observability";
 import type { Env } from "../core/types";
 import type { BlobState, CronJob } from "./do";
 import { handleCreateJob, handleListJobs, handleTransitionJob } from "./handlers/jobs";
+import { handleGetLearnedMemoryStatus, handleGetVectorizeMemoryStatus, handleSetLearnedMemoryStatus, handleSetVectorizeMemoryStatus } from "./handlers/memory-status";
 import { handleListMessages, handleStoreMessage } from "./handlers/messages";
 import { handleDeleteSecret, handleListSecrets, handleSaveSecret } from "./handlers/secrets";
 import { handleGetHeartbeatSettings, handleGetVerbosity, handleSetHeartbeatSettings, handleSetVerbosity } from "./handlers/settings";
@@ -101,47 +102,19 @@ export async function routeRequest(
   }
 
   if (pathname === "/memory/learned/status" && method === "GET") {
-    return json({
-      lastFlushAt: data.learnedMemory?.lastFlushAt ?? null,
-      lastFlushCount: data.learnedMemory?.lastFlushCount ?? 0,
-      lastRecordTimestamp: data.learnedMemory?.lastRecordTimestamp ?? null,
-      lastRecordSummary: data.learnedMemory?.lastRecordSummary ?? null,
-    });
+    return handleGetLearnedMemoryStatus(ctx);
   }
 
   if (pathname === "/memory/learned/status" && method === "POST") {
-    const body = (await request.json()) as {
-      lastFlushAt?: string;
-      lastFlushCount?: number;
-      lastRecordTimestamp?: string;
-      lastRecordSummary?: string;
-    };
-    data.learnedMemory = { ...(data.learnedMemory ?? {}), ...body };
-    await save();
-    return json({ saved: true, learnedMemory: data.learnedMemory });
+    return handleSetLearnedMemoryStatus(request, ctx);
   }
 
   if (pathname === "/memory/vectorize/status" && method === "GET") {
-    return json({
-      lastUpsertAt: data.vectorizeMemory?.lastUpsertAt ?? null,
-      lastUpsertOk: data.vectorizeMemory?.lastUpsertOk ?? null,
-      lastUpsertError: data.vectorizeMemory?.lastUpsertError ?? null,
-      lastQueryAt: data.vectorizeMemory?.lastQueryAt ?? null,
-      lastQueryCount: data.vectorizeMemory?.lastQueryCount ?? 0,
-    });
+    return handleGetVectorizeMemoryStatus(ctx);
   }
 
   if (pathname === "/memory/vectorize/status" && method === "POST") {
-    const body = (await request.json()) as {
-      lastUpsertAt?: string;
-      lastUpsertOk?: boolean;
-      lastUpsertError?: string;
-      lastQueryAt?: string;
-      lastQueryCount?: number;
-    };
-    data.vectorizeMemory = { ...(data.vectorizeMemory ?? {}), ...body };
-    await save();
-    return json({ saved: true, vectorizeMemory: data.vectorizeMemory });
+    return handleSetVectorizeMemoryStatus(request, ctx);
   }
 
   if (pathname === "/heartbeat/status" && method === "GET") {
