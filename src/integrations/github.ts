@@ -81,11 +81,12 @@ export function analyzePrePushSyncResult(exitCode: number, stdout: string, stder
 
 export function scanDiffForSecrets(diffText: string, patterns: RegExp[] = getSecretPatterns()): { blocked: boolean; matches: string[] } {
   const matches: string[] = [];
-  const lines = diffText.split("\n").filter((line) => line.startsWith("+"));
+  const lines = diffText.split("\n").filter((line) => line && !line.startsWith("-"));
   for (const line of lines) {
     for (const pattern of patterns) {
       if (pattern.test(line)) {
-        matches.push(line.slice(0, 200));
+        const normalized = line.startsWith("+") ? line.slice(1) : line;
+        matches.push(normalized.slice(0, 200));
         break;
       }
     }

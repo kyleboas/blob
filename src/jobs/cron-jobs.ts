@@ -2,6 +2,7 @@ import type { Env } from "../core/types";
 import { R2MemoryStore, writeMemoryItem, compactScope, reconcileMemory } from "../core/memory-system";
 import { logEvent } from "../core/observability";
 import { redactSecrets } from "../core/safety";
+import { withDOAuth } from "../core/do-auth";
 import { runEval } from "../../evals/run-eval";
 import { proposeChange } from "../../evals/propose-change";
 import type { Scenario } from "../../evals/run-eval";
@@ -397,10 +398,10 @@ async function storeExperimentLog(env: Env, result: AutoresearchResult): Promise
 
 export async function recordCronOutcome(env: Env, outcome: CronTaskOutcome): Promise<void> {
   const do_ = env.AGENT_DO.get(env.AGENT_DO.idFromName("blob"));
-  await do_.fetch("http://do/cron/outcome", {
+  await do_.fetch("http://do/cron/outcome", withDOAuth(env, {
     method: "POST",
     body: JSON.stringify(outcome),
-  });
+  }));
 }
 
 export function buildCronAlert(outcome: CronTaskOutcome, existing?: CronOutcomeRecord): string {

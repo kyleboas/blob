@@ -3,6 +3,7 @@ import { deriveRoutingKey, verifySlackSignature } from "./slack-routing";
 import { createLogRef, logEvent } from "../core/observability";
 import { redactSecrets } from "../core/safety";
 import { classifyIntent, handleCommand } from "./slack-commands";
+import { withDOAuth } from "../core/do-auth";
 import { processIntentOrChat, type SlackEventPayload } from "./slack-message-processing";
 
 const inFlightEvents = new Set<string>();
@@ -53,10 +54,10 @@ async function processSlackMessage(body: SlackEventPayload, env: Env): Promise<v
     try {
       const key = deriveRoutingKey(body);
       const do_ = env.AGENT_DO.get(env.AGENT_DO.idFromName(key));
-      const checkRes = await do_.fetch("http://do/events/check", {
+      const checkRes = await do_.fetch("http://do/events/check", withDOAuth(env, {
         method: "POST",
         body: JSON.stringify({ eventId }),
-      });
+      }));
       const { processed } = await checkRes.json() as { processed: boolean };
       if (processed) return;
     } finally {

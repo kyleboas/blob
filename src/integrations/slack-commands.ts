@@ -4,6 +4,7 @@ import { getLearnedMemoryStatus, getVectorizeMemoryStatus } from "../core/memory
 import { logEvent } from "../core/observability";
 import { getRepos } from "../core/storage";
 import type { Env } from "../core/types";
+import { withDOAuth } from "../core/do-auth";
 
 type Verbosity = "minimal" | "verbose";
 
@@ -83,10 +84,10 @@ export async function detectAndStoreSecret(
       const do_ = globalDO(env);
       if (!do_) return null;
 
-      await do_.fetch("http://do/secrets", {
+      await do_.fetch("http://do/secrets", withDOAuth(env, {
         method: "POST",
         body: JSON.stringify({ name, value }),
-      });
+      }));
 
       logEvent(env, "slack_ingest", "secret_stored", { name, channel });
       return { message: `Got it — stored ${name} securely. It will be available next time I run a tool.` };
@@ -96,10 +97,10 @@ export async function detectAndStoreSecret(
   return null;
 }
 
-export async function getConversationVerbosity(conversationDO: DurableObjectStub | null): Promise<Verbosity> {
+export async function getConversationVerbosity(conversationDO: DurableObjectStub | null, env?: Env): Promise<Verbosity> {
   if (!conversationDO) return "minimal";
   try {
-    const res = await conversationDO.fetch("http://do/settings/verbosity");
+    const res = await conversationDO.fetch("http://do/settings/verbosity", withDOAuth(env as Env));
     const data = await res.json() as { verbosity?: Verbosity };
     return data.verbosity === "verbose" ? "verbose" : "minimal";
   } catch {
@@ -107,23 +108,23 @@ export async function getConversationVerbosity(conversationDO: DurableObjectStub
   }
 }
 
-async function setConversationVerbosity(conversationDO: DurableObjectStub | null, verbosity: Verbosity): Promise<Verbosity> {
+async function setConversationVerbosity(conversationDO: DurableObjectStub | null, verbosity: Verbosity, env: Env): Promise<Verbosity> {
   if (!conversationDO) return verbosity;
   try {
-    await conversationDO.fetch("http://do/settings/verbosity", {
+    await conversationDO.fetch("http://do/settings/verbosity", withDOAuth(env, {
       method: "POST",
       body: JSON.stringify({ verbosity }),
-    });
+    }));
     return verbosity;
   } catch {
     return verbosity;
   }
 }
 
-async function getHeartbeatConfig(conversationDO: DurableObjectStub | null): Promise<{ intervalMs: number; modelCallLimit: number }> {
+async function getHeartbeatConfig(conversationDO: DurableObjectStub | null, env: Env): Promise<{ intervalMs: number; modelCallLimit: number }> {
   if (!conversationDO) return { intervalMs: 600000, modelCallLimit: 10 };
   try {
-    const res = await conversationDO.fetch("http://do/settings/heartbeat");
+    const res = await conversationDO.fetch("http://do/settings/heartbeat", withDOAuth(env));
     const data = await res.json() as { intervalMs?: number; modelCallLimit?: number };
     return { intervalMs: data.intervalMs ?? 600000, modelCallLimit: data.modelCallLimit ?? 10 };
   } catch {
@@ -131,13 +132,13 @@ async function getHeartbeatConfig(conversationDO: DurableObjectStub | null): Pro
   }
 }
 
-async function setHeartbeatConfig(conversationDO: DurableObjectStub | null, config: { intervalMs?: number; modelCallLimit?: number }): Promise<boolean> {
+async function setHeartbeatConfig(conversationDO: DurableObjectStub | null, config: { intervalMs?: number; modelCallLimit?: number }, env: Env): Promise<boolean> {
   if (!conversationDO) return false;
   try {
-    const res = await conversationDO.fetch("http://do/settings/heartbeat", {
+    const res = await conversationDO.fetch("http://do/settings/heartbeat", withDOAuth(env, {
       method: "POST",
       body: JSON.stringify(config),
-    });
+    }));
     return res.ok;
   } catch {
     return false;
@@ -182,7 +183,7 @@ export function formatHeartbeatInterval(ms: number): string {
   return `${hours} hour${hours === 1 ? "" : "s"}`;
 }
 
-async function getHeartbeatStatus(conversationDO: DurableObjectStub | null): Promise<{
+async function getHeartbeatStatus(conversationDO: DurableObjectStub | null, env: Env): Promise<{
   nextAlarmAt: string | null;
   lastCompletedAt: string | null;
   callsRemaining: number | null;
@@ -192,7 +193,7 @@ async function getHeartbeatStatus(conversationDO: DurableObjectStub | null): Pro
     return { nextAlarmAt: null, lastCompletedAt: null, callsRemaining: null, jobs: { queued: 0, paused: 0, running: 0 } };
   }
   try {
-    const res = await conversationDO.fetch("http://do/heartbeat/status");
+    const res = await conversationDO.fetch("http://do/heartbeat/status", withDOAuth(env));
     const data = await res.json() as {
       nextAlarmAt?: string | null;
       lastCompletedAt?: string | null;
@@ -222,8 +223,8 @@ export async function handleCommand(
 ): Promise<{ handled: boolean; response?: string }> {
   const keywordCommand = getExactKeywordCommand(text);
   if (keywordCommand === "settings") {
-    const verbosity = await getConversationVerbosity(conversationDO);
-    const hbConfig = await getHeartbeatConfig(conversationDO);
+    const verbosity = await getConversationVerbosity(conversationDO, env);
+    const hbConfig = await getHeartbeatConfig(conversationDO, env);
     return {
       handled: true,
       response: `Current mode: ${verbosity}. Use "set minimal" for concise updates or "set verbose" for tool-by-tool updates.\nHeartbeat: every ${formatHeartbeatInterval(hbConfig.intervalMs)}, call limit ${hbConfig.modelCallLimit}. Say e.g. "set heartbeat to every 5 minutes" or "set heartbeat call limit to 5" to change.`,
@@ -231,14 +232,14 @@ export async function handleCommand(
   }
   if (keywordCommand === "set minimal" || keywordCommand === "set verbose") {
     const verbosity = keywordCommand === "set verbose" ? "verbose" : "minimal";
-    await setConversationVerbosity(conversationDO, verbosity);
+    await setConversationVerbosity(conversationDO, verbosity, env);
     return { handled: true, response: `Got it — verbosity is now ${verbosity}.` };
   }
   if (keywordCommand === "status") {
-    const verbosity = await getConversationVerbosity(conversationDO);
+    const verbosity = await getConversationVerbosity(conversationDO, env);
     const learned = await getLearnedMemoryStatus(env);
     const vectorize = await getVectorizeMemoryStatus(env);
-    const heartbeat = await getHeartbeatStatus(conversationDO);
+    const heartbeat = await getHeartbeatStatus(conversationDO, env);
     const flushText = learned.lastFlushAt ? learned.lastFlushAt : "never";
     const upsert = vectorize.lastUpsertOk === null
       ? "unknown"
@@ -253,7 +254,7 @@ export async function handleCommand(
   if (keywordCommand === "secrets") {
     const do_ = globalDO(env);
     if (!do_) return { handled: true, response: "No secrets stored." };
-    const res = await do_.fetch("http://do/secrets");
+    const res = await do_.fetch("http://do/secrets", withDOAuth(env));
     const { secrets } = await res.json() as { secrets: string[] };
     if (secrets.length === 0) {
       return { handled: true, response: "No secrets stored. Paste a token like:\nGOOGLE_TOKEN=your-token-here" };
@@ -264,7 +265,7 @@ export async function handleCommand(
     };
   }
   if (keywordCommand === "heartbeat config") {
-    const hbConfig = await getHeartbeatConfig(conversationDO);
+    const hbConfig = await getHeartbeatConfig(conversationDO, env);
     return {
       handled: true,
       response: `Heartbeat config: interval every ${formatHeartbeatInterval(hbConfig.intervalMs)}, call limit ${hbConfig.modelCallLimit}.\n\nTo change, just say it in plain English:\n• "set heartbeat to every 5 minutes"\n• "set heartbeat call limit to 5"\n• "heartbeat every hour"\n• "reduce heartbeat calls to 3"`,
@@ -274,7 +275,7 @@ export async function handleCommand(
     const repos = await getRepos(env);
     const repo = repos[0] ?? "default";
     const agent = new PiAgent(env, repo);
-    const verbosity = await getConversationVerbosity(conversationDO);
+    const verbosity = await getConversationVerbosity(conversationDO, env);
     const selftestResult = await agent.runSelfTest({
       sandboxId: `selftest-${channel}`,
       verbosity,
@@ -288,10 +289,10 @@ export async function handleCommand(
     const do_ = globalDO(env);
     if (!do_) return { handled: true, response: "No secrets stored." };
     const name = deleteSecretMatch[1].toUpperCase();
-    await do_.fetch("http://do/secrets/delete", {
+    await do_.fetch("http://do/secrets/delete", withDOAuth(env, {
       method: "POST",
       body: JSON.stringify({ name }),
-    });
+    }));
     return { handled: true, response: `Deleted ${name}.` };
   }
 
@@ -301,7 +302,7 @@ export async function handleCommand(
   if (mightBeHeartbeatConfig(text)) {
     const heartbeatUpdate = await parseHeartbeatConfig(text, env);
     if (heartbeatUpdate && (heartbeatUpdate.intervalMs !== undefined || heartbeatUpdate.modelCallLimit !== undefined)) {
-      await setHeartbeatConfig(conversationDO, heartbeatUpdate);
+      await setHeartbeatConfig(conversationDO, heartbeatUpdate, env);
       const parts: string[] = [];
       if (heartbeatUpdate.intervalMs !== undefined) {
         parts.push(`interval set to ${formatHeartbeatInterval(heartbeatUpdate.intervalMs)}`);

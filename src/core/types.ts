@@ -31,6 +31,7 @@ export interface Env {
   SLACK_SUMMARY_CHANNEL?: string;
   CLOUDFLARE_API_TOKEN?: string;
   ACCOUNT_ID?: string;
+  DO_AUTH_SECRET?: string;
 
   CRON_FAIL_THRESHOLD?: string;
   CRON_STALL_MULTIPLIER?: string;
@@ -49,6 +50,7 @@ export interface Env {
   LLM_MODEL?: string;
   VERIFY_COMMAND?: string;
   VERIFY_MAX_ATTEMPTS?: string;
+  TOOL_EXPIRY_DAYS?: string;
 
   AUTORESEARCH_REPO?: string;
   AUTORESEARCH_BRANCH?: string;

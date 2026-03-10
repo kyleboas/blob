@@ -12,7 +12,7 @@ import { handleCheckEvent, handleGetDailyTokens, handleGetHeartbeatStatus, handl
 import { handleCreateJob, handleListJobs, handleTransitionJob } from "./handlers/jobs";
 import { handleGetLearnedMemoryStatus, handleGetVectorizeMemoryStatus, handleSetLearnedMemoryStatus, handleSetVectorizeMemoryStatus } from "./handlers/memory-status";
 import { handleListMessages, handleStoreMessage } from "./handlers/messages";
-import { handleDeleteSecret, handleListSecrets, handleSaveSecret } from "./handlers/secrets";
+import { getSecretsForInjection, handleDeleteSecret, handleListSecrets, handleSaveSecret } from "./handlers/secrets";
 import { handleGetHeartbeatSettings, handleGetVerbosity, handleSetHeartbeatSettings, handleSetVerbosity } from "./handlers/settings";
 
 export type RouterCtx = {
@@ -34,6 +34,10 @@ export async function routeRequest(
 ): Promise<Response> {
   const { state, data, save } = ctx;
   const { pathname } = url;
+  const authHeader = request.headers.get("x-do-auth");
+  if (ctx.env.DO_AUTH_SECRET && authHeader !== ctx.env.DO_AUTH_SECRET) {
+    return new Response("Forbidden", { status: 403 });
+  }
 
   if (pathname === "/jobs" && method === "POST") {
     return handleCreateJob(request, ctx);
@@ -188,13 +192,8 @@ export async function routeRequest(
     return handleSaveSecret(request, ctx);
   }
 
-  if (pathname === "/secrets/values" && method === "GET") {
-    const rows = state.storage.sql.exec("SELECT name, value FROM service_secrets ORDER BY name ASC");
-    const secrets: Record<string, string> = {};
-    for (const row of rows) {
-      secrets[String(row.name)] = String(row.value);
-    }
-    return json({ secrets });
+  if (pathname === "/internal/secrets/injection" && method === "GET") {
+    return json({ secrets: getSecretsForInjection(state.storage) });
   }
 
   if (pathname === "/secrets/delete" && method === "POST") {

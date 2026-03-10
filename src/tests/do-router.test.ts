@@ -212,7 +212,7 @@ test("do router maps endpoints to handlers and unknown routes 404", async () => 
     { method: "GET", path: "/daily-tokens?date=2025-01-01" },
     { method: "GET", path: "/secrets" },
     { method: "POST", path: "/secrets", body: { name: "API_KEY", value: "secret" } },
-    { method: "GET", path: "/secrets/values" },
+    { method: "GET", path: "/internal/secrets/injection" },
     { method: "POST", path: "/secrets/delete", body: { name: "API_KEY" } },
     { method: "GET", path: "/goals", expectStatus: 400 },
   ];

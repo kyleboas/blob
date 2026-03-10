@@ -76,11 +76,6 @@ function normalizeToolPath(path: string, workspaceRoot: string): string {
   return normalized;
 }
 
-function allowedCommand(command: string): boolean {
-  const blocked = [/rm\s+-rf\s+\//, /:\(\)\{\s*:\|:\s*&\s*\}.*:\)/, /shutdown/, /reboot/];
-  return !blocked.some((pattern) => pattern.test(command));
-}
-
 async function withSandboxRetry<T>(opts: {
   env: Env;
   phase: "start" | "exec" | "writeFile" | "readFile";
@@ -208,11 +203,9 @@ export async function cleanupSandboxForJob(
 export async function executeInSandbox(
   command: string,
   env: Env,
-  opts: { timeout?: number; sandboxId?: string; workspaceRoot?: string } = {},
+  opts: { timeout?: number; sandboxId?: string; workspaceRoot?: string; envVars?: Record<string, string> } = {},
 ): Promise<SandboxResult> {
-  if (!allowedCommand(command)) {
-    throw new Error(`Dangerous command blocked: ${command}`);
-  }
+  // Security boundary: Cloudflare Sandbox (Firecracker microVM) provides execution isolation. No application-level command filtering.
 
   if (opts.sandboxId) {
     await ensureSandboxSession(opts.sandboxId, env);
@@ -223,7 +216,10 @@ export async function executeInSandbox(
   const timeout = opts.timeout ?? Number.parseInt(env.BASH_TIMEOUT_MS ?? "120000", 10);
   const maxOutputBytes = Number.parseInt(env.BASH_MAX_OUTPUT_BYTES ?? "1000000", 10);
   const workspaceRoot = opts.workspaceRoot ? resolveWorkspaceRoot(opts.workspaceRoot) : undefined;
-  const commandToRun = workspaceRoot ? `cd ${workspaceRoot} && ${command}` : command;
+  const envExports = Object.entries(opts.envVars ?? {})
+    .map(([key, value]) => `export ${key}=${JSON.stringify(value)};`)
+    .join(" ");
+  const commandToRun = workspaceRoot ? `cd ${workspaceRoot} && ${envExports} ${command}`.trim() : `${envExports} ${command}`.trim();
   const result = await withTimeout(env.SANDBOX.exec(commandToRun), timeout);
   if (estimateBytes(result.stdout) > maxOutputBytes) {
     result.stdout = result.stdout.slice(0, maxOutputBytes) + "\n[output truncated]";

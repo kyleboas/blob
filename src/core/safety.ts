@@ -4,6 +4,8 @@ const DEFAULT_SECRET_PATTERNS = [
   /api[_-]?key\s*[:=]\s*['\"]?[a-z0-9_\-]{10,}/gi,
   /token\s*[:=]\s*['\"]?[a-z0-9_\-]{10,}/gi,
   /password\s*[:=]\s*['\"]?\S{8,}/gi,
+  /https?:\/\/x-access-token:[^@\s]+@/gi,
+  /(?:authorization|auth|token|secret)[^\n]{0,40}[=:]\s*["']?[A-Za-z0-9+/=]{40,}["']?/gi,
   /-----BEGIN (?:RSA |EC )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC )?PRIVATE KEY-----/gi,
 ];
 
