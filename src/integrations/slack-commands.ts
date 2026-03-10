@@ -1,6 +1,6 @@
 import { PiAgent } from "../agent/pi-agent";
 import { callLLM } from "../core/llm";
-import { getLearnedMemoryStatus, getVectorizeMemoryStatus } from "../core/memory";
+import { getLearnedMemoryStatus, getVectorizeMemoryStatus } from "../core/memory-system";
 import { logEvent } from "../core/observability";
 import { getRepos } from "../core/storage";
 import type { Env } from "../core/types";

@@ -5,7 +5,7 @@ import {
   querySemanticMemory,
   upsertSemanticMemory,
   type LearnedRecord,
-} from "../core/memory";
+} from "../core/memory-system";
 import type { Env } from "../core/types";
 
 function makeEnv() {
