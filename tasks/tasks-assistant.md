@@ -123,15 +123,15 @@ Update the file after completing each sub-task, not just after completing an ent
 
 -----
 
-- [ ] 4.0 Fix reliability: dead code, silent failures, retries, legacy parsing (FR-10, FR-12, FR-13, FR-14)
-  - [ ] 4.1 Fix message compaction in `src/agent/handlers/messages.ts` (already extracted in 1.4, but verify): check `> 100` first (hard trim), then `> 25` (compact). The logic should be: `if (messages.length > 100) { trim to last 100 } else if (messages.length > 25) { compact }`.
-  - [ ] 4.2 Audit every `catch` block in the codebase. Run `grep -n "catch" src/**/*.ts --include="*.ts" -r` and list each one. For each block that has an empty body, a comment-only body, or `// fall through` / `// silently fail` / `// best effort`: add a `logEvent(env, category, event, { error: String(err) })` call. Use the closest available `env` — if none available, use `console.error` as last resort.
-  - [ ] 4.3 Create `src/tests/silent-catch-audit.test.ts`. This test reads all `.ts` files in `src/` (excluding tests), parses for `catch` blocks, and fails if any catch block body is empty or contains only comments. This prevents future regressions.
-  - [ ] 4.4 Add retry logic to `callLLM` in `pi-agent.ts`. Wrap the fetch call in a retry loop: max 3 attempts, exponential backoff (1s, 2s, 4s), retry on status 429/500/502/503/504 or network errors. Log each retry via `logEvent`.
-  - [ ] 4.5 Remove the `parseToolCall` function from `pi-agent.ts`. Remove the regex-based `TOOL: <n>\nARG: <json>` instruction from `buildSystemPrompt()`. Remove the fallback line `const toolCall = structuredToolCall ?? parseToolCall(responseText)` — use only `structuredToolCall`. If `structuredToolCall` is null, the model thinks it’s done (existing behavior for no tool call).
-  - [ ] 4.6 Remove `parseToolCall` from the `__piAgentTestUtils` export. Update any tests that reference it.
-  - [ ] 4.7 Update the system prompt in `buildSystemPrompt()` to remove all references to `TOOL:` and `ARG:` text format. The model should rely entirely on the structured `tools` parameter.
-  - [ ] 4.8 Run `npm run typecheck && npm test`. Verify `grep -r "parseToolCall" src/ --include="*.ts"` returns nothing (except possibly the test utils cleanup). Verify `grep -rn "catch\s*{" src/ --include="*.ts" | grep -v test` returns nothing.
+- [x] 4.0 Fix reliability: dead code, silent failures, retries, legacy parsing (FR-10, FR-12, FR-13, FR-14)
+  - [x] 4.1 Fix message compaction in `src/agent/handlers/messages.ts` (already extracted in 1.4, but verify): check `> 100` first (hard trim), then `> 25` (compact). The logic should be: `if (messages.length > 100) { trim to last 100 } else if (messages.length > 25) { compact }`.
+  - [x] 4.2 Audit every `catch` block in the codebase. Run `grep -n "catch" src/**/*.ts --include="*.ts" -r` and list each one. For each block that has an empty body, a comment-only body, or `// fall through` / `// silently fail` / `// best effort`: add a `logEvent(env, category, event, { error: String(err) })` call. Use the closest available `env` — if none available, use `console.error` as last resort.
+  - [x] 4.3 Create `src/tests/silent-catch-audit.test.ts`. This test reads all `.ts` files in `src/` (excluding tests), parses for `catch` blocks, and fails if any catch block body is empty or contains only comments. This prevents future regressions.
+  - [x] 4.4 Add retry logic to `callLLM` in `pi-agent.ts`. Wrap the fetch call in a retry loop: max 3 attempts, exponential backoff (1s, 2s, 4s), retry on status 429/500/502/503/504 or network errors. Log each retry via `logEvent`.
+  - [x] 4.5 Remove the `parseToolCall` function from `pi-agent.ts`. Remove the regex-based `TOOL: <n>\nARG: <json>` instruction from `buildSystemPrompt()`. Remove the fallback line `const toolCall = structuredToolCall ?? parseToolCall(responseText)` — use only `structuredToolCall`. If `structuredToolCall` is null, the model thinks it’s done (existing behavior for no tool call).
+  - [x] 4.6 Remove `parseToolCall` from the `__piAgentTestUtils` export. Update any tests that reference it.
+  - [x] 4.7 Update the system prompt in `buildSystemPrompt()` to remove all references to `TOOL:` and `ARG:` text format. The model should rely entirely on the structured `tools` parameter.
+  - [x] 4.8 Run `npm run typecheck && npm test`. Verify `grep -r "parseToolCall" src/ --include="*.ts"` returns nothing (except possibly the test utils cleanup). Verify `grep -rn "catch\s*{" src/ --include="*.ts" | grep -v test` returns nothing.
 
 -----
 

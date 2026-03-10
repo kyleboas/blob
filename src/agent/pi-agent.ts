@@ -76,28 +76,6 @@ function isTransientError(error: string): boolean {
   return lower.includes("timeout") || lower.includes("econn") || lower.includes("temporar") || lower.includes("503");
 }
 
-function parseToolCall(response: string): ToolCall | null {
-  const toolMatch = response.match(/^\s*TOOL:\s*(\w+)\s*$/im);
-  const argMatch = response.match(/^\s*ARG:\s*([\s\S]+)$/im);
-  if (!toolMatch) return null;
-
-  const tool = toolMatch[1] as ToolCall["tool"];
-  if (!["read", "write", "edit", "bash"].includes(tool)) {
-    return null;
-  }
-
-  let args: Record<string, unknown> = {};
-  if (argMatch) {
-    try {
-      args = JSON.parse(argMatch[1].trim());
-    } catch {
-      args = { raw: argMatch[1].trim() };
-    }
-  }
-
-  return { tool, args };
-}
-
 function parseStructuredToolCall(call: LLMToolCall): ToolCall | null {
   const tool = call.function.name as ToolCall["tool"];
   if (!tool || !["read", "write", "edit", "bash"].includes(tool)) {
@@ -110,7 +88,7 @@ function parseStructuredToolCall(call: LLMToolCall): ToolCall | null {
       return { tool, args: {} };
     }
     return { tool, args: parsed as Record<string, unknown> };
-  } catch {
+  } catch (_err) {
     return { tool, args: {} };
   }
 }
@@ -282,7 +260,7 @@ Never echo back or display a secret/token the user provides. Just confirm receip
 
 You have 4 tools — read, write, edit, bash — which together give you full capability to accomplish any task. The bash tool lets you run arbitrary commands: install packages, fetch URLs, run scripts, use git, compile code, query APIs, and anything else a Linux shell can do. Never say you cannot do something — figure out how to accomplish it with your tools.${toolFramework}${verifyBlock}
 
-When calling tools, output exactly:\nTOOL: <name>\nARG: <json>
+Use structured tool calls via the provided tool schema whenever you need to execute an action.
 Stop when done and provide a concise summary.`;
   }
 
@@ -358,23 +336,52 @@ fi
     if (this.env.AI_GATEWAY_BASE_URL && this.env.AI_GATEWAY_TOKEN) {
       const baseUrl = this.env.AI_GATEWAY_BASE_URL.replace(/\/$/, "");
       const url = baseUrl.endsWith("/chat/completions") ? baseUrl : `${baseUrl}/chat/completions`;
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          Authorization: `Bearer ${this.env.AI_GATEWAY_TOKEN}`,
-        },
-        body: JSON.stringify({ model: this.env.LLM_MODEL ?? DEFAULT_MODEL, messages: this.messages, tools: TOOL_SCHEMAS }),
-      });
-      if (!response.ok) {
-        throw new Error(`LLM error: ${response.status} ${await response.text()}`);
+      const retryableStatuses = new Set([429, 500, 502, 503, 504]);
+      const maxAttempts = 3;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+          const response = await fetch(url, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              Authorization: `Bearer ${this.env.AI_GATEWAY_TOKEN}`,
+            },
+            body: JSON.stringify({ model: this.env.LLM_MODEL ?? DEFAULT_MODEL, messages: this.messages, tools: TOOL_SCHEMAS }),
+          });
+
+          if (!response.ok) {
+            const body = await response.text();
+            const error = new Error(`LLM error: ${response.status} ${body}`);
+            const shouldRetry = retryableStatuses.has(response.status) && attempt < maxAttempts;
+            if (!shouldRetry) {
+              throw error;
+            }
+            const delayMs = 1000 * (2 ** (attempt - 1));
+            logEvent(this.env, "tool_call", "llm_retry", { attempt, delayMs, status: response.status, error: error.message });
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+            continue;
+          }
+
+          const data = await response.json() as { choices?: Array<{ message?: { content?: string; tool_calls?: LLMToolCall[] } }> };
+          const msg = data.choices?.[0]?.message;
+          return {
+            content: msg?.content ?? "",
+            toolCalls: msg?.tool_calls ?? [],
+          };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const isNetworkError = /fetch|network|timeout|socket|econn|etimedout/i.test(message);
+          if (!isNetworkError || attempt >= maxAttempts) {
+            throw err;
+          }
+          const delayMs = 1000 * (2 ** (attempt - 1));
+          logEvent(this.env, "tool_call", "llm_retry", { attempt, delayMs, error: message });
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
       }
-      const data = await response.json() as { choices?: Array<{ message?: { content?: string; tool_calls?: LLMToolCall[] } }> };
-      const msg = data.choices?.[0]?.message;
-      return {
-        content: msg?.content ?? "",
-        toolCalls: msg?.tool_calls ?? [],
-      };
+
+      throw new Error("LLM retries exhausted");
     }
 
     throw new Error("AI gateway is required");
@@ -457,7 +464,8 @@ fi
           return false;
         }
         return true;
-      } catch {
+      } catch (err) {
+        logEvent(this.env, "cost", "daily_budget_do_unreachable", { error: String(err) });
         // Fall back to local tracking
       }
     }
@@ -707,12 +715,18 @@ fi
       conversationKey,
       query: userMessage,
       topK: 5,
-    }).catch(() => []);
+    }).catch((err: unknown) => {
+      logEvent(this.env, "memory_ops", "semantic_query_failed", { error: String(err) });
+      return [];
+    });
     await updateVectorizeMemoryStatus(this.env, {
       lastQueryAt: new Date().toISOString(),
       lastQueryCount: semanticMatches.length,
     });
-    const semanticContext = await buildSemanticMemoryContext(this.env, semanticMatches, 1200).catch(() => "");
+    const semanticContext = await buildSemanticMemoryContext(this.env, semanticMatches, 1200).catch((err: unknown) => {
+      logEvent(this.env, "memory_ops", "semantic_context_build_failed", { error: String(err) });
+      return "";
+    });
     if (semanticContext) {
       this.messages.splice(1, 0, { role: "system", content: semanticContext });
     }
@@ -741,7 +755,7 @@ fi
       }
 
       const structuredToolCall = llmResponse.toolCalls.length > 0 ? parseStructuredToolCall(llmResponse.toolCalls[0]) : null;
-      const toolCall = structuredToolCall ?? parseToolCall(responseText);
+      const toolCall = structuredToolCall;
       if (!toolCall) {
         // No tool call — the model thinks it's done. Run verification if configured.
         const verifyResult = await this.runVerification(sandboxId, bootstrapAttempted, verifyAttempts, maxVerifyAttempts, opts);
@@ -829,7 +843,6 @@ fi
 }
 
 export const __piAgentTestUtils = {
-  parseToolCall,
   parseStructuredToolCall,
   summarizeArgs,
   TOOL_SCHEMAS,

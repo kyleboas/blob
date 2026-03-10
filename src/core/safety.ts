@@ -18,7 +18,8 @@ function parsePattern(raw: string): RegExp | null {
       return new RegExp(trimmed.slice(1, last), trimmed.slice(last + 1) || "gi");
     }
     return new RegExp(trimmed, "gi");
-  } catch {
+  } catch (err) {
+    console.error("parsePattern failed", err);
     return null;
   }
 }

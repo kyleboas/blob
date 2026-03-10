@@ -58,8 +58,8 @@ Message: "${text}"`;
     if (jsonMatch) {
       return JSON.parse(jsonMatch[0]) as IntentResult;
     }
-  } catch {
-    // fall back to chat
+  } catch (err) {
+    logEvent(env, "slack_ingest", "intent_classify_failed", { error: String(err) });
   }
 
   return { intent: "chat", needsSandbox: false };
@@ -103,7 +103,8 @@ export async function getConversationVerbosity(conversationDO: DurableObjectStub
     const res = await conversationDO.fetch("http://do/settings/verbosity", withDOAuth(env as Env));
     const data = await res.json() as { verbosity?: Verbosity };
     return data.verbosity === "verbose" ? "verbose" : "minimal";
-  } catch {
+  } catch (err) {
+    if (env) logEvent(env, "slack_ingest", "get_verbosity_failed", { error: String(err) });
     return "minimal";
   }
 }
@@ -116,7 +117,8 @@ async function setConversationVerbosity(conversationDO: DurableObjectStub | null
       body: JSON.stringify({ verbosity }),
     }));
     return verbosity;
-  } catch {
+  } catch (err) {
+    logEvent(env, "slack_ingest", "set_verbosity_failed", { error: String(err), verbosity });
     return verbosity;
   }
 }
@@ -127,7 +129,8 @@ async function getHeartbeatConfig(conversationDO: DurableObjectStub | null, env:
     const res = await conversationDO.fetch("http://do/settings/heartbeat", withDOAuth(env));
     const data = await res.json() as { intervalMs?: number; modelCallLimit?: number };
     return { intervalMs: data.intervalMs ?? 600000, modelCallLimit: data.modelCallLimit ?? 10 };
-  } catch {
+  } catch (err) {
+    logEvent(env, "slack_ingest", "get_heartbeat_config_failed", { error: String(err) });
     return { intervalMs: 600000, modelCallLimit: 10 };
   }
 }
@@ -140,7 +143,8 @@ async function setHeartbeatConfig(conversationDO: DurableObjectStub | null, conf
       body: JSON.stringify(config),
     }));
     return res.ok;
-  } catch {
+  } catch (err) {
+    logEvent(env, "slack_ingest", "set_heartbeat_config_failed", { error: String(err) });
     return false;
   }
 }
@@ -169,7 +173,9 @@ Message: "${text}"`;
         return parsed;
       }
     }
-  } catch { /* fall through */ }
+  } catch (err) {
+    logEvent(env, "slack_ingest", "parse_heartbeat_config_failed", { error: String(err) });
+  }
   return null;
 }
 
@@ -210,7 +216,8 @@ async function getHeartbeatStatus(conversationDO: DurableObjectStub | null, env:
         running: data.jobs?.running ?? 0,
       },
     };
-  } catch {
+  } catch (err) {
+    logEvent(env, "slack_ingest", "get_heartbeat_status_failed", { error: String(err) });
     return { nextAlarmAt: null, lastCompletedAt: null, callsRemaining: null, jobs: { queued: 0, paused: 0, running: 0 } };
   }
 }

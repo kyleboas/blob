@@ -178,7 +178,9 @@ async function loadDataset(env: Env): Promise<Scenario[]> {
   if (r2Obj) {
     try {
       return (await r2Obj.json()) as Scenario[];
-    } catch { /* fall through */ }
+    } catch (err) {
+      logEvent(env, "autoresearch", "load_dataset_parse_failed", { error: String(err) });
+    }
   }
 
   // Built-in default scenarios — exercised through the real PiAgent
@@ -305,7 +307,8 @@ async function runAutoresearch(env: Env): Promise<string> {
   let fileContent: string;
   try {
     fileContent = await env.SANDBOX.readFile(`${workspace}/${proposal.target_file}`);
-  } catch {
+  } catch (err) {
+    logEvent(env, "autoresearch", "target_file_read_failed", { error: String(err), targetFile: proposal.target_file });
     await env.SANDBOX.exec(`cd ${workspace} && git checkout ${branch} 2>/dev/null; git branch -D ${experimentBranch} 2>/dev/null`);
     return `Autoresearch: baseline=${baseline.aggregate}/20, target file not found: ${proposal.target_file}`;
   }
@@ -420,8 +423,8 @@ export async function postCronAlertWithFallback(env: AlertEnv, message: string):
   try {
     const posted = await postToSlack(env, message);
     if (posted) return "slack";
-  } catch {
-    // fallthrough to R2 log fallback
+  } catch (err) {
+    logEvent(env as Env, "cron_runs", "post_cron_alert_failed", { error: String(err) });
   }
 
   const date = new Date().toISOString().slice(0, 10);

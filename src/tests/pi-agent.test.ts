@@ -23,14 +23,6 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
   } as Env;
 }
 
-test("fallback parser handles TOOL/ARG format", () => {
-  const call = __piAgentTestUtils.parseToolCall('TOOL: edit\nARG: {"path":"a.ts","oldText":"x","newText":"y"}');
-  assert.deepEqual(call, {
-    tool: "edit",
-    args: { path: "a.ts", oldText: "x", newText: "y" },
-  });
-});
-
 test("structured tool-call parser handles valid and invalid payloads", () => {
   const valid = __piAgentTestUtils.parseStructuredToolCall({
     function: { name: "bash", arguments: '{"command":"node -v"}' },

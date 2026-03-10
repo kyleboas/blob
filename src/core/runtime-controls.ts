@@ -19,7 +19,8 @@ export async function getRuntimeControls(env: Env): Promise<RuntimeControls> {
       paused: parsed.paused === true,
       reason: typeof parsed.reason === "string" ? parsed.reason : "",
     };
-  } catch {
+  } catch (err) {
+    console.error("getRuntimeControls failed", err);
     return defaults;
   }
 }

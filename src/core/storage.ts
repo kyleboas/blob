@@ -15,7 +15,8 @@ export async function getRepos(env: Env): Promise<string[]> {
     const res = await do_.fetch("http://do/repos", withDOAuth(env));
     const data = await res.json() as { repos: string[] };
     return data.repos;
-  } catch {
+  } catch (err) {
+    console.error("getRepos failed", err);
     return ["kyleboas/blob"];
   }
 }
@@ -27,8 +28,8 @@ export async function addRepo(env: Env, repo: string): Promise<void> {
       method: "POST",
       body: JSON.stringify({ repo }),
     }));
-  } catch {
-    // Ignore errors
+  } catch (err) {
+    console.error("addRepo failed", err);
   }
 }
 
@@ -38,7 +39,8 @@ export async function getRepoGoals(env: Env, repo: string): Promise<string[]> {
     const res = await do_.fetch(`http://do/goals?repo=${encodeURIComponent(repo)}`, withDOAuth(env));
     const data = await res.json() as { goals: string[] };
     return data.goals;
-  } catch {
+  } catch (err) {
+    console.error("getRepoGoals failed", err);
     return ["improve codebase"];
   }
 }
@@ -50,7 +52,7 @@ export async function setRepoGoals(env: Env, repo: string, goals: string[]): Pro
       method: "POST",
       body: JSON.stringify({ repo, goals }),
     }));
-  } catch {
-    // Ignore errors
+  } catch (err) {
+    console.error("setRepoGoals failed", err);
   }
 }

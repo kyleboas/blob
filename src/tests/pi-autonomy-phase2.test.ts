@@ -82,7 +82,9 @@ test("agent enforces model call limit and reports progress", async () => {
         choices: [
           {
             message: {
-              content: calls === 1 ? "TOOL: bash\nARG: {\"command\":\"echo hi\"}" : "final",
+              ...(calls === 1
+                ? { content: "", tool_calls: [{ function: { name: "bash", arguments: "{\"command\":\"echo hi\"}" } }] }
+                : { content: "final" }),
             },
           },
         ],
@@ -108,7 +110,7 @@ test("agent pauses after consecutive tool failures", async () => {
   globalThis.fetch = (async () =>
     new Response(
       JSON.stringify({
-        choices: [{ message: { content: "TOOL: read\nARG: {\"path\":\"missing.txt\"}" } }],
+        choices: [{ message: { content: "", tool_calls: [{ function: { name: "read", arguments: "{\"path\":\"missing.txt\"}" } }] } }],
       }),
       { status: 200 },
     )) as typeof fetch;
@@ -204,7 +206,7 @@ test("agent tools use repo-specific workspace root", async () => {
   globalThis.fetch = (async () => {
     calls += 1;
     return new Response(JSON.stringify({
-      choices: [{ message: { content: calls === 1 ? 'TOOL: read\nARG: {"path":"src/a.txt"}' : calls === 2 ? 'TOOL: bash\nARG: {"command":"pwd"}' : 'done' } }],
+      choices: [{ message: calls === 1 ? { content: '', tool_calls: [{ function: { name: 'read', arguments: '{\"path\":\"src/a.txt\"}' } }] } : calls === 2 ? { content: '', tool_calls: [{ function: { name: 'bash', arguments: '{\"command\":\"pwd\"}' } }] } : { content: 'done' } }],
     }), { status: 200 });
   }) as typeof fetch;
 
@@ -247,13 +249,13 @@ test("agent bootstraps once before first tool call", async () => {
   let calls = 0;
   globalThis.fetch = (async () => {
     calls += 1;
-    const content =
+    const message =
       calls === 1
-        ? 'TOOL: read\nARG: {"path":"README.md"}'
+        ? { content: '', tool_calls: [{ function: { name: 'read', arguments: '{\"path\":\"README.md\"}' } }] }
         : calls === 2
-          ? 'TOOL: bash\nARG: {"command":"pwd"}'
-          : "done";
-    return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+          ? { content: '', tool_calls: [{ function: { name: 'bash', arguments: '{\"command\":\"pwd\"}' } }] }
+          : { content: "done" };
+    return new Response(JSON.stringify({ choices: [{ message }] }), { status: 200 });
   }) as typeof fetch;
 
   try {
@@ -282,7 +284,7 @@ test("agent reports bootstrap failures with error text", async () => {
   });
 
   globalThis.fetch = (async () =>
-    new Response(JSON.stringify({ choices: [{ message: { content: 'TOOL: read\nARG: {"path":"README.md"}' } }] }), {
+    new Response(JSON.stringify({ choices: [{ message: { content: '', tool_calls: [{ function: { name: 'read', arguments: '{\"path\":\"README.md\"}' } }] } }] }), {
       status: 200,
     })) as typeof fetch;
 
