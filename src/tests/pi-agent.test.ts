@@ -53,6 +53,16 @@ test("structured tool-call parser handles valid and invalid payloads", () => {
   assert.equal(invalid, null);
 });
 
+
+
+test("system prompt requires tool usage for real-time external info", () => {
+  const env = makeEnv();
+  const agent = new PiAgent(env, "acme/repo");
+  const prompt = (agent as any).buildSystemPrompt();
+
+  assert.match(prompt, /MUST use tools to gather the data/);
+  assert.match(prompt, /Only say you are blocked after you have actually tried tool calls/);
+});
 test("agent run executes structured tool calls and emits tool ledger entries", async () => {
   const env = makeEnv();
   const agent = new PiAgent(env, "acme/repo");
