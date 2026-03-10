@@ -222,6 +222,12 @@ async function getHeartbeatStatus(conversationDO: DurableObjectStub | null, env:
   }
 }
 
+export function isWeatherQuery(text: string): boolean {
+  const t = text.toLowerCase();
+  return /\b(weather|forecast|temperature|rain(ing|fall)?|snow(ing)?|sunny|cloudy|humid(ity)?)\b/.test(t)
+    && /\b(what|how|is it|will it|check|tell me|current|today|tomorrow|tonight|this week|outside)\b/.test(t);
+}
+
 export async function handleCommand(
   text: string,
   channel: string,
@@ -289,6 +295,13 @@ export async function handleCommand(
       conversationKey: channel,
     });
     return { handled: true, response: verbosity === "minimal" ? `Running self-test…\n${selftestResult}` : selftestResult };
+  }
+
+  if (isWeatherQuery(text)) {
+    return {
+      handled: true,
+      response: "I don't have access to real-time data like weather, so I can't check current conditions. Try:\n\t•\tweather.com\n\t•\tGoogle (just search \"Los Angeles weather\")\n\t•\tYour phone's weather app",
+    };
   }
 
   const deleteSecretMatch = text.trim().match(/^delete secret ([A-Z][A-Z0-9_]{2,})$/i);

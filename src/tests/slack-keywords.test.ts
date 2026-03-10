@@ -243,6 +243,41 @@ test("selftest command runs full workflow and posts result", async () => {
 });
 
 
+test("weather query returns help text without sandbox", async () => {
+  const { env, posts } = makeEnv();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes("slack.com/api/chat.postMessage")) {
+      const body = JSON.parse(String(init?.body)) as { text: string };
+      posts.push(body.text);
+      return Response.json({ ok: true });
+    }
+    return new Response("unexpected", { status: 500 });
+  }) as typeof fetch;
+
+  try {
+    const makeReq = (text: string) => new Request("https://example.com/slack/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "event_callback",
+        event_id: crypto.randomUUID(),
+        team_id: "T1",
+        event: { type: "message", text, channel: "C1", ts: `${Date.now()}` },
+      }),
+    });
+
+    await handleSlackEvent(makeReq("what's the weather today?"), env);
+    assert.match(posts[0], /don't have access to real-time data/i);
+    assert.match(posts[0], /weather\.com/);
+
+    await handleSlackEvent(makeReq("is it raining outside?"), env);
+    assert.match(posts[1], /weather\.com/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("chat requests are paused when runtime controls file sets paused", async () => {
   const { env, posts } = makeEnv();
   await env.REPO_STORE.put("config/runtime-controls.json", JSON.stringify({ paused: true, reason: "maintenance window" }));
