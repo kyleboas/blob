@@ -84,6 +84,33 @@ export async function appendToHistory(
   await store.put(HISTORY_KEY, prev ? `${prev}\n${line}` : line);
 }
 
+/**
+ * Mark a previously recorded history item as useful (outcome = true).
+ * Call this when the agent actually uses, clicks, or acts on a finding.
+ * The id prefix (e.g. "scan:sourceName:") is used to find matching records.
+ */
+export async function recordOutcome(
+  store: R2Bucket,
+  idPrefix: string,
+  outcome: boolean,
+): Promise<number> {
+  const history = await loadHistory(store);
+  let updated = 0;
+
+  const lines = history.map((record) => {
+    if (record.id.startsWith(idPrefix) && record.outcome !== outcome) {
+      record.outcome = outcome;
+      updated++;
+    }
+    return JSON.stringify(record);
+  });
+
+  if (updated > 0) {
+    await store.put(HISTORY_KEY, lines.join("\n"));
+  }
+  return updated;
+}
+
 /** Load optimization settings from R2, or return defaults. */
 async function loadSettings(store: R2Bucket): Promise<OptimizationSettings> {
   const obj = await store.get(SETTINGS_KEY);

@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { scoreItem, shouldFlag, classifySignal } from "../self-improve/scoring-engine";
+import { scoreItem, shouldFlag, classifySignal, extractContentSignals } from "../self-improve/scoring-engine";
 import { backtest } from "../self-improve/backtester";
 import { mutate, generateCandidates } from "../self-improve/mutator";
 import { runTournament } from "../self-improve/tournament";
 import { checkGates, ratchet } from "../self-improve/ratchet";
-import { loadConfig, loadHistory, saveConfig, appendToHistory, runOptimizationCycle, diffConfigs } from "../self-improve/index";
+import { loadConfig, loadHistory, saveConfig, appendToHistory, runOptimizationCycle, diffConfigs, recordOutcome } from "../self-improve/index";
 import type { ScoringConfig, HistoryRecord, OptimizationSettings } from "../self-improve/types";
 import { DEFAULT_SCORING_CONFIG, DEFAULT_OPTIMIZATION_SETTINGS } from "../self-improve/types";
 import type { Env } from "../core/types";
@@ -44,14 +44,15 @@ function makeConfig(overrides: Partial<ScoringConfig> = {}): ScoringConfig {
 function makeHistory(count: number, outcomeRatio = 0.6): HistoryRecord[] {
   const records: HistoryRecord[] = [];
   for (let i = 0; i < count; i++) {
-    const engagementScore = Math.random() * 100;
-    const qualityScore = Math.random() * 100;
+    const contentLength = Math.random() * 100;
+    const uniqueness = Math.random() * 100;
+    const freshness = Math.random() * 100;
     const outcome = Math.random() < outcomeRatio;
-    const score = engagementScore * 0.4 + qualityScore * 0.6;
+    const score = contentLength * 0.3 + uniqueness * 0.4 + freshness * 0.3;
     records.push({
       id: `item-${i}`,
-      scores: { engagementScore, qualityScore },
-      flagged: score >= 80,
+      scores: { contentLength, uniqueness, freshness },
+      flagged: score >= 60,
       outcome,
       timestamp: new Date().toISOString(),
     });
@@ -84,37 +85,37 @@ function makeEnv(bucket?: FakeR2Bucket): Env {
 
 test("scoreItem computes weighted sum minus penalties", () => {
   const config = makeConfig();
-  const item = { engagementScore: 100, qualityScore: 100 };
+  const item = { contentLength: 100, uniqueness: 100, freshness: 100 };
   const score = scoreItem(item, config);
-  // 100*0.4 + 100*0.6 = 100, no penalties
+  // 100*0.3 + 100*0.4 + 100*0.3 = 100, no penalties
   assert.equal(score, 100);
 });
 
 test("scoreItem applies penalties for truthy flags", () => {
   const config = makeConfig();
-  const item = { engagementScore: 50, qualityScore: 50, noiseKeywords: true };
+  const item = { contentLength: 50, uniqueness: 50, freshness: 50, tooShort: true };
   const score = scoreItem(item, config);
-  // 50*0.4 + 50*0.6 - 15 = 35
-  assert.equal(score, 35);
+  // 50*0.3 + 50*0.4 + 50*0.3 - 20 = 30
+  assert.equal(score, 30);
 });
 
 test("scoreItem floors at zero", () => {
   const config = makeConfig();
-  const item = { engagementScore: 0, qualityScore: 0, noiseKeywords: true, staleContent: true };
+  const item = { contentLength: 0, uniqueness: 0, freshness: 0, tooShort: true, duplicate: true };
   const score = scoreItem(item, config);
   assert.equal(score, 0);
 });
 
 test("shouldFlag returns true when score >= highSignal threshold", () => {
   const config = makeConfig();
-  assert.equal(shouldFlag(80, config), true);
-  assert.equal(shouldFlag(79, config), false);
+  assert.equal(shouldFlag(60, config), true);
+  assert.equal(shouldFlag(59, config), false);
 });
 
 test("classifySignal returns correct tier", () => {
   const config = makeConfig();
-  assert.equal(classifySignal(90, config), "high");
-  assert.equal(classifySignal(60, config), "medium");
+  assert.equal(classifySignal(70, config), "high");
+  assert.equal(classifySignal(50, config), "medium");
   assert.equal(classifySignal(30, config), "low");
   assert.equal(classifySignal(10, config), "none");
 });
@@ -126,10 +127,10 @@ test("classifySignal returns correct tier", () => {
 test("backtest produces valid metrics", () => {
   const config = makeConfig();
   const history: HistoryRecord[] = [
-    { id: "a", scores: { engagementScore: 100, qualityScore: 100 }, flagged: true, outcome: true, timestamp: "" },
-    { id: "b", scores: { engagementScore: 100, qualityScore: 100 }, flagged: true, outcome: false, timestamp: "" },
-    { id: "c", scores: { engagementScore: 10, qualityScore: 10 }, flagged: false, outcome: true, timestamp: "" },
-    { id: "d", scores: { engagementScore: 10, qualityScore: 10 }, flagged: false, outcome: false, timestamp: "" },
+    { id: "a", scores: { contentLength: 100, uniqueness: 100, freshness: 100 }, flagged: true, outcome: true, timestamp: "" },
+    { id: "b", scores: { contentLength: 100, uniqueness: 100, freshness: 100 }, flagged: true, outcome: false, timestamp: "" },
+    { id: "c", scores: { contentLength: 10, uniqueness: 10, freshness: 10 }, flagged: false, outcome: true, timestamp: "" },
+    { id: "d", scores: { contentLength: 10, uniqueness: 10, freshness: 10 }, flagged: false, outcome: false, timestamp: "" },
   ];
 
   const result = backtest(config, history);
@@ -211,7 +212,7 @@ test("runTournament ranks candidates by composite score", () => {
 test("ratchet rejects when history too small", () => {
   const config = makeConfig();
   const history: HistoryRecord[] = [
-    { id: "a", scores: { engagementScore: 100, qualityScore: 100 }, flagged: true, outcome: true, timestamp: "" },
+    { id: "a", scores: { contentLength: 100, uniqueness: 100, freshness: 100 }, flagged: true, outcome: true, timestamp: "" },
   ];
   const baseResult = backtest(config, history);
   const candidate = mutate(config);
@@ -229,7 +230,7 @@ test("ratchet promotes when all gates pass", () => {
   for (let i = 0; i < 20; i++) {
     history.push({
       id: `item-${i}`,
-      scores: { engagementScore: 80 + i, qualityScore: 80 + i },
+      scores: { contentLength: 80 + i, uniqueness: 80 + i, freshness: 80 + i },
       flagged: false,
       outcome: true,
       timestamp: "",
@@ -238,7 +239,7 @@ test("ratchet promotes when all gates pass", () => {
   for (let i = 0; i < 10; i++) {
     history.push({
       id: `neg-${i}`,
-      scores: { engagementScore: 10, qualityScore: 10 },
+      scores: { contentLength: 10, uniqueness: 10, freshness: 10 },
       flagged: false,
       outcome: false,
       timestamp: "",
@@ -295,7 +296,7 @@ test("loadConfig returns default when R2 is empty", async () => {
   const bucket = new FakeR2Bucket();
   const config = await loadConfig(bucket as unknown as R2Bucket);
   assert.equal(config.version, 1);
-  assert.equal(config.thresholds.highSignal, 80);
+  assert.equal(config.thresholds.highSignal, 60);
 });
 
 test("saveConfig + loadConfig round-trips correctly", async () => {
@@ -356,19 +357,81 @@ test("diffConfigs detects parameter changes", () => {
   const oldConfig = makeConfig();
   const newConfig = makeConfig({
     id: "new",
-    thresholds: { highSignal: 75, medium: 50, low: 20 },
-    weights: { engagementScore: 0.5, qualityScore: 0.5 },
+    thresholds: { highSignal: 55, medium: 40, low: 20 },
+    weights: { contentLength: 0.4, uniqueness: 0.3, freshness: 0.3 },
   });
   const diffs = diffConfigs(oldConfig, newConfig);
 
   const highSignalDiff = diffs.find((d) => d.param === "thresholds.highSignal");
   assert.ok(highSignalDiff);
-  assert.equal(highSignalDiff.oldValue, 80);
-  assert.equal(highSignalDiff.newValue, 75);
+  assert.equal(highSignalDiff.oldValue, 60);
+  assert.equal(highSignalDiff.newValue, 55);
   assert.ok(highSignalDiff.changePercent < 0); // decreased
 
-  const engagementDiff = diffs.find((d) => d.param === "weights.engagementScore");
-  assert.ok(engagementDiff);
-  assert.equal(engagementDiff.oldValue, 0.4);
-  assert.equal(engagementDiff.newValue, 0.5);
+  const contentDiff = diffs.find((d) => d.param === "weights.contentLength");
+  assert.ok(contentDiff);
+  assert.equal(contentDiff.oldValue, 0.3);
+  assert.equal(contentDiff.newValue, 0.4);
+});
+
+// ---------------------------------------------------------------------------
+// Content signal extraction tests
+// ---------------------------------------------------------------------------
+
+test("extractContentSignals returns high scores for substantial content", () => {
+  const content = "A".repeat(500);
+  const signals = extractContentSignals(content);
+  assert.equal(signals.contentLength, 50); // 500/1000 * 100
+  assert.equal(signals.uniqueness, 100);
+  assert.equal(signals.freshness, 100);
+  assert.equal(signals.tooShort, false);
+  assert.equal(signals.duplicate, false);
+});
+
+test("extractContentSignals flags short content", () => {
+  const signals = extractContentSignals("hi");
+  assert.equal(signals.tooShort, true);
+});
+
+test("extractContentSignals detects duplicates via hash set", () => {
+  const content = "some content to test";
+  const hashes = new Set<string>();
+  const first = extractContentSignals(content, hashes);
+  assert.equal(first.duplicate, false);
+  hashes.add(first._hash as string);
+
+  const second = extractContentSignals(content, hashes);
+  assert.equal(second.duplicate, true);
+  assert.equal(second.uniqueness, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Outcome recording tests
+// ---------------------------------------------------------------------------
+
+test("recordOutcome updates matching history records", async () => {
+  const bucket = new FakeR2Bucket();
+  const store = bucket as unknown as R2Bucket;
+
+  await appendToHistory(store, {
+    id: "scan:news:1000",
+    scores: { contentLength: 80, uniqueness: 100, freshness: 100 },
+    flagged: true,
+    outcome: false,
+    timestamp: new Date().toISOString(),
+  });
+  await appendToHistory(store, {
+    id: "scan:news:2000",
+    scores: { contentLength: 60, uniqueness: 100, freshness: 100 },
+    flagged: true,
+    outcome: false,
+    timestamp: new Date().toISOString(),
+  });
+
+  const updated = await recordOutcome(store, "scan:news:", true);
+  assert.equal(updated, 2);
+
+  const history = await loadHistory(store);
+  assert.equal(history[0].outcome, true);
+  assert.equal(history[1].outcome, true);
 });

@@ -135,17 +135,18 @@ export const DEFAULT_SCORING_CONFIG: ScoringConfig = {
   version: 1,
   id: "default-v1",
   thresholds: {
-    highSignal: 80,
-    medium: 50,
+    highSignal: 60,
+    medium: 40,
     low: 20,
   },
   weights: {
-    engagementScore: 0.4,
-    qualityScore: 0.6,
+    contentLength: 0.3,
+    uniqueness: 0.4,
+    freshness: 0.3,
   },
   penalties: {
-    noiseKeywords: 15,
-    staleContent: 10,
+    tooShort: 20,
+    duplicate: 30,
   },
 };
 

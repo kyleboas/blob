@@ -6,7 +6,9 @@ import { withDOAuth } from "../core/do-auth";
 import { runEval } from "../../evals/run-eval";
 import { proposeChange } from "../../evals/propose-change";
 import type { Scenario } from "../../evals/run-eval";
-import { runOptimizationCycle } from "../self-improve/index";
+import { runOptimizationCycle, loadConfig, appendToHistory } from "../self-improve/index";
+import { scoreItem, shouldFlag, extractContentSignals } from "../self-improve/scoring-engine";
+import type { HistoryRecord } from "../self-improve/types";
 
 export type CronTaskName = "content-scan" | "memory-compaction" | "memory-reconciliation" | "autoresearch" | "self-improve";
 export type CronStatus = "success" | "failure" | "running";
@@ -127,26 +129,59 @@ async function runContentScan(env: Env): Promise<string> {
     return "No scan targets configured";
   }
 
-  const config = await configObj.json() as { sources?: Array<{ name: string; type: string; url: string }> };
-  const sources = config.sources ?? [];
-  const store = new R2MemoryStore(env.REPO_STORE);
-  let findings = 0;
+  const scanConfig = await configObj.json() as { sources?: Array<{ name: string; type: string; url: string }> };
+  const sources = scanConfig.sources ?? [];
+  const memStore = new R2MemoryStore(env.REPO_STORE);
+  const scoringConfig = await loadConfig(env.REPO_STORE);
   const timeoutMs = Number.parseInt(env.CONTENT_SCAN_TIMEOUT_MS ?? "10000", 10);
   const maxBytes = 1024 * 1024;
+  const seenHashes = new Set<string>();
+
+  let stored = 0;
+  let skipped = 0;
 
   for (const source of sources) {
     const res = await fetch(source.url, { signal: AbortSignal.timeout(timeoutMs) });
     const content = await readLimitedBody(res, maxBytes);
     const snippet = content.slice(0, 500);
-    await writeMemoryItem(env, store, {
-      scope: `source:${source.name}`,
-      content: `Scan finding for ${source.name}: ${snippet}`,
-      source: "cron",
-    });
-    findings += 1;
+
+    // Extract signals and score against the self-improving config
+    const signals = extractContentSignals(snippet, seenHashes);
+    const score = scoreItem(signals, scoringConfig);
+    const flagged = shouldFlag(score, scoringConfig);
+
+    // Record in history so the optimizer can learn from outcomes
+    const historyRecord: HistoryRecord = {
+      id: `scan:${source.name}:${Date.now()}`,
+      scores: {
+        contentLength: signals.contentLength as number,
+        uniqueness: signals.uniqueness as number,
+        freshness: signals.freshness as number,
+      },
+      flagged,
+      outcome: false, // updated later when agent actually uses this finding
+      timestamp: new Date().toISOString(),
+    };
+    await appendToHistory(env.REPO_STORE, historyRecord);
+
+    if (flagged) {
+      await writeMemoryItem(env, memStore, {
+        scope: `source:${source.name}`,
+        content: `Scan finding for ${source.name}: ${snippet}`,
+        source: "cron",
+      });
+      stored += 1;
+    } else {
+      skipped += 1;
+    }
+
+    // Track hash for duplicate detection within this scan cycle
+    if (typeof signals._hash === "string") {
+      seenHashes.add(signals._hash);
+    }
   }
 
-  return `Scanned ${sources.length} targets, stored ${findings} findings`;
+  return `Scanned ${sources.length} targets, stored ${stored} findings, skipped ${skipped} (score below threshold ${scoringConfig.thresholds.highSignal})`;
 }
 
 async function readLimitedBody(response: Response, maxBytes: number): Promise<string> {
