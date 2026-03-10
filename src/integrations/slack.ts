@@ -1,24 +1,11 @@
 import type { Env } from "../core/types";
-import { getRepos } from "../core/storage";
-import { callLLM } from "../core/llm";
-import { getCronJobs, addCronJob, deleteCronJob } from "../jobs/cron";
-import { PiAgent } from "../agent/pi-agent";
 import { deriveRoutingKey, verifySlackSignature } from "./slack-routing";
 import { createLogRef, logEvent } from "../core/observability";
 import { redactSecrets } from "../core/safety";
-import { getRuntimeControls } from "../core/runtime-controls";
-import { classifyIntent, getConversationVerbosity, handleCommand } from "./slack-commands";
+import { classifyIntent, handleCommand } from "./slack-commands";
+import { processIntentOrChat, type SlackEventPayload } from "./slack-message-processing";
 
 const inFlightEvents = new Set<string>();
-
-
-function formatToolLedger(entry: { tool: string; argsSummary?: string; ok: boolean; durationMs: number; error?: string }): string {
-  const status = entry.ok ? "ok" : "fail";
-  const suffix = entry.argsSummary ? ` [${entry.argsSummary}]` : "";
-  const base = `tool ${entry.tool}: ${status} (${entry.durationMs}ms)${suffix}`;
-  if (entry.ok || !entry.error) return base;
-  return `${base} — ${entry.error.slice(0, 120)}`;
-}
 
 function formatSlackError(message: string, logRef: string): string {
   return `A system error occurred. Please retry. (ref: ${logRef})\n${message}`;
@@ -34,30 +21,17 @@ export async function handleSlackEvent(request: Request, env: Env, executionCtx?
       }
     }
 
-    const body = await request.json() as {
-      type?: string;
-      challenge?: string;
-      event_id?: string;
-      event?: {
-        type: string;
-        text?: string;
-        channel?: string;
-        user?: string;
-        bot_id?: string;
-        ts?: string;
-      };
-    };
-
+    const body = await request.json() as SlackEventPayload;
     if (body.type === "url_verification" && body.challenge) {
       return new Response(body.challenge);
     }
 
     if (executionCtx && body.type === "event_callback") {
-      executionCtx.waitUntil(processSlackEvent(body, env));
+      executionCtx.waitUntil(processSlackMessage(body, env));
       return new Response("OK");
     }
 
-    await processSlackEvent(body, env);
+    await processSlackMessage(body, env);
     return new Response("OK");
   } catch (err) {
     const logRef = createLogRef("slack");
@@ -66,32 +40,16 @@ export async function handleSlackEvent(request: Request, env: Env, executionCtx?
   }
 }
 
-async function processSlackEvent(body: {
-  type?: string;
-  challenge?: string;
-  event_id?: string;
-  team_id?: string;
-  event?: {
-    type: string;
-    text?: string;
-    channel?: string;
-    user?: string;
-    bot_id?: string;
-    ts?: string;
-    thread_ts?: string;
-    channel_type?: string;
-  };
-}, env: Env): Promise<void> {
+async function processSlackMessage(body: SlackEventPayload, env: Env): Promise<void> {
   logEvent(env, "slack_ingest", "event_received", { type: body.type, eventType: body.event?.type, eventId: body.event_id });
 
-  const eventId = body.event_id || body.event?.ts;
+  if (!(body.type === "event_callback" && body.event?.type === "message" && body.event.text)) return;
+  if (!body.event.channel || body.event.bot_id) return;
+
+  const eventId = body.event_id || body.event.ts;
   if (eventId && env.AGENT_DO) {
-    if (inFlightEvents.has(eventId)) {
-      return;
-    }
-
+    if (inFlightEvents.has(eventId)) return;
     inFlightEvents.add(eventId);
-
     try {
       const key = deriveRoutingKey(body);
       const do_ = env.AGENT_DO.get(env.AGENT_DO.idFromName(key));
@@ -100,157 +58,40 @@ async function processSlackEvent(body: {
         body: JSON.stringify({ eventId }),
       });
       const { processed } = await checkRes.json() as { processed: boolean };
-      if (processed) {
-        return;
-      }
+      if (processed) return;
     } finally {
       setTimeout(() => inFlightEvents.delete(eventId), 10000);
     }
   }
 
-  if (body.type === "event_callback" && body.event?.type === "message" && body.event.text) {
-    const channel = body.event.channel;
-    const originalText = body.event.text;
-
-    if (!channel || body.event.bot_id) {
-      return;
-    }
-
-    if (body.event.thread_ts && body.event.thread_ts === body.event.ts && body.team_id) {
-      const threadKey = deriveRoutingKey(body);
-      const channelKey = `${body.team_id}:${channel}:channel`;
-      const threadDO = env.AGENT_DO.get(env.AGENT_DO.idFromName(threadKey));
-      const channelDO = env.AGENT_DO.get(env.AGENT_DO.idFromName(channelKey));
-      const channelRes = await channelDO.fetch("http://do/messages?limit=20");
-      const { messages } = await channelRes.json() as { messages: Array<{ role: string; content: string; timestamp: number }> };
-      await threadDO.fetch("http://do/state/migrate", {
-        method: "POST",
-        body: JSON.stringify({ channelMessages: messages }),
-      });
-    }
-
-    const key = deriveRoutingKey(body);
-    const conversationDO = env.AGENT_DO ? env.AGENT_DO.get(env.AGENT_DO.idFromName(key)) : null;
-    const runtimeControls = await getRuntimeControls(env);
-    const commandResult = await handleCommand(originalText, channel, env, conversationDO);
-    if (commandResult.handled) {
-      if (commandResult.response) {
-        if (originalText.trim().toLowerCase() === "selftest" && commandResult.response.includes("\n")) {
-          const [lead, ...rest] = commandResult.response.split("\n");
-          if (lead) await postToSlack(channel, lead, env);
-          const remainder = rest.join("\n").trim();
-          if (remainder) await postToSlack(channel, remainder, env);
-        } else {
-          await postToSlack(channel, commandResult.response, env);
-        }
-      }
-      return;
-    }
-
-
-    const intent = await classifyIntent(originalText, env);
-
-    if (runtimeControls.paused) {
-      const reasonText = runtimeControls.reason ? ` Reason: ${runtimeControls.reason}` : "";
-      await postToSlack(channel, `⏸️ Blob is currently paused via config/runtime-controls.json.${reasonText}`, env);
-      return;
-    }
-
-    if (intent.intent === "list_cron") {
-      const jobs = await getCronJobs(env);
-      if (jobs.length === 0) {
-        await postToSlack(channel, "No cron jobs configured. Try: 'remind me every 5 minutes to check email'", env);
+  const key = deriveRoutingKey(body);
+  const conversationDO = env.AGENT_DO ? env.AGENT_DO.get(env.AGENT_DO.idFromName(key)) : null;
+  const commandResult = await handleCommand(body.event.text, body.event.channel, env, conversationDO);
+  if (commandResult.handled) {
+    if (commandResult.response) {
+      const isSelftest = body.event.text.trim().toLowerCase() === "selftest";
+      if (isSelftest && commandResult.response.includes("\n")) {
+        const [lead, ...rest] = commandResult.response.split("\n");
+        if (lead) await postToSlack(body.event.channel, lead, env);
+        const remainder = rest.join("\n").trim();
+        if (remainder) await postToSlack(body.event.channel, remainder, env);
       } else {
-        const list = jobs.map((job) => `• ${job.schedule}: ${job.task}`).join("\n");
-        await postToSlack(channel, `Your cron jobs:\n${list}`, env);
-      }
-      return;
-    }
-
-    if (intent.intent === "add_cron" && intent.schedule && intent.task) {
-      const result = await addCronJob(env, intent.schedule, intent.task);
-      if (result) {
-        await postToSlack(channel, `✅ Cron job added: "${intent.schedule}" → "${intent.task}"`, env);
-      } else {
-        await postToSlack(channel, "❌ Failed to add cron job", env);
-      }
-      return;
-    }
-
-    if (intent.intent === "delete_cron") {
-      const jobs = await getCronJobs(env);
-      if (jobs.length === 0) {
-        await postToSlack(channel, "No cron jobs to delete", env);
-      } else if (intent.search) {
-        const job = jobs.find((entry) => entry.task.toLowerCase().includes(intent.search!.toLowerCase()));
-        if (job) {
-          await deleteCronJob(env, job.id);
-          await postToSlack(channel, `✅ Deleted cron job: ${job.task}`, env);
-        } else {
-          await postToSlack(channel, `❌ No job matching "${intent.search}" found.`, env);
-        }
-      } else {
-        await postToSlack(channel, "Which job would you like to delete? Try: 'delete my email reminder job'", env);
-      }
-      return;
-    }
-
-    // Fetch conversation history from the Durable Object
-    let conversationHistory: Array<{ role: string; content: string }> = [];
-    if (conversationDO) {
-      try {
-        const historyRes = await conversationDO.fetch("http://do/messages?limit=20");
-        const { messages } = await historyRes.json() as { messages: Array<{ role: string; content: string; timestamp: number }> };
-        conversationHistory = messages.map(({ role, content }) => ({ role, content }));
-      } catch {
-        // proceed without history if fetch fails
+        await postToSlack(body.event.channel, commandResult.response, env);
       }
     }
-
-    try {
-      if (intent.needsSandbox) {
-        const repos = await getRepos(env);
-        const repo = repos[0] ?? "default";
-        const agent = new PiAgent(env, repo);
-        const verbosity = await getConversationVerbosity(conversationDO);
-        if (verbosity === "minimal") {
-          await postToSlack(channel, "Working…", env);
-        }
-        const response = await agent.run(originalText, {
-          conversationHistory,
-          verbosity,
-          onProgress: verbosity === "verbose" ? (msg: string) => postToSlack(channel, msg, env) : undefined,
-          onToolLedger: verbosity === "verbose"
-            ? (entry) => postToSlack(channel, formatToolLedger(entry), env)
-            : undefined,
-          conversationKey: key,
-        });
-        // Store the exchange in the DO
-        if (conversationDO) {
-          await conversationDO.fetch("http://do/messages", { method: "POST", body: JSON.stringify({ role: "user", content: originalText }) });
-          await conversationDO.fetch("http://do/messages", { method: "POST", body: JSON.stringify({ role: "assistant", content: response }) });
-        }
-        await postToSlack(channel, response, env);
-      } else {
-        const llmMessages: Array<{ role: string; content: string }> = [
-          { role: "system", content: "You are a helpful, versatile assistant responding via Slack. Be concise and friendly." },
-          ...conversationHistory,
-          { role: "user", content: originalText },
-        ];
-        const response = await callLLM(llmMessages, env);
-        // Store the exchange in the DO
-        if (conversationDO) {
-          await conversationDO.fetch("http://do/messages", { method: "POST", body: JSON.stringify({ role: "user", content: originalText }) });
-          await conversationDO.fetch("http://do/messages", { method: "POST", body: JSON.stringify({ role: "assistant", content: response }) });
-        }
-        await postToSlack(channel, response, env);
-      }
-    } catch (err) {
-      const logRef = createLogRef("slack");
-      logEvent(env, "slack_ingest", "process_message_failed", { error: String(err), channel }, logRef);
-      await postToSlack(channel, `❌ ${formatSlackError("Unable to process message.", logRef)}`, env);
-    }
+    return;
   }
+
+  const intent = await classifyIntent(body.event.text, env);
+  await processIntentOrChat({
+    body,
+    intent,
+    env,
+    conversationDO,
+    conversationKey: key,
+    postToSlack,
+    formatSlackError,
+  });
 }
 
 async function postToSlack(channel: string, text: string, env: Env, threadTs?: string): Promise<void> {

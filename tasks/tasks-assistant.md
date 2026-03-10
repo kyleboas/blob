@@ -88,7 +88,7 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 1.9 Create `src/agent/handlers/heartbeat.ts`. Extract `/heartbeat/status` GET. Extract `/daily-tokens` GET/POST. Extract `/events/check` POST.
   - [x] 1.10 Rewrite `do.ts` to be a thin class: constructor, `init()`, `alarm()`, `fetch()` (which calls `routeRequest`), and `save()`. All business logic lives in handler modules. Target: under 100 lines.
   - [x] 1.11 Create `src/integrations/slack-commands.ts`. Extract from `slack.ts`: `getExactKeywordCommand`, `classifyIntent`, `detectAndStoreSecret`, `mightBeHeartbeatConfig`, `parseHeartbeatConfig`, `formatHeartbeatInterval`, `TOKEN_PATTERNS`, and all command-handling branches (status, settings, selftest, secrets, heartbeat config, set minimal/verbose, delete secret). Export a `handleCommand(text: string, channel: string, env: Env, conversationDO: DurableObjectStub | null): Promise<{ handled: boolean; response?: string }>` function.
-  - [ ] 1.12 Refactor `slack.ts` to import from `slack-commands.ts`. The main `processSlackMessage` function should: verify signature → check dedup → call `handleCommand` → if not handled, run intent classification → dispatch to agent or LLM. Target: under 200 lines.
+  - [x] 1.12 Refactor `slack.ts` to import from `slack-commands.ts`. The main `processSlackMessage` function should: verify signature → check dedup → call `handleCommand` → if not handled, run intent classification → dispatch to agent or LLM. Target: under 200 lines.
   - [ ] 1.13 Create `src/tests/do-router.test.ts`. Test that each URL+method routes to the correct handler and that unknown routes return 404.
   - [ ] 1.14 Run `npm run typecheck && npm test`. Fix any failures.
 
