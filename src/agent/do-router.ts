@@ -4,6 +4,7 @@ import type { Env } from "../core/types";
 import type { BlobState, CronJob } from "./do";
 import { handleCreateJob, handleListJobs, handleTransitionJob } from "./handlers/jobs";
 import { handleListMessages, handleStoreMessage } from "./handlers/messages";
+import { handleDeleteSecret, handleListSecrets, handleSaveSecret } from "./handlers/secrets";
 import { handleGetHeartbeatSettings, handleGetVerbosity, handleSetHeartbeatSettings, handleSetVerbosity } from "./handlers/settings";
 
 export type RouterCtx = {
@@ -247,24 +248,11 @@ export async function routeRequest(
   }
 
   if (pathname === "/secrets" && method === "GET") {
-    const rows = state.storage.sql.exec("SELECT name FROM service_secrets ORDER BY name ASC");
-    return json({ secrets: [...rows].map((r) => String(r.name)) });
+    return handleListSecrets(ctx);
   }
 
   if (pathname === "/secrets" && method === "POST") {
-    const { name, value } = (await request.json()) as { name: string; value: string };
-    if (!name || !value) return json({ error: "name and value required" }, 400);
-    const now = Date.now();
-    const existing = state.storage.sql.exec("SELECT name FROM service_secrets WHERE name=?", name).toArray();
-    if (existing.length > 0) {
-      state.storage.sql.exec("UPDATE service_secrets SET value=?, updated_at=? WHERE name=?", value, now, name);
-    } else {
-      state.storage.sql.exec(
-        "INSERT INTO service_secrets (name, value, created_at, updated_at) VALUES (?, ?, ?, ?)",
-        name, value, now, now,
-      );
-    }
-    return json({ saved: name });
+    return handleSaveSecret(request, ctx);
   }
 
   if (pathname === "/secrets/values" && method === "GET") {
@@ -277,9 +265,7 @@ export async function routeRequest(
   }
 
   if (pathname === "/secrets/delete" && method === "POST") {
-    const { name } = (await request.json()) as { name: string };
-    state.storage.sql.exec("DELETE FROM service_secrets WHERE name=?", name);
-    return json({ deleted: name });
+    return handleDeleteSecret(request, ctx);
   }
 
   return new Response("Not found", { status: 404 });
