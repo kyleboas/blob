@@ -31,6 +31,7 @@ export interface Env {
   SLACK_SUMMARY_CHANNEL?: string;
   CLOUDFLARE_API_TOKEN?: string;
   ACCOUNT_ID?: string;
+  WORKER_NAME?: string;
   DO_AUTH_SECRET?: string;
 
   CRON_FAIL_THRESHOLD?: string;
@@ -46,6 +47,7 @@ export interface Env {
   HEARTBEAT_MODEL_CALL_LIMIT?: string;
   HEARTBEAT_INTERVAL_MS?: string;
   HEARTBEAT_BACKOFF_THRESHOLD?: string;
+  POST_DEPLOY_HEARTBEAT_COUNT?: string;
   DAILY_TOKEN_CEILING?: string;
   RATE_LIMIT_WINDOW_MS?: string;
   RATE_LIMIT_MAX_MESSAGES?: string;

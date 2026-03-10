@@ -33,6 +33,19 @@ export interface BlobState {
     currentIntervalMs?: number;
     lastError?: string;
   };
+  pendingDeploy?: {
+    requestId: string;
+    diff: string;
+    requestedAt: number;
+    approvedBy?: string;
+    status: "pending" | "approved" | "rejected" | "expired";
+  };
+  lastDeployAt?: number;
+  deployMonitoring?: {
+    remainingHeartbeats: number;
+    consecutiveFailures: number;
+    rollbackTriggeredAt?: number;
+  };
 }
 
 const DEFAULT_CATALOG = {

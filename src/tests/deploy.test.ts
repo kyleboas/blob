@@ -34,3 +34,12 @@ test("formatDeploySlackMessage returns status messages", () => {
   assert.match(formatDeploySlackMessage("success"), /succeeded/);
   assert.match(formatDeploySlackMessage("timeout"), /timed out/);
 });
+
+
+test("triggerDeploy is blocked when approval is pending", async () => {
+  const result = await triggerDeploy({ type: "webhook", url: "https://example.com/hook" }, "abc123", fetch, {
+    checkApproval: async () => "pending",
+  });
+  assert.equal(result.status, "skipped");
+  assert.match(result.details, /Awaiting approval/);
+});

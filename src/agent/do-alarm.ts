@@ -3,6 +3,7 @@ import { buildCronAlert, detectCronAlerts, postCronAlertWithFallback } from "../
 import { logEvent } from "../core/observability";
 import type { Env } from "../core/types";
 import type { BlobState } from "./do";
+import { rollback } from "./deploy-rollback";
 
 export function getEffectiveHeartbeatConfig(data: BlobState, env: Env): { intervalMs: number; modelCallLimit: number } {
   return {
@@ -102,6 +103,13 @@ export async function runHeartbeatAlarm(state: DurableObjectState, env: Env, dat
 
     await checkCronHealthAlerts(env, data.cronOutcomes);
 
+    if (data.deployMonitoring?.remainingHeartbeats && data.deployMonitoring.remainingHeartbeats > 0) {
+      data.deployMonitoring.remainingHeartbeats -= 1;
+      data.deployMonitoring.consecutiveFailures = 0;
+    }
+
+
+
     data.heartbeat = {
       ...(data.heartbeat ?? {}),
       lastCompletedAt: new Date().toISOString(),
@@ -120,6 +128,16 @@ export async function runHeartbeatAlarm(state: DurableObjectState, env: Env, dat
     const nextIntervalMs = shouldBackoff
       ? Math.min(Math.max(currentIntervalMs, defaultIntervalMs) * 2, maxBackoffIntervalMs)
       : defaultIntervalMs;
+
+    if (data.deployMonitoring?.remainingHeartbeats && data.deployMonitoring.remainingHeartbeats > 0) {
+      data.deployMonitoring.remainingHeartbeats -= 1;
+      data.deployMonitoring.consecutiveFailures = (data.deployMonitoring.consecutiveFailures ?? 0) + 1;
+      if (data.deployMonitoring.consecutiveFailures >= Number.parseInt(env.POST_DEPLOY_HEARTBEAT_COUNT ?? "3", 10)
+        && !data.deployMonitoring.rollbackTriggeredAt) {
+        await rollback(env);
+        data.deployMonitoring.rollbackTriggeredAt = Date.now();
+      }
+    }
 
     data.heartbeat = {
       ...(data.heartbeat ?? {}),
