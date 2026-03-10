@@ -3,6 +3,8 @@ import { withDOAuth } from "./do-auth";
 import { getSecretPatterns, redactSecrets as redactWithPatterns } from "./safety";
 import { logEvent } from "./observability";
 import { estimateTokens } from "./tokens";
+import { loadConfig } from "../self-improve/index";
+import { DEFAULT_SCORING_CONFIG } from "../self-improve/types";
 
 export type MemoryScope = "thread" | "channel" | "team";
 export type MemorySource = "thread" | "cron" | "compaction";
@@ -150,12 +152,17 @@ export async function validateIngestion(env: Env, scope: string, content: string
   if (getSecretPatterns(env).some((pattern) => pattern.test(content))) {
     return { valid: false, reason: "secret_detected" };
   }
-  if (estimateTokens(content) > 2000) {
+
+  // Load tunable thresholds from the self-improving config
+  const config = env.REPO_STORE ? await loadConfig(env.REPO_STORE) : DEFAULT_SCORING_CONFIG;
+  const memConfig = config.memory ?? DEFAULT_SCORING_CONFIG.memory!;
+
+  if (estimateTokens(content) > memConfig.maxTokensPerItem) {
     return { valid: false, reason: "oversized" };
   }
   if (env.PI_VECTORS) {
     const near = await queryVectors(env, content, scope, 1);
-    if (near[0]?.score && near[0].score > 0.95) {
+    if (near[0]?.score && near[0].score > memConfig.duplicateThreshold) {
       return { valid: false, reason: "duplicate" };
     }
   }
@@ -182,8 +189,11 @@ export async function writeMemoryItem(env: Env, store: R2MemoryStore, params: { 
 }
 
 export async function recallMemory(env: Env, store: R2MemoryStore, query: string, scopes: string[], options?: { maxItems?: number; maxTokens?: number }): Promise<MemoryItem[]> {
-  const maxItems = options?.maxItems ?? 10;
-  const maxTokens = options?.maxTokens ?? 4000;
+  // Use self-improving config for defaults, allow explicit overrides
+  const config = env.REPO_STORE ? await loadConfig(env.REPO_STORE) : DEFAULT_SCORING_CONFIG;
+  const memConfig = config.memory ?? DEFAULT_SCORING_CONFIG.memory!;
+  const maxItems = options?.maxItems ?? memConfig.recallMaxItems;
+  const maxTokens = options?.maxTokens ?? memConfig.recallMaxTokens;
   const orderedScopes = [...scopes];
   const candidates: MemoryItem[] = [];
   const seen = new Set<string>();

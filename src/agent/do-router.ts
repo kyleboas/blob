@@ -15,6 +15,7 @@ import { handleListMessages, handleStoreMessage } from "./handlers/messages";
 import { getSecretsForInjection, handleDeleteSecret, handleListSecrets, handleSaveSecret } from "./handlers/secrets";
 import { handleGetHeartbeatSettings, handleGetVerbosity, handleSetHeartbeatSettings, handleSetVerbosity } from "./handlers/settings";
 import { handleGetDeployApproval, handleUpdateDeployApproval } from "./handlers/deploy-approval";
+import { handleRecordOutcome, handleGetScoringConfig } from "./handlers/self-improve";
 
 export type RouterCtx = {
   state: DurableObjectState;
@@ -208,6 +209,14 @@ export async function routeRequest(
 
   if (pathname === "/secrets/delete" && method === "POST") {
     return handleDeleteSecret(request, ctx);
+  }
+
+  if (pathname === "/self-improve/outcome" && method === "POST") {
+    return handleRecordOutcome(request, ctx);
+  }
+
+  if (pathname === "/self-improve/config" && method === "GET") {
+    return handleGetScoringConfig(ctx);
   }
 
   return new Response("Not found", { status: 404 });

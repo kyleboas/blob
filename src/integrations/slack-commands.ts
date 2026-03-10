@@ -5,6 +5,7 @@ import { logEvent } from "../core/observability";
 import { getRepos } from "../core/storage";
 import type { Env } from "../core/types";
 import { withDOAuth } from "../core/do-auth";
+import { runOptimizationCycle, loadConfig } from "../self-improve/index";
 
 type Verbosity = "minimal" | "verbose";
 
@@ -20,9 +21,9 @@ function globalDO(env: Env): DurableObjectStub | null {
   return env.AGENT_DO ? env.AGENT_DO.get(env.AGENT_DO.idFromName("blob")) : null;
 }
 
-export function getExactKeywordCommand(text: string): "settings" | "status" | "selftest" | "set minimal" | "set verbose" | "secrets" | "heartbeat config" | null {
+export function getExactKeywordCommand(text: string): "settings" | "status" | "selftest" | "set minimal" | "set verbose" | "secrets" | "heartbeat config" | "self-improve" | null {
   const normalized = text.trim().toLowerCase();
-  if (["settings", "status", "selftest", "set minimal", "set verbose", "secrets", "heartbeat config"].includes(normalized)) {
+  if (["settings", "status", "selftest", "set minimal", "set verbose", "secrets", "heartbeat config", "self-improve"].includes(normalized)) {
     return normalized as ReturnType<typeof getExactKeywordCommand>;
   }
   return null;
@@ -222,6 +223,23 @@ async function getHeartbeatStatus(conversationDO: DurableObjectStub | null, env:
   }
 }
 
+async function handleSelfImproveCommand(env: Env): Promise<{ handled: boolean; response: string }> {
+  try {
+    const config = await loadConfig(env.REPO_STORE);
+    const result = await runOptimizationCycle(env);
+    return {
+      handled: true,
+      response: `Self-improve cycle complete (currently on v${config.version}):\n${result}`,
+    };
+  } catch (err) {
+    logEvent(env, "slack_ingest", "self_improve_manual_failed", { error: String(err) });
+    return {
+      handled: true,
+      response: `Self-improve failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 export async function handleCommand(
   text: string,
   channel: string,
@@ -277,6 +295,9 @@ export async function handleCommand(
       handled: true,
       response: `Heartbeat config: interval every ${formatHeartbeatInterval(hbConfig.intervalMs)}, call limit ${hbConfig.modelCallLimit}.\n\nTo change, just say it in plain English:\n• "set heartbeat to every 5 minutes"\n• "set heartbeat call limit to 5"\n• "heartbeat every hour"\n• "reduce heartbeat calls to 3"`,
     };
+  }
+  if (keywordCommand === "self-improve") {
+    return await handleSelfImproveCommand(env);
   }
   if (keywordCommand === "selftest") {
     const repos = await getRepos(env);
