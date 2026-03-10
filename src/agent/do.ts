@@ -1,6 +1,13 @@
 import { assertTransition, shouldForcePause, type JobStatus } from "../jobs/job-model";
 import { type CronOutcomeRecord, detectCronAlerts, buildCronAlert, postCronAlertWithFallback } from "../jobs/cron-jobs";
 import { logEvent } from "../core/observability";
+import {
+  handleCreateCronJob,
+  handleDeleteCronJob,
+  handleListCronJobs,
+  handleListCronOutcomes,
+  handleSaveCronOutcome,
+} from "./handlers/cron";
 
 export interface CronJob {
   id: string;
@@ -450,52 +457,24 @@ export class AgentDO {
     }
 
     if (url.pathname === "/cron" && request.method === "GET") {
-      return json({ jobs: this.data.cronJobs || [] });
+      return handleListCronJobs({ data: this.data, save: this.save.bind(this) });
     }
 
     if (url.pathname === "/cron" && request.method === "POST") {
-      const { schedule, task } = (await request.json()) as { schedule: string; task: string };
-      const job: CronJob = { id: crypto.randomUUID(), schedule, task, enabled: true, createdAt: Date.now() };
-      this.data.cronJobs = [...(this.data.cronJobs || []), job];
-      await this.save();
-      return json({ created: job });
+      return handleCreateCronJob(request, { data: this.data, save: this.save.bind(this) });
     }
 
 
     if (url.pathname === "/cron/outcome" && request.method === "POST") {
-      const outcome = (await request.json()) as {
-        jobName: string;
-        status: "success" | "failure" | "running";
-        durationMs?: number;
-        outputSummary?: string;
-        lastError?: string;
-      };
-      const existing = this.data.cronOutcomes?.[outcome.jobName];
-      const now = Date.now();
-      const next: CronOutcomeRecord = {
-        jobName: outcome.jobName as CronOutcomeRecord["jobName"],
-        status: outcome.status,
-        lastRunAt: now,
-        lastSuccessAt: outcome.status === "success" ? now : existing?.lastSuccessAt,
-        lastError: outcome.lastError,
-        consecutiveFailures: outcome.status === "failure" ? (existing?.consecutiveFailures ?? 0) + 1 : 0,
-        durationMs: outcome.durationMs,
-        outputSummary: outcome.outputSummary,
-      };
-      this.data.cronOutcomes = { ...(this.data.cronOutcomes || {}), [outcome.jobName]: next };
-      await this.save();
-      return json({ saved: true, outcome: next });
+      return handleSaveCronOutcome(request, { data: this.data, save: this.save.bind(this) });
     }
 
     if (url.pathname === "/cron/outcomes" && request.method === "GET") {
-      return json({ outcomes: this.data.cronOutcomes || {} });
+      return handleListCronOutcomes({ data: this.data, save: this.save.bind(this) });
     }
 
     if (url.pathname === "/cron/delete" && request.method === "POST") {
-      const { id } = (await request.json()) as { id: string };
-      this.data.cronJobs = (this.data.cronJobs || []).filter((j) => j.id !== id);
-      await this.save();
-      return json({ deleted: id });
+      return handleDeleteCronJob(request, { data: this.data, save: this.save.bind(this) });
     }
 
     if (url.pathname === "/daily-tokens" && request.method === "GET") {
