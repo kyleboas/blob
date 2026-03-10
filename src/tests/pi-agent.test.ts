@@ -55,13 +55,34 @@ test("structured tool-call parser handles valid and invalid payloads", () => {
 
 
 
-test("system prompt requires tool usage for real-time external info", () => {
+test("external-data detector identifies weather-style requests", () => {
+  assert.equal(__piAgentTestUtils.isLikelyExternalDataRequest("what is the weather in london right now"), true);
+  assert.equal(__piAgentTestUtils.isLikelyExternalDataRequest("refactor this function"), false);
+});
+
+test("agent prompts for tool usage when external data request gets no tool call", async () => {
   const env = makeEnv();
   const agent = new PiAgent(env, "acme/repo");
-  const prompt = (agent as any).buildSystemPrompt();
 
-  assert.match(prompt, /MUST use tools to gather the data/);
-  assert.match(prompt, /Only say you are blocked after you have actually tried tool calls/);
+  let callCount = 0;
+  (agent as any).callLLM = async () => {
+    callCount += 1;
+    if (callCount === 1) {
+      return { content: "I don't have access to real-time weather data.", toolCalls: [] };
+    }
+    if (callCount === 2) {
+      return { content: "", toolCalls: [{ function: { name: "bash", arguments: '{"command":"echo sunny"}' } }] };
+    }
+    return { content: "It is sunny.", toolCalls: [] };
+  };
+
+  (agent as any).ensureRepoBootstrapped = async () => undefined;
+  (agent as any).executeToolWithRetry = async () => ({ output: "sunny" });
+
+  const result = await agent.run("what is the weather in london right now");
+
+  assert.equal(result, "It is sunny.");
+  assert.equal(callCount, 3);
 });
 test("agent run executes structured tool calls and emits tool ledger entries", async () => {
   const env = makeEnv();

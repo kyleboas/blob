@@ -142,6 +142,25 @@ function summarizeArgs(args: Record<string, unknown>): string {
   return parts.join(", ");
 }
 
+function isLikelyExternalDataRequest(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return [
+    "weather",
+    "temperature",
+    "forecast",
+    "current",
+    "right now",
+    "latest",
+    "today",
+    "price",
+    "stock",
+    "traffic",
+    "schedule",
+    "status",
+    "api",
+  ].some((token) => normalized.includes(token));
+}
+
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
@@ -259,11 +278,7 @@ Never echo back or display a secret/token the user provides. Just confirm receip
 
     return `You are a versatile assistant with access to a workspace at /workspace/${this.repoDir}.
 
-You have 4 tools — read, write, edit, bash — which together give you full capability to accomplish any task. The bash tool lets you run arbitrary commands: install packages, fetch URLs, run scripts, use git, compile code, query APIs, and anything else a Linux shell can do. Never say you cannot do something — figure out how to accomplish it with your tools.
-
-When the user asks for current, external, or verifiable information (weather, prices, schedules, APIs, system state, etc.), you MUST use tools to gather the data instead of claiming you lack access. Execute commands (for example with curl via bash), then answer with the results.
-
-Only say you are blocked after you have actually tried tool calls and the attempts failed for a concrete reason (missing credentials, network error, service outage, etc.).${toolFramework}${verifyBlock}
+You have 4 tools — read, write, edit, bash — which together give you full capability to accomplish any task. The bash tool lets you run arbitrary commands: install packages, fetch URLs, run scripts, use git, compile code, query APIs, and anything else a Linux shell can do. Never say you cannot do something — figure out how to accomplish it with your tools.${toolFramework}${verifyBlock}
 
 Use structured tool calls via the provided tool schema whenever you need to execute an action.
 Stop when done and provide a concise summary.`;
@@ -729,6 +744,8 @@ fi
     let consecutiveFailures = 0;
     let bootstrapAttempted = false;
     let verifyAttempts = 0;
+    let toolCallsExecuted = 0;
+    let externalDataGuardAttempts = 0;
     const maxVerifyAttempts = Number.parseInt(this.env.VERIFY_MAX_ATTEMPTS ?? "3", 10);
 
     const verbosity = opts.verbosity ?? "verbose";
@@ -781,6 +798,20 @@ fi
       const structuredToolCall = llmResponse.toolCalls.length > 0 ? parseStructuredToolCall(llmResponse.toolCalls[0]) : null;
       const toolCall = structuredToolCall;
       if (!toolCall) {
+        const needsExternalData = isLikelyExternalDataRequest(userMessage);
+        if (needsExternalData && toolCallsExecuted === 0 && externalDataGuardAttempts < 2) {
+          externalDataGuardAttempts += 1;
+          this.messages.push({ role: "assistant", content: responseText });
+          this.messages.push({
+            role: "user",
+            content: "Before finalizing, use an available tool (typically bash with curl) to fetch real external data for this request, then answer using the result.",
+          });
+          if (opts.onProgress && verbosity === "verbose") {
+            await opts.onProgress("🔎 Requested external data: prompting model to call tools before final answer.");
+          }
+          continue;
+        }
+
         // No tool call — the model thinks it's done. Run verification if configured.
         const verifyResult = await this.runVerification(sandboxId, bootstrapAttempted, verifyAttempts, maxVerifyAttempts, opts);
         if (verifyResult.passed || verifyResult.skipped) {
@@ -853,6 +884,7 @@ fi
           return this.finishRun(userMessage, pauseMsg, conversationKey, sandboxId);
         }
       } else {
+        toolCallsExecuted += 1;
         consecutiveFailures = 0;
         this.messages.push({
           role: "user",
@@ -872,4 +904,5 @@ export const __piAgentTestUtils = {
   TOOL_SCHEMAS,
   isTransientError,
   buildBootstrapScript,
+  isLikelyExternalDataRequest,
 };
