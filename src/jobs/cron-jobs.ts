@@ -6,8 +6,9 @@ import { withDOAuth } from "../core/do-auth";
 import { runEval } from "../../evals/run-eval";
 import { proposeChange } from "../../evals/propose-change";
 import type { Scenario } from "../../evals/run-eval";
+import { runOptimizationCycle } from "../self-improve/index";
 
-export type CronTaskName = "content-scan" | "memory-compaction" | "memory-reconciliation" | "autoresearch";
+export type CronTaskName = "content-scan" | "memory-compaction" | "memory-reconciliation" | "autoresearch" | "self-improve";
 export type CronStatus = "success" | "failure" | "running";
 
 export interface CronOutcomeRecord {
@@ -37,6 +38,7 @@ const CRON_TO_TASK: Record<string, CronTaskName> = {
   "0 */6 * * *": "memory-compaction",
   "30 */6 * * *": "memory-reconciliation",
   "0 4 * * *": "autoresearch",
+  "15 */2 * * *": "self-improve",
 };
 
 const EXPECTED_CADENCE_MS: Record<CronTaskName, number> = {
@@ -44,6 +46,7 @@ const EXPECTED_CADENCE_MS: Record<CronTaskName, number> = {
   "memory-compaction": 6 * 60 * 60 * 1000,
   "memory-reconciliation": 6 * 60 * 60 * 1000,
   autoresearch: 24 * 60 * 60 * 1000,
+  "self-improve": 2 * 60 * 60 * 1000,
 };
 
 function summarizeError(err: unknown): string {
@@ -85,6 +88,8 @@ export async function runCronTask(jobName: CronTaskName, env: Env): Promise<Cron
       summary = await runMemoryCompaction(env);
     } else if (jobName === "autoresearch") {
       summary = await runAutoresearch(env);
+    } else if (jobName === "self-improve") {
+      summary = await runOptimizationCycle(env);
     } else {
       summary = await runMemoryReconciliation(env);
     }
