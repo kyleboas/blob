@@ -61,10 +61,23 @@ export async function triggerDeploy(
   mechanism: DeployMechanism,
   mergeSha: string,
   fetchImpl: typeof fetch = fetch,
+  opts?: { checkApproval?: () => Promise<"pending" | "approved" | "rejected" | "expired"> },
 ): Promise<DeployTriggerResult> {
   const req = buildDeployTriggerRequest(mechanism, mergeSha);
   logEvent(undefined, "deploy_ops", "deploy_trigger_attempt", { mechanism: mechanism.type, mergeSha });
   const idempotencyKey = buildDeployIdempotencyKey(mergeSha);
+
+
+  if (opts?.checkApproval) {
+    const approval = await opts.checkApproval();
+    if (approval !== "approved") {
+      return {
+        status: "skipped",
+        idempotencyKey,
+        details: "Awaiting approval",
+      };
+    }
+  }
 
   if (!req) {
     return {

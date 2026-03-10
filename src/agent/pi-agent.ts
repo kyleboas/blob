@@ -4,6 +4,7 @@ import { appendWorkspaceState, editTool, ensureSandboxSession, executeInSandbox,
 import { logEvent } from "../core/observability";
 import { estimateTokens } from "../core/tokens";
 import { withDOAuth } from "../core/do-auth";
+import { expireUnusedTools } from "./tool-lifecycle";
 import {
   appendLearnedRecord,
   buildSemanticMemoryContext,
@@ -236,6 +237,8 @@ When you need a capability you don't have, BUILD it:
 3. If no matching tool exists: read .blob/config/services.json for API details, write a new script to .blob/scratch/, bash to test it, then write the working version to .blob/tools/ and edit .blob/tools/manifest.json to register it
 
 Before promoting a new tool, ALWAYS test it in .blob/scratch/ first.
+Tools are validated for secret patterns before promotion to .blob/tools/.
+Unused tools are automatically expired based on TOOL_EXPIRY_DAYS.
 After each task, edit .blob/memory/journal.md with a brief log of what you did.
 When you learn something about the user, edit .blob/memory/context.md.
 
@@ -327,6 +330,13 @@ SEED
 fi
 `;
     await executeInSandbox(initScript, this.env, { sandboxId });
+
+    const days = Number.parseInt(this.env.TOOL_EXPIRY_DAYS ?? "30", 10);
+    try {
+      await expireUnusedTools(`${blobDir}/tools/manifest.json`, this.env, Number.isFinite(days) ? days : 30);
+    } catch (err) {
+      logEvent(this.env, "tool_call", "tool_expiry_failed", { error: String(err) });
+    }
 
   }
 

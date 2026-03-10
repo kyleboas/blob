@@ -208,6 +208,8 @@ test("do router maps endpoints to handlers and unknown routes 404", async () => 
     { method: "POST", path: "/cron/outcome", body: { jobName: "daily-summary", status: "success" } },
     { method: "GET", path: "/cron/outcomes" },
     { method: "POST", path: "/cron/delete", body: { id: "does-not-exist" } },
+    { method: "POST", path: "/deploy/approval", body: { action: "request", requestId: "req-1", diff: "x" } },
+    { method: "GET", path: "/deploy/approval?requestId=req-1" },
     { method: "POST", path: "/daily-tokens", body: { date: "2025-01-01", tokens: 10 } },
     { method: "GET", path: "/daily-tokens?date=2025-01-01" },
     { method: "GET", path: "/secrets" },

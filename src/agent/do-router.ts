@@ -14,6 +14,7 @@ import { handleGetLearnedMemoryStatus, handleGetVectorizeMemoryStatus, handleSet
 import { handleListMessages, handleStoreMessage } from "./handlers/messages";
 import { getSecretsForInjection, handleDeleteSecret, handleListSecrets, handleSaveSecret } from "./handlers/secrets";
 import { handleGetHeartbeatSettings, handleGetVerbosity, handleSetHeartbeatSettings, handleSetVerbosity } from "./handlers/settings";
+import { handleGetDeployApproval, handleUpdateDeployApproval } from "./handlers/deploy-approval";
 
 export type RouterCtx = {
   state: DurableObjectState;
@@ -164,6 +165,15 @@ export async function routeRequest(
 
   if (pathname === "/cron/delete" && method === "POST") {
     return handleDeleteCronJob(request, ctx);
+  }
+
+
+  if (pathname === "/deploy/approval" && method === "POST") {
+    return handleUpdateDeployApproval(request, ctx);
+  }
+
+  if (pathname === "/deploy/approval" && method === "GET") {
+    return handleGetDeployApproval(url, ctx);
   }
 
   if (pathname === "/daily-tokens" && method === "GET") {

@@ -8,6 +8,7 @@ import { withDOAuth } from "../core/do-auth";
 import { classifyIntent, getConversationVerbosity } from "./slack-commands";
 import { deriveRoutingKey } from "./slack-routing";
 import { addCronJob, deleteCronJob, getCronJobs } from "../jobs/cron";
+import { processApprovalMessage, requestApproval } from "../agent/deploy-approval";
 
 export type SlackEventPayload = {
   type?: string;
@@ -97,6 +98,20 @@ export async function processIntentOrChat(params: {
   if (!text || !channel) return;
 
   await migrateThreadFromChannel(body, env);
+
+  if (body.event?.user) {
+    const approvalHandled = await processApprovalMessage(text, body.event.user, env);
+    if (approvalHandled) {
+      await postToSlack(channel, "✅ Deployment approval decision recorded.", env);
+      return;
+    }
+  }
+
+  if (/\bdeploy\b/i.test(text) && /\b(approve|approval|ship|release)\b/i.test(text)) {
+    const requestId = await requestApproval(`Requested by Slack message: ${text}`, channel, env);
+    await postToSlack(channel, `🚦 Deploy request queued for approval: ${requestId}`, env);
+    return;
+  }
 
   const runtimeControls = await getRuntimeControls(env);
   if (runtimeControls.paused) {
