@@ -1,5 +1,5 @@
 import { logEvent } from "./observability";
-import { WORKERS_AI_FALLBACK_MODEL } from "./models";
+import { callLLM } from "./llm";
 import type { Env } from "./types";
 
 export interface IntentResult {
@@ -35,14 +35,11 @@ Respond with ONLY a JSON object in this format:
 Message: "${text}"`;
 
   try {
-    if (!env.AI) {
-      throw new Error("Workers AI binding not available");
-    }
-    const result = await env.AI.run(WORKERS_AI_FALLBACK_MODEL, {
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 200,
-    }) as { response?: string };
-    const jsonMatch = (result.response ?? "").match(/\{[\s\S]*\}/);
+    // Use callLLM so the classifier routes through the AI Gateway (e.g. Claude)
+    // when configured, giving reliable JSON output. Falls back to Workers AI
+    // automatically when the gateway is not configured.
+    const response = await callLLM([{ role: "user", content: prompt }], env, { maxTokens: 200 });
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       return JSON.parse(jsonMatch[0]) as IntentResult;
     }
