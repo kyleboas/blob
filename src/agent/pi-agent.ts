@@ -355,7 +355,7 @@ fi
               "content-type": "application/json",
               Authorization: `Bearer ${this.env.AI_GATEWAY_TOKEN}`,
             },
-            body: JSON.stringify({ model: this.env.LLM_MODEL ?? DEFAULT_MODEL, messages: this.messages, tools: TOOL_SCHEMAS }),
+            body: JSON.stringify({ model: this.env.LLM_MODEL ?? DEFAULT_MODEL, messages: this.messages, tools: TOOL_SCHEMAS, max_tokens: 4096 }),
           });
 
           if (!response.ok) {
