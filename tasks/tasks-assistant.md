@@ -168,14 +168,14 @@ Update the file after completing each sub-task, not just after completing an ent
 
 -----
 
-- [ ] 7.0 Add security and integration tests (FR-20, plus coverage for tasks 3–6)
-  - [ ] 7.1 Create `src/tests/secret-security.test.ts`. Test `redactSecrets` with: plain API key, URL-encoded token in git URL (`https://x-access-token:ghp_xxxx@github.com/`), base64-encoded bearer token, multi-line input with secrets on different lines, private key block, token split across a line break (should not match — verify expected behavior), empty input, input with no secrets (should return unchanged).
-  - [ ] 7.2 Create `src/tests/path-security.test.ts`. Test `normalizeToolPath` with: `../../../etc/passwd`, absolute path `/etc/passwd`, `./valid/path`, path starting with workspace prefix (should strip), empty string (should throw), path with embedded `..` (`foo/../../bar`), path with URL encoding (`%2e%2e` — verify it doesn’t bypass).
-  - [ ] 7.3 Create `src/tests/diff-scanning.test.ts`. Test `scanDiffForSecrets` with: added line with API key (should block), removed line with API key (should NOT block — it’s being removed), context line with API key (should block after FR-9 fix), reformatted line where only whitespace changed but token is present (should block), clean diff (should pass), diff with partial pattern match across lines (verify behavior).
-  - [ ] 7.4 Verify that the DO `/secrets/values` endpoint no longer exists. Write a test in `src/tests/secret-security.test.ts` that constructs a request to the DO router for `GET /secrets/values` and asserts it returns 404.
-  - [ ] 7.5 Verify that no `.ts` file in `src/` (excluding tests) contains `catch {` or `catch (_)` followed by an empty/comment-only body. This should already be covered by `silent-catch-audit.test.ts` from task 4.3 — run it and confirm zero failures.
-  - [ ] 7.6 Run the full test suite: `npm run typecheck && npm test`. All tests must pass. Document any known flaky tests.
-  - [ ] 7.7 Run the success metric checks from the PRD:
+- [x] 7.0 Add security and integration tests (FR-20, plus coverage for tasks 3–6)
+  - [x] 7.1 Create `src/tests/secret-security.test.ts`. Test `redactSecrets` with: plain API key, URL-encoded token in git URL (`https://x-access-token:ghp_xxxx@github.com/`), base64-encoded bearer token, multi-line input with secrets on different lines, private key block, token split across a line break (should not match — verify expected behavior), empty input, input with no secrets (should return unchanged).
+  - [x] 7.2 Create `src/tests/path-security.test.ts`. Test `normalizeToolPath` with: `../../../etc/passwd`, absolute path `/etc/passwd`, `./valid/path`, path starting with workspace prefix (should strip), empty string (should throw), path with embedded `..` (`foo/../../bar`), path with URL encoding (`%2e%2e` — verify it doesn’t bypass).
+  - [x] 7.3 Create `src/tests/diff-scanning.test.ts`. Test `scanDiffForSecrets` with: added line with API key (should block), removed line with API key (should NOT block — it’s being removed), context line with API key (should block after FR-9 fix), reformatted line where only whitespace changed but token is present (should block), clean diff (should pass), diff with partial pattern match across lines (verify behavior).
+  - [x] 7.4 Verify that the DO `/secrets/values` endpoint no longer exists. Write a test in `src/tests/secret-security.test.ts` that constructs a request to the DO router for `GET /secrets/values` and asserts it returns 404.
+  - [x] 7.5 Verify that no `.ts` file in `src/` (excluding tests) contains `catch {` or `catch (_)` followed by an empty/comment-only body. This should already be covered by `silent-catch-audit.test.ts` from task 4.3 — run it and confirm zero failures.
+  - [x] 7.6 Run the full test suite: `npm run typecheck && npm test`. All tests must pass. Document any known flaky tests.
+  - [x] 7.7 Run the success metric checks from the PRD:
     - `grep -r "catch {" src/ --include="*.ts" | grep -v test | wc -l` → expect 0
     - `grep -r "/secrets/values" src/ --include="*.ts" | wc -l` → expect 0
     - `grep -r "parseToolCall" src/ --include="*.ts" | grep -v test | wc -l` → expect 0

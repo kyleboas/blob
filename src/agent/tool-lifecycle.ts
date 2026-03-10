@@ -25,7 +25,8 @@ export async function expireUnusedTools(manifestPath: string, env: Env, maxAgeDa
   try {
     const raw = await env.SANDBOX.readFile(manifestPath);
     manifest = JSON.parse(raw) as ToolManifest;
-  } catch {
+  } catch (err) {
+    console.error("expireUnusedTools manifest read failed", err);
     return [];
   }
   const now = Date.now();

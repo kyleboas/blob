@@ -84,6 +84,7 @@ export function scanDiffForSecrets(diffText: string, patterns: RegExp[] = getSec
   const lines = diffText.split("\n").filter((line) => line && !line.startsWith("-"));
   for (const line of lines) {
     for (const pattern of patterns) {
+      pattern.lastIndex = 0;
       if (pattern.test(line)) {
         const normalized = line.startsWith("+") ? line.slice(1) : line;
         matches.push(normalized.slice(0, 200));
