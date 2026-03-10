@@ -1,4 +1,5 @@
 import type { Env } from "./types";
+import { withDOAuth } from "./do-auth";
 
 const BLOB_ID = "blob";
 
@@ -11,7 +12,7 @@ async function getAgentDO(env: Env): Promise<DurableObjectStub> {
 export async function getRepos(env: Env): Promise<string[]> {
   try {
     const do_ = await getAgentDO(env);
-    const res = await do_.fetch("http://do/repos");
+    const res = await do_.fetch("http://do/repos", withDOAuth(env));
     const data = await res.json() as { repos: string[] };
     return data.repos;
   } catch {
@@ -22,10 +23,10 @@ export async function getRepos(env: Env): Promise<string[]> {
 export async function addRepo(env: Env, repo: string): Promise<void> {
   try {
     const do_ = await getAgentDO(env);
-    await do_.fetch("http://do/repos", {
+    await do_.fetch("http://do/repos", withDOAuth(env, {
       method: "POST",
       body: JSON.stringify({ repo }),
-    });
+    }));
   } catch {
     // Ignore errors
   }
@@ -34,7 +35,7 @@ export async function addRepo(env: Env, repo: string): Promise<void> {
 export async function getRepoGoals(env: Env, repo: string): Promise<string[]> {
   try {
     const do_ = await getAgentDO(env);
-    const res = await do_.fetch(`http://do/goals?repo=${encodeURIComponent(repo)}`);
+    const res = await do_.fetch(`http://do/goals?repo=${encodeURIComponent(repo)}`, withDOAuth(env));
     const data = await res.json() as { goals: string[] };
     return data.goals;
   } catch {
@@ -45,10 +46,10 @@ export async function getRepoGoals(env: Env, repo: string): Promise<string[]> {
 export async function setRepoGoals(env: Env, repo: string, goals: string[]): Promise<void> {
   try {
     const do_ = await getAgentDO(env);
-    await do_.fetch("http://do/goals", {
+    await do_.fetch("http://do/goals", withDOAuth(env, {
       method: "POST",
       body: JSON.stringify({ repo, goals }),
-    });
+    }));
   } catch {
     // Ignore errors
   }

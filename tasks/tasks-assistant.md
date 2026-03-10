@@ -107,19 +107,19 @@ Update the file after completing each sub-task, not just after completing an ent
 
 -----
 
-- [ ] 3.0 Harden security: secrets, auth, command filtering, diff scanning (FR-4, FR-5, FR-6, FR-7, FR-8, FR-9)
-  - [ ] 3.1 Remove the `/secrets/values` GET endpoint from `src/agent/handlers/secrets.ts`. The `/secrets` GET (which returns only names, not values) stays. The `/secrets` POST (write) stays. The `/secrets/delete` POST stays.
-  - [ ] 3.2 Create a new internal-only method in `secrets.ts` handler: `getSecretsForInjection(storage): Record<string, string>` that reads secret values from DO SQL storage. This is callable only by the DO itself (alarm, internal methods), never exposed as an HTTP endpoint.
-  - [ ] 3.3 Refactor `pi-agent.ts` `ensureToolFramework()`: remove the block that fetches `/secrets/values` and writes `.blob/config/.env`. Instead, the agent’s `run()` method should receive a `secrets: Record<string, string>` parameter that the calling code (slack.ts) obtains from the DO internally. Secrets are passed as environment variables to `executeInSandbox` calls, not written to files.
-  - [ ] 3.4 Update `sandbox.ts` `executeInSandbox` to accept an optional `envVars: Record<string, string>` parameter. When present, prepend `export KEY=VALUE;` for each entry before the command. (The Cloudflare Sandbox exec likely supports env injection natively — check the API. If so, use that instead of shell export.)
-  - [ ] 3.5 Remove `fetchStoredSecrets()` method from `pi-agent.ts` entirely.
-  - [ ] 3.6 Refactor `ensureRepoBootstrapped` in `pi-agent.ts`: replace the inline `GITHUB_TOKEN` URL interpolation with a git credential helper approach. Create a small script that reads `$GITHUB_TOKEN` from the environment and outputs it in git-credential format. Write this script to the sandbox at bootstrap time (not the token itself — only the helper script). Set `GIT_ASKPASS` to point to it.
-  - [ ] 3.7 Add DO internal API authentication. Add a `DO_AUTH_SECRET` Wrangler secret. In `do-router.ts`, check for an `x-do-auth` header on every request and reject with 403 if it doesn’t match. Update all DO callers (slack.ts, cron-jobs.ts, pi-agent.ts, memory functions) to include this header when calling `do_.fetch(...)`.
-  - [ ] 3.8 Remove the `allowedCommand` function from `sandbox.ts`. Remove the call to it in `executeInSandbox`. Add a code comment: `// Security boundary: Cloudflare Sandbox (Firecracker microVM) provides execution isolation. No application-level command filtering.`
-  - [ ] 3.9 Update `scanDiffForSecrets` in `github.ts`: change the line filter from `line.startsWith("+")` to include context lines as well. Filter out only lines starting with `-` (removed lines). This catches reformatted secrets that appear as context or added lines.
-  - [ ] 3.10 Update `redactSecrets` in `safety.ts`: add a pattern for URL-encoded tokens (e.g., `https://x-access-token:[^@]+@`). Add a pattern for base64-encoded strings longer than 40 chars that appear in auth-like contexts.
-  - [ ] 3.11 Add `DO_AUTH_SECRET` to `src/core/types.ts` Env interface. Add `TOOL_EXPIRY_DAYS` to Env interface.
-  - [ ] 3.12 Run `npm run typecheck && npm test`. Verify `grep -r "secrets/values" src/ --include="*.ts"` returns nothing. Verify `grep -r "allowedCommand" src/ --include="*.ts"` returns nothing.
+- [x] 3.0 Harden security: secrets, auth, command filtering, diff scanning (FR-4, FR-5, FR-6, FR-7, FR-8, FR-9)
+  - [x] 3.1 Remove the `/secrets/values` GET endpoint from `src/agent/handlers/secrets.ts`. The `/secrets` GET (which returns only names, not values) stays. The `/secrets` POST (write) stays. The `/secrets/delete` POST stays.
+  - [x] 3.2 Create a new internal-only method in `secrets.ts` handler: `getSecretsForInjection(storage): Record<string, string>` that reads secret values from DO SQL storage. This is callable only by the DO itself (alarm, internal methods), never exposed as an HTTP endpoint.
+  - [x] 3.3 Refactor `pi-agent.ts` `ensureToolFramework()`: remove the block that fetches `/secrets/values` and writes `.blob/config/.env`. Instead, the agent’s `run()` method should receive a `secrets: Record<string, string>` parameter that the calling code (slack.ts) obtains from the DO internally. Secrets are passed as environment variables to `executeInSandbox` calls, not written to files.
+  - [x] 3.4 Update `sandbox.ts` `executeInSandbox` to accept an optional `envVars: Record<string, string>` parameter. When present, prepend `export KEY=VALUE;` for each entry before the command. (The Cloudflare Sandbox exec likely supports env injection natively — check the API. If so, use that instead of shell export.)
+  - [x] 3.5 Remove `fetchStoredSecrets()` method from `pi-agent.ts` entirely.
+  - [x] 3.6 Refactor `ensureRepoBootstrapped` in `pi-agent.ts`: replace the inline `GITHUB_TOKEN` URL interpolation with a git credential helper approach. Create a small script that reads `$GITHUB_TOKEN` from the environment and outputs it in git-credential format. Write this script to the sandbox at bootstrap time (not the token itself — only the helper script). Set `GIT_ASKPASS` to point to it.
+  - [x] 3.7 Add DO internal API authentication. Add a `DO_AUTH_SECRET` Wrangler secret. In `do-router.ts`, check for an `x-do-auth` header on every request and reject with 403 if it doesn’t match. Update all DO callers (slack.ts, cron-jobs.ts, pi-agent.ts, memory functions) to include this header when calling `do_.fetch(...)`.
+  - [x] 3.8 Remove the `allowedCommand` function from `sandbox.ts`. Remove the call to it in `executeInSandbox`. Add a code comment: `// Security boundary: Cloudflare Sandbox (Firecracker microVM) provides execution isolation. No application-level command filtering.`
+  - [x] 3.9 Update `scanDiffForSecrets` in `github.ts`: change the line filter from `line.startsWith("+")` to include context lines as well. Filter out only lines starting with `-` (removed lines). This catches reformatted secrets that appear as context or added lines.
+  - [x] 3.10 Update `redactSecrets` in `safety.ts`: add a pattern for URL-encoded tokens (e.g., `https://x-access-token:[^@]+@`). Add a pattern for base64-encoded strings longer than 40 chars that appear in auth-like contexts.
+  - [x] 3.11 Add `DO_AUTH_SECRET` to `src/core/types.ts` Env interface. Add `TOOL_EXPIRY_DAYS` to Env interface.
+  - [x] 3.12 Run `npm run typecheck && npm test`. Verify `grep -r "secrets/values" src/ --include="*.ts"` returns nothing. Verify `grep -r "allowedCommand" src/ --include="*.ts"` returns nothing.
 
 -----
 

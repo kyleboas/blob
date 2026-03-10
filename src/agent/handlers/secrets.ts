@@ -14,6 +14,15 @@ export function handleListSecrets(ctx: SecretsHandlerCtx): Response {
   return json({ secrets: [...rows].map((r) => String(r.name)) });
 }
 
+export function getSecretsForInjection(storage: DurableObjectStorage): Record<string, string> {
+  const rows = storage.sql.exec("SELECT name, value FROM service_secrets ORDER BY name ASC");
+  const secrets: Record<string, string> = {};
+  for (const row of rows) {
+    secrets[String(row.name)] = String(row.value);
+  }
+  return secrets;
+}
+
 export async function handleSaveSecret(request: Request, ctx: SecretsHandlerCtx): Promise<Response> {
   const { name, value } = (await request.json()) as { name: string; value: string };
   if (!name || !value) return json({ error: "name and value required" }, 400);

@@ -3,6 +3,7 @@ import { DEFAULT_MODEL } from "../core/models";
 import { appendWorkspaceState, editTool, ensureSandboxSession, executeInSandbox, readTool, writeTool } from "../integrations/sandbox";
 import { logEvent } from "../core/observability";
 import { estimateTokens } from "../core/tokens";
+import { withDOAuth } from "../core/do-auth";
 import {
   appendLearnedRecord,
   buildSemanticMemoryContext,
@@ -49,6 +50,7 @@ interface RunOptions {
   verbosity?: "minimal" | "verbose";
   conversationHistory?: Array<{ role: string; content: string }>;
   conversationKey?: string;
+  secrets?: Record<string, string>;
 }
 
 interface SelfTestOptions {
@@ -56,6 +58,7 @@ interface SelfTestOptions {
   onProgress?: (message: string) => Promise<void> | void;
   verbosity?: "minimal" | "verbose";
   conversationKey?: string;
+  secrets?: Record<string, string>;
 }
 
 
@@ -183,6 +186,16 @@ function buildBootstrapScript(repoDir: string, repo: string): string {
     : `    mkdir -p ${shellQuote(workspaceRoot)}\n`;
 
   return `set -eu
+if [ -n "${"${GITHUB_TOKEN:-}"}" ]; then
+  cat > /usr/local/bin/blob-git-askpass << 'EOF'
+#!/bin/sh
+case "$1" in
+  *Username*) echo "x-access-token" ;;
+  *) echo "$GITHUB_TOKEN" ;;
+esac
+EOF
+  chmod +x /usr/local/bin/blob-git-askpass
+fi
 mkdir -p /workspace
 if [ -d ${shellQuote(`${workspaceRoot}/.git`)} ]; then
   cd ${shellQuote(workspaceRoot)}
@@ -209,6 +222,7 @@ fi`;
 export class PiAgent {
   private messages: PiMessage[];
   private repoDir: string;
+  private activeSecrets: Record<string, string> = {};
 
   constructor(
     private env: Env,
@@ -255,7 +269,7 @@ Reuse existing tools before rebuilding. Your .blob/tools/ directory is your grow
 
 ## Secrets and Authentication
 
-Stored API tokens are available as environment variables via .blob/config/.env. Before running any tool script that needs authentication, source this file: \`. .blob/config/.env\`
+Stored API tokens are injected as sandbox environment variables. Use them directly with $TOKEN_NAME and never write secrets to files.
 
 When a tool fails due to missing authentication (401, 403, "unauthorized", missing token), do NOT keep retrying. Instead:
 1. Tell the user which service needs a token and what kind of token is needed
@@ -279,18 +293,16 @@ Stop when done and provide a concise summary.`;
   ): Promise<void> {
     await ensureSandboxSession(sandboxId, this.env);
 
-    const authPrefix = this.env.GITHUB_TOKEN
-      ? [
-          `export GITHUB_TOKEN=${shellQuote(this.env.GITHUB_TOKEN)}`,
-          "export GIT_ASKPASS=/usr/local/bin/blob-git-askpass",
-          "export GIT_TERMINAL_PROMPT=0",
-          `git config --global url.${shellQuote(`https://x-access-token:${encodeURIComponent(this.env.GITHUB_TOKEN)}@github.com/`)}.insteadOf https://github.com/`,
-        ].join("; ") + ";"
-      : "";
-
-    const result = await executeInSandbox(`${authPrefix} ${buildBootstrapScript(this.repoDir, this.repo)}`.trim(), this.env, {
+    const result = await executeInSandbox(buildBootstrapScript(this.repoDir, this.repo), this.env, {
       sandboxId,
       timeout: 180000,
+      envVars: this.env.GITHUB_TOKEN
+        ? {
+            GITHUB_TOKEN: this.env.GITHUB_TOKEN,
+            GIT_ASKPASS: "/usr/local/bin/blob-git-askpass",
+            GIT_TERMINAL_PROMPT: "0",
+          }
+        : undefined,
     });
 
     if (result.exitCode !== 0) {
@@ -302,18 +314,6 @@ Stop when done and provide a concise summary.`;
 
     if (verbosity === "verbose" && onProgress) {
       await onProgress(`Bootstrap ready for /workspace/${this.repoDir}`);
-    }
-  }
-
-  private async fetchStoredSecrets(): Promise<Record<string, string>> {
-    if (!this.env.AGENT_DO) return {};
-    try {
-      const do_ = this.env.AGENT_DO.get(this.env.AGENT_DO.idFromName("blob"));
-      const res = await do_.fetch("http://do/secrets/values");
-      const data = await res.json() as { secrets: Record<string, string> };
-      return data.secrets ?? {};
-    } catch {
-      return {};
     }
   }
 
@@ -352,17 +352,6 @@ fi
 `;
     await executeInSandbox(initScript, this.env, { sandboxId });
 
-    // Write stored secrets as a sourceable .env file
-    const secrets = await this.fetchStoredSecrets();
-    const envLines = Object.entries(secrets)
-      .map(([k, v]) => `export ${k}=${shellQuote(v)}`)
-      .join("\n");
-    if (envLines) {
-      await writeTool(".blob/config/.env", `${envLines}\n`, this.env, {
-        sandboxId,
-        workspaceRoot: `/workspace/${this.repoDir}`,
-      });
-    }
   }
 
   private async callLLM(): Promise<LLMResponse> {
@@ -414,7 +403,7 @@ fi
             return { output: `Edited ${String(call.args.path ?? "")}` };
           case "bash": {
             const workspaceRoot = `/workspace/${this.repoDir}`;
-            const result = await executeInSandbox(String(call.args.command ?? ""), this.env, { sandboxId, workspaceRoot });
+            const result = await executeInSandbox(String(call.args.command ?? ""), this.env, { sandboxId, workspaceRoot, envVars: this.activeSecrets });
             return { output: result.stdout, error: result.stderr || undefined };
           }
         }
@@ -459,10 +448,10 @@ fi
     if (this.env.AGENT_DO) {
       try {
         const do_ = this.env.AGENT_DO.get(this.env.AGENT_DO.idFromName("blob"));
-        const res = await do_.fetch("http://do/daily-tokens", {
+        const res = await do_.fetch("http://do/daily-tokens", withDOAuth(this.env, {
           method: "POST",
           body: JSON.stringify({ date, tokens: totalTokens }),
-        });
+        }));
         const { totalTokens: total } = await res.json() as { totalTokens: number };
         if (!critical && total >= dailyCeiling) {
           return false;
@@ -473,7 +462,6 @@ fi
       }
     }
 
-    // Fallback: in-memory tracking
     const current = dailyTokenUsageLocal.get(date) ?? 0;
     if (!critical && current >= dailyCeiling) {
       return false;
@@ -527,6 +515,7 @@ fi
     const sandboxId = opts.sandboxId ?? "default";
     const verbosity = opts.verbosity ?? "minimal";
     const conversationKey = opts.conversationKey ?? this.repoDir;
+    this.activeSecrets = opts.secrets ?? {};
     const stepLines: string[] = [];
     const uniqueToken = `selftest-${Date.now()}`;
 
@@ -712,6 +701,7 @@ fi
 
     const verbosity = opts.verbosity ?? "verbose";
     const conversationKey = opts.conversationKey ?? this.repoDir;
+    this.activeSecrets = opts.secrets ?? {};
 
     const semanticMatches = await querySemanticMemory(this.env, {
       conversationKey,

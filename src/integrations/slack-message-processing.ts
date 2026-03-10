@@ -4,6 +4,7 @@ import { createLogRef, logEvent } from "../core/observability";
 import { getRuntimeControls } from "../core/runtime-controls";
 import { getRepos } from "../core/storage";
 import type { Env } from "../core/types";
+import { withDOAuth } from "../core/do-auth";
 import { classifyIntent, getConversationVerbosity } from "./slack-commands";
 import { deriveRoutingKey } from "./slack-routing";
 import { addCronJob, deleteCronJob, getCronJobs } from "../jobs/cron";
@@ -35,10 +36,10 @@ function formatToolLedger(entry: { tool: string; argsSummary?: string; ok: boole
   return `${base} — ${entry.error.slice(0, 120)}`;
 }
 
-async function getConversationHistory(conversationDO: DurableObjectStub | null): Promise<Array<{ role: string; content: string }>> {
+async function getConversationHistory(conversationDO: DurableObjectStub | null, env: Env): Promise<Array<{ role: string; content: string }>> {
   if (!conversationDO) return [];
   try {
-    const historyRes = await conversationDO.fetch("http://do/messages?limit=20");
+    const historyRes = await conversationDO.fetch("http://do/messages?limit=20", withDOAuth(env));
     const { messages } = await historyRes.json() as { messages: Array<{ role: string; content: string; timestamp: number }> };
     return messages.map(({ role, content }) => ({ role, content }));
   } catch {
@@ -46,10 +47,23 @@ async function getConversationHistory(conversationDO: DurableObjectStub | null):
   }
 }
 
-async function storeExchange(conversationDO: DurableObjectStub | null, user: string, assistant: string): Promise<void> {
+async function storeExchange(conversationDO: DurableObjectStub | null, user: string, assistant: string, env: Env): Promise<void> {
   if (!conversationDO) return;
-  await conversationDO.fetch("http://do/messages", { method: "POST", body: JSON.stringify({ role: "user", content: user }) });
-  await conversationDO.fetch("http://do/messages", { method: "POST", body: JSON.stringify({ role: "assistant", content: assistant }) });
+  await conversationDO.fetch("http://do/messages", withDOAuth(env, { method: "POST", body: JSON.stringify({ role: "user", content: user }) }));
+  await conversationDO.fetch("http://do/messages", withDOAuth(env, { method: "POST", body: JSON.stringify({ role: "assistant", content: assistant }) }));
+}
+
+async function getSecretsForInjection(env: Env): Promise<Record<string, string>> {
+  if (!env.AGENT_DO) return {};
+  try {
+    const do_ = env.AGENT_DO.get(env.AGENT_DO.idFromName("blob"));
+    const res = await do_.fetch("http://do/internal/secrets/injection", withDOAuth(env));
+    if (!res.ok) return {};
+    const data = await res.json() as { secrets?: Record<string, string> };
+    return data.secrets ?? {};
+  } catch {
+    return {};
+  }
 }
 
 async function migrateThreadFromChannel(body: SlackEventPayload, env: Env): Promise<void> {
@@ -58,12 +72,12 @@ async function migrateThreadFromChannel(body: SlackEventPayload, env: Env): Prom
   const channelKey = `${body.team_id}:${body.event.channel}:channel`;
   const threadDO = env.AGENT_DO.get(env.AGENT_DO.idFromName(threadKey));
   const channelDO = env.AGENT_DO.get(env.AGENT_DO.idFromName(channelKey));
-  const channelRes = await channelDO.fetch("http://do/messages?limit=20");
+  const channelRes = await channelDO.fetch("http://do/messages?limit=20", withDOAuth(env));
   const { messages } = await channelRes.json() as { messages: Array<{ role: string; content: string; timestamp: number }> };
-  await threadDO.fetch("http://do/state/migrate", {
+  await threadDO.fetch("http://do/state/migrate", withDOAuth(env, {
     method: "POST",
     body: JSON.stringify({ channelMessages: messages }),
-  });
+  }));
 }
 
 export async function processIntentOrChat(params: {
@@ -125,21 +139,23 @@ export async function processIntentOrChat(params: {
   }
 
   try {
-    const conversationHistory = await getConversationHistory(conversationDO);
+    const conversationHistory = await getConversationHistory(conversationDO, env);
     if (intent.needsSandbox) {
       const repos = await getRepos(env);
       const repo = repos[0] ?? "default";
       const agent = new PiAgent(env, repo);
-      const verbosity = await getConversationVerbosity(conversationDO);
+      const verbosity = await getConversationVerbosity(conversationDO, env);
+      const secrets = await getSecretsForInjection(env);
       if (verbosity === "minimal") await postToSlack(channel, "Working…", env);
       const response = await agent.run(text, {
         conversationHistory,
+        secrets,
         verbosity,
         onProgress: verbosity === "verbose" ? (msg: string) => postToSlack(channel, msg, env) : undefined,
         onToolLedger: verbosity === "verbose" ? (entry) => postToSlack(channel, formatToolLedger(entry), env) : undefined,
         conversationKey,
       });
-      await storeExchange(conversationDO, text, response);
+      await storeExchange(conversationDO, text, response, env);
       await postToSlack(channel, response, env);
       return;
     }
@@ -150,7 +166,7 @@ export async function processIntentOrChat(params: {
       { role: "user", content: text },
     ];
     const response = await callLLM(llmMessages, env);
-    await storeExchange(conversationDO, text, response);
+    await storeExchange(conversationDO, text, response, env);
     await postToSlack(channel, response, env);
   } catch (err) {
     const logRef = createLogRef("slack");

@@ -1,4 +1,5 @@
 import type { Env } from "./types";
+import { withDOAuth } from "./do-auth";
 import { getSecretPatterns, redactSecrets as redactWithPatterns } from "./safety";
 import { logEvent } from "./observability";
 import { estimateTokens } from "./tokens";
@@ -483,10 +484,10 @@ export async function buildSemanticMemoryContext(env: Env, matches: SemanticMemo
 export async function updateLearnedMemoryStatus(env: Env, payload: { lastFlushAt: string; lastFlushCount: number; lastRecordTimestamp?: string; lastRecordSummary?: string }): Promise<void> {
   try {
     const do_ = await getAgentDO(env);
-    await do_.fetch("http://do/memory/learned/status", {
+    await do_.fetch("http://do/memory/learned/status", withDOAuth(env, {
       method: "POST",
       body: JSON.stringify(payload),
-    });
+    }));
   } catch (err) {
     logEvent(env, "memory_ops", "learned_status_update_failed", { error: String(err) });
   }
@@ -495,7 +496,7 @@ export async function updateLearnedMemoryStatus(env: Env, payload: { lastFlushAt
 export async function getLearnedMemoryStatus(env: Env): Promise<{ lastFlushAt: string | null; lastFlushCount: number }> {
   try {
     const do_ = await getAgentDO(env);
-    const res = await do_.fetch("http://do/memory/learned/status");
+    const res = await do_.fetch("http://do/memory/learned/status", withDOAuth(env));
     const data = await res.json() as { lastFlushAt: string | null; lastFlushCount: number };
     return {
       lastFlushAt: data.lastFlushAt,
@@ -516,10 +517,10 @@ export async function updateVectorizeMemoryStatus(env: Env, payload: {
 }): Promise<void> {
   try {
     const do_ = await getAgentDO(env);
-    await do_.fetch("http://do/memory/vectorize/status", {
+    await do_.fetch("http://do/memory/vectorize/status", withDOAuth(env, {
       method: "POST",
       body: JSON.stringify(payload),
-    });
+    }));
   } catch (err) {
     logEvent(env, "memory_ops", "vectorize_status_update_failed", { error: String(err) });
   }
@@ -534,7 +535,7 @@ export async function getVectorizeMemoryStatus(env: Env): Promise<{
 }> {
   try {
     const do_ = await getAgentDO(env);
-    const res = await do_.fetch("http://do/memory/vectorize/status");
+    const res = await do_.fetch("http://do/memory/vectorize/status", withDOAuth(env));
     const data = await res.json() as {
       lastUpsertAt: string | null;
       lastUpsertOk: boolean | null;
@@ -558,7 +559,7 @@ export async function getVectorizeMemoryStatus(env: Env): Promise<{
 export async function getModelCatalog(env: Env): Promise<Record<string, { name: string; description: string; maxTokens: number }>> {
   try {
     const do_ = await getAgentDO(env);
-    const res = await do_.fetch("http://do/catalog");
+    const res = await do_.fetch("http://do/catalog", withDOAuth(env));
     const data = await res.json() as { catalog: Record<string, { name: string; description: string; maxTokens: number }> };
     return data.catalog;
   } catch (err) {

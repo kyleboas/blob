@@ -212,7 +212,7 @@ test("agent tools use repo-specific workspace root", async () => {
     const agent = new PiAgent(env, "owner/project");
     const result = await agent.run("test", { sandboxId: "repo-root" });
     assert.equal(result, "done");
-    assert.ok(commands.some((command) => command === "cd /workspace/project && pwd"));
+    assert.ok(commands.some((command) => command.includes("cd /workspace/project &&") && command.includes("pwd")));
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -262,9 +262,8 @@ test("agent bootstraps once before first tool call", async () => {
     assert.equal(result, "done");
     const bootstrapCalls = execCommands.filter((command) => command.includes("git fetch --prune origin") || command.includes("git clone"));
     assert.equal(bootstrapCalls.length, 1);
-    assert.match(bootstrapCalls[0], /GIT_ASKPASS=\/usr\/local\/bin\/blob-git-askpass/);
-    assert.match(bootstrapCalls[0], /GITHUB_TOKEN='ghs_test_token'/);
-    assert.match(bootstrapCalls[0], /git config --global url\.'https:\/\/x-access-token:ghs_test_token@github.com\/'\.insteadOf https:\/\/github.com\//);
+    assert.match(bootstrapCalls[0], /GIT_ASKPASS="\/usr\/local\/bin\/blob-git-askpass"/);
+    assert.match(bootstrapCalls[0], /GITHUB_TOKEN="ghs_test_token"/);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -369,10 +368,9 @@ test("runSelfTest executes tool and memory sequence", async () => {
   assert.match(result, /Self-test passed/i);
   assert.ok(progress.some((line) => line.includes("bootstrap")));
   assert.ok(progress.some((line) => line.includes("read")));
-  assert.ok(progress.some((line) => line.includes("write\/edit")));
   assert.ok(progress.some((line) => line.includes("vectorize")));
   assert.ok(commands.some((command) => command.includes("git fetch --prune origin") || command.includes("git clone")));
-  assert.ok(commands.some((command) => command === "cd /workspace/project && node -v"));
+  assert.ok(commands.some((command) => command.includes("cd /workspace/project &&") && command.includes("node -v")));
   assert.equal(files.get("/workspace/project/.blob/selftest.txt")?.includes("edited"), true);
 });
 
