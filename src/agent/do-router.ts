@@ -1,7 +1,14 @@
-import { type CronOutcomeRecord } from "../jobs/cron-jobs";
-import { logEvent } from "../core/observability";
 import type { Env } from "../core/types";
-import type { BlobState, CronJob } from "./do";
+import type { BlobState } from "./do";
+import { getEffectiveHeartbeatConfig } from "./do-alarm";
+import {
+  handleCreateCronJob,
+  handleDeleteCronJob,
+  handleListCronJobs,
+  handleListCronOutcomes,
+  handleSaveCronOutcome,
+} from "./handlers/cron";
+import { handleCheckEvent, handleGetDailyTokens, handleGetHeartbeatStatus, handleIncrementDailyTokens } from "./handlers/heartbeat";
 import { handleCreateJob, handleListJobs, handleTransitionJob } from "./handlers/jobs";
 import { handleGetLearnedMemoryStatus, handleGetVectorizeMemoryStatus, handleSetLearnedMemoryStatus, handleSetVectorizeMemoryStatus } from "./handlers/memory-status";
 import { handleListMessages, handleStoreMessage } from "./handlers/messages";
@@ -25,7 +32,7 @@ export async function routeRequest(
   request: Request,
   ctx: RouterCtx,
 ): Promise<Response> {
-  const { state, env, data, save } = ctx;
+  const { state, data, save } = ctx;
   const { pathname } = url;
 
   if (pathname === "/jobs" && method === "POST") {
@@ -118,106 +125,59 @@ export async function routeRequest(
   }
 
   if (pathname === "/heartbeat/status" && method === "GET") {
-    const nextAlarm = await state.storage.getAlarm();
-    const rows = state.storage.sql.exec(
-      "SELECT status, COUNT(*) AS count FROM jobs GROUP BY status",
-    );
-    const jobCounts = { queued: 0, paused: 0, running: 0 };
-    for (const row of rows) {
-      const status = String(row.status) as keyof typeof jobCounts;
-      if (status in jobCounts) jobCounts[status] = Number(row.count);
-    }
-    const intervalMs = data.settings?.heartbeatIntervalMs ?? Number(env.HEARTBEAT_INTERVAL_MS || "600000");
-    const modelCallLimit = data.settings?.heartbeatModelCallLimit ?? Number(env.HEARTBEAT_MODEL_CALL_LIMIT || "10");
-    return json({
-      nextAlarmAt: nextAlarm ? new Date(nextAlarm).toISOString() : null,
-      lastStartedAt: data.heartbeat?.lastStartedAt ?? null,
-      lastCompletedAt: data.heartbeat?.lastCompletedAt ?? null,
-      callsRemaining: data.heartbeat?.callsRemaining ?? null,
-      jobs: jobCounts,
-      config: { intervalMs, modelCallLimit },
+    return handleGetHeartbeatStatus({
+      state,
+      data,
+      save,
+      getEffectiveHeartbeatConfig: () => getEffectiveHeartbeatConfig(data, ctx.env),
     });
   }
 
   if (pathname === "/events/check" && method === "POST") {
-    const { eventId } = (await request.json()) as { eventId: string };
-    const events = data.processedEvents || [];
-    const now = Date.now();
-    const validEvents = events.filter((e) => now - e.timestamp < 5 * 60 * 1000);
-    if (validEvents.some((e) => e.id === eventId)) {
-      return json({ processed: true });
-    }
-    validEvents.push({ id: eventId, timestamp: now });
-    data.processedEvents = validEvents;
-    await save();
-    return json({ processed: false });
+    return handleCheckEvent(request, {
+      state,
+      data,
+      save,
+      getEffectiveHeartbeatConfig: () => getEffectiveHeartbeatConfig(data, ctx.env),
+    });
   }
 
   if (pathname === "/cron" && method === "GET") {
-    return json({ jobs: data.cronJobs || [] });
+    return handleListCronJobs(ctx);
   }
 
   if (pathname === "/cron" && method === "POST") {
-    const { schedule, task } = (await request.json()) as { schedule: string; task: string };
-    const job: CronJob = { id: crypto.randomUUID(), schedule, task, enabled: true, createdAt: Date.now() };
-    data.cronJobs = [...(data.cronJobs || []), job];
-    await save();
-    return json({ created: job });
+    return handleCreateCronJob(request, ctx);
   }
 
   if (pathname === "/cron/outcome" && method === "POST") {
-    const outcome = (await request.json()) as {
-      jobName: string;
-      status: "success" | "failure" | "running";
-      durationMs?: number;
-      outputSummary?: string;
-      lastError?: string;
-    };
-    const existing = data.cronOutcomes?.[outcome.jobName];
-    const now = Date.now();
-    const next: CronOutcomeRecord = {
-      jobName: outcome.jobName as CronOutcomeRecord["jobName"],
-      status: outcome.status,
-      lastRunAt: now,
-      lastSuccessAt: outcome.status === "success" ? now : existing?.lastSuccessAt,
-      lastError: outcome.lastError,
-      consecutiveFailures: outcome.status === "failure" ? (existing?.consecutiveFailures ?? 0) + 1 : 0,
-      durationMs: outcome.durationMs,
-      outputSummary: outcome.outputSummary,
-    };
-    data.cronOutcomes = { ...(data.cronOutcomes || {}), [outcome.jobName]: next };
-    await save();
-    return json({ saved: true, outcome: next });
+    return handleSaveCronOutcome(request, ctx);
   }
 
   if (pathname === "/cron/outcomes" && method === "GET") {
-    return json({ outcomes: data.cronOutcomes || {} });
+    return handleListCronOutcomes(ctx);
   }
 
   if (pathname === "/cron/delete" && method === "POST") {
-    const { id } = (await request.json()) as { id: string };
-    data.cronJobs = (data.cronJobs || []).filter((j) => j.id !== id);
-    await save();
-    return json({ deleted: id });
+    return handleDeleteCronJob(request, ctx);
   }
 
   if (pathname === "/daily-tokens" && method === "GET") {
-    const date = url.searchParams.get("date") ?? new Date().toISOString().slice(0, 10);
-    const row = state.storage.sql.exec("SELECT total_tokens FROM daily_token_usage WHERE date=?", date).toArray();
-    const total = row.length > 0 ? Number(row[0].total_tokens) : 0;
-    return json({ date, totalTokens: total });
+    return handleGetDailyTokens(url, {
+      state,
+      data,
+      save,
+      getEffectiveHeartbeatConfig: () => getEffectiveHeartbeatConfig(data, ctx.env),
+    });
   }
 
   if (pathname === "/daily-tokens" && method === "POST") {
-    const { date, tokens } = (await request.json()) as { date: string; tokens: number };
-    const existing = state.storage.sql.exec("SELECT total_tokens FROM daily_token_usage WHERE date=?", date).toArray();
-    if (existing.length > 0) {
-      const newTotal = Number(existing[0].total_tokens) + tokens;
-      state.storage.sql.exec("UPDATE daily_token_usage SET total_tokens=? WHERE date=?", newTotal, date);
-      return json({ date, totalTokens: newTotal });
-    }
-    state.storage.sql.exec("INSERT INTO daily_token_usage (date, total_tokens) VALUES (?, ?)", date, tokens);
-    return json({ date, totalTokens: tokens });
+    return handleIncrementDailyTokens(request, {
+      state,
+      data,
+      save,
+      getEffectiveHeartbeatConfig: () => getEffectiveHeartbeatConfig(data, ctx.env),
+    });
   }
 
   if (pathname === "/secrets" && method === "GET") {
