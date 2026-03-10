@@ -84,7 +84,7 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 1.5 Create `src/agent/handlers/settings.ts`. Extract `/settings/verbosity` and `/settings/heartbeat` GET/POST.
   - [x] 1.6 Create `src/agent/handlers/cron.ts`. Extract `/cron` GET/POST, `/cron/delete` POST, `/cron/outcome` POST, `/cron/outcomes` GET.
   - [x] 1.7 Create `src/agent/handlers/secrets.ts`. Extract `/secrets` GET and POST. Do NOT extract `/secrets/values` — it will be removed in task 3. Do NOT extract `/secrets/delete` yet — move it here but keep it.
-  - [ ] 1.8 Create `src/agent/handlers/memory-status.ts`. Extract `/memory/learned/status` and `/memory/vectorize/status` GET/POST.
+  - [x] 1.8 Create `src/agent/handlers/memory-status.ts`. Extract `/memory/learned/status` and `/memory/vectorize/status` GET/POST.
   - [ ] 1.9 Create `src/agent/handlers/heartbeat.ts`. Extract `/heartbeat/status` GET. Extract `/daily-tokens` GET/POST. Extract `/events/check` POST.
   - [ ] 1.10 Rewrite `do.ts` to be a thin class: constructor, `init()`, `alarm()`, `fetch()` (which calls `routeRequest`), and `save()`. All business logic lives in handler modules. Target: under 100 lines.
   - [ ] 1.11 Create `src/integrations/slack-commands.ts`. Extract from `slack.ts`: `getExactKeywordCommand`, `classifyIntent`, `detectAndStoreSecret`, `mightBeHeartbeatConfig`, `parseHeartbeatConfig`, `formatHeartbeatInterval`, `TOKEN_PATTERNS`, and all command-handling branches (status, settings, selftest, secrets, heartbeat config, set minimal/verbose, delete secret). Export a `handleCommand(text: string, channel: string, env: Env, conversationDO: DurableObjectStub | null): Promise<{ handled: boolean; response?: string }>` function.
