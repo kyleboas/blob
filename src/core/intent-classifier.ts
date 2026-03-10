@@ -35,9 +35,6 @@ Respond with ONLY a JSON object in this format:
 Message: "${text}"`;
 
   try {
-    if (!env.AI) {
-      throw new Error("Workers AI binding not available");
-    }
     const result = await env.AI.run(WORKERS_AI_FALLBACK_MODEL, {
       messages: [{ role: "user", content: prompt }],
       max_tokens: 200,
