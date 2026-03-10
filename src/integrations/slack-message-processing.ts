@@ -42,7 +42,8 @@ async function getConversationHistory(conversationDO: DurableObjectStub | null, 
     const historyRes = await conversationDO.fetch("http://do/messages?limit=20", withDOAuth(env));
     const { messages } = await historyRes.json() as { messages: Array<{ role: string; content: string; timestamp: number }> };
     return messages.map(({ role, content }) => ({ role, content }));
-  } catch {
+  } catch (err) {
+    logEvent(env, "slack_ingest", "load_conversation_history_failed", { error: String(err) });
     return [];
   }
 }
@@ -61,7 +62,8 @@ async function getSecretsForInjection(env: Env): Promise<Record<string, string>>
     if (!res.ok) return {};
     const data = await res.json() as { secrets?: Record<string, string> };
     return data.secrets ?? {};
-  } catch {
+  } catch (err) {
+    logEvent(env, "slack_ingest", "load_secrets_for_injection_failed", { error: String(err) });
     return {};
   }
 }

@@ -43,7 +43,8 @@ export async function embedText(env: Env, text: string): Promise<number[] | null
   try {
     const response = await env.AI.run("@cf/baai/bge-small-en-v1.5", { text }) as { data?: number[][] };
     return response.data?.[0] ?? null;
-  } catch {
+  } catch (err) {
+    logEvent(env, "memory_ops", "embed_text_failed", { error: String(err) });
     return null;
   }
 }
@@ -173,7 +174,8 @@ export async function writeMemoryItem(env: Env, store: R2MemoryStore, params: { 
     await upsertVector(env, created);
     const updated = await store.update(created.id, { unindexed: false });
     return updated ?? created;
-  } catch {
+  } catch (err) {
+    logEvent(env, "memory_ops", "vector_upsert_failed", { error: String(err), id: created.id });
     const retained = await store.read(created.id);
     return retained ?? created;
   }
@@ -245,7 +247,7 @@ export function parseLearnedJsonl(jsonl: string, defaultScope: string): LearnedE
         content: redactSecrets(row.content),
         confidence: (row.confidence as LearnedEntry["confidence"]) ?? "medium",
       });
-    } catch {
+    } catch (_err) {
       continue;
     }
   }
@@ -258,7 +260,8 @@ export async function appendDailyLearned(env: Env, date: string, entries: Learne
   let existing = "";
   try {
     existing = await env.SANDBOX.readFile(path);
-  } catch {
+  } catch (err) {
+    logEvent(env, "memory_ops", "daily_learned_read_failed", { error: String(err), path });
     existing = "";
   }
   await env.SANDBOX.writeFile(path, `${existing}${payload}`);
@@ -365,13 +368,19 @@ async function getAgentDO(env: Env): Promise<DurableObjectStub> {
 }
 
 export async function appendLearnedRecord(env: Env, record: LearnedRecord): Promise<void> {
-  const current = await env.SANDBOX.readFile(LEARNED_FILE_PATH).catch(() => "");
+  const current = await env.SANDBOX.readFile(LEARNED_FILE_PATH).catch((err: unknown) => {
+    logEvent(env, "memory_ops", "learned_file_read_failed", { error: String(err) });
+    return "";
+  });
   const line = `${JSON.stringify(record)}\n`;
   await env.SANDBOX.writeFile(LEARNED_FILE_PATH, `${current}${line}`);
 }
 
 export async function flushLearnedRecordsToR2(env: Env, conversationKey: string): Promise<{ key: string; count: number; lastRecord?: LearnedRecord }> {
-  const content = await env.SANDBOX.readFile(LEARNED_FILE_PATH).catch(() => "");
+  const content = await env.SANDBOX.readFile(LEARNED_FILE_PATH).catch((err: unknown) => {
+    logEvent(env, "memory_ops", "learned_file_flush_read_failed", { error: String(err) });
+    return "";
+  });
   const trimmed = content.trim();
   if (!trimmed) {
     return { key: "", count: 0 };
@@ -383,8 +392,8 @@ export async function flushLearnedRecordsToR2(env: Env, conversationKey: string)
     if (!line) continue;
     try {
       rows.push(JSON.parse(line) as LearnedRecord);
-    } catch {
-      logEvent(env, "memory_ops", "malformed_learned_line", { line: line.slice(0, 80) });
+    } catch (err) {
+      logEvent(env, "memory_ops", "malformed_learned_line", { line: line.slice(0, 80), error: String(err) });
     }
   }
   const date = new Date().toISOString().slice(0, 10);

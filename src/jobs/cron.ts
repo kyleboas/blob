@@ -14,7 +14,8 @@ export async function getCronJobs(env: Env): Promise<Array<{ id: string; schedul
     const res = await do_.fetch("http://do/cron", withDOAuth(env));
     const data = await res.json() as { jobs: Array<{ id: string; schedule: string; task: string; enabled: boolean }> };
     return data.jobs;
-  } catch {
+  } catch (err) {
+    console.error("getCronJobs failed", err);
     return [];
   }
 }
@@ -28,7 +29,8 @@ export async function addCronJob(env: Env, schedule: string, task: string): Prom
     }));
     const data = await res.json() as { created: { id: string } };
     return { id: data.created.id };
-  } catch {
+  } catch (err) {
+    console.error("addCronJob failed", err);
     return null;
   }
 }
@@ -41,7 +43,8 @@ export async function deleteCronJob(env: Env, id: string): Promise<boolean> {
       body: JSON.stringify({ id }),
     }));
     return true;
-  } catch {
+  } catch (err) {
+    console.error("deleteCronJob failed", err);
     return false;
   }
 }
