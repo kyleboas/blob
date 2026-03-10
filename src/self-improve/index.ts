@@ -36,8 +36,8 @@ export async function loadConfig(store: R2Bucket): Promise<ScoringConfig> {
   if (obj) {
     try {
       return (await obj.json()) as ScoringConfig;
-    } catch {
-      // Fall through to default
+    } catch (_) {
+      void _; // Fall through to default on parse failure
     }
   }
   return { ...DEFAULT_SCORING_CONFIG };
@@ -66,8 +66,8 @@ export async function loadHistory(store: R2Bucket): Promise<HistoryRecord[]> {
     if (!trimmed) continue;
     try {
       records.push(JSON.parse(trimmed) as HistoryRecord);
-    } catch {
-      // Skip malformed lines
+    } catch (_) {
+      void _; // Skip malformed lines
     }
   }
   return records;
@@ -117,8 +117,8 @@ async function loadSettings(store: R2Bucket): Promise<OptimizationSettings> {
   if (obj) {
     try {
       return (await obj.json()) as OptimizationSettings;
-    } catch {
-      // Fall through to default
+    } catch (_) {
+      void _; // Fall through to default on parse failure
     }
   }
   return { ...DEFAULT_OPTIMIZATION_SETTINGS };
