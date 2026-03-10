@@ -69,8 +69,6 @@ interface BudgetState {
   halted: boolean;
 }
 
-const dailyTokenUsageLocal = new Map<string, number>();
-
 function isTransientError(error: string): boolean {
   const lower = error.toLowerCase();
   return lower.includes("timeout") || lower.includes("econn") || lower.includes("temporar") || lower.includes("503");
@@ -451,31 +449,31 @@ fi
     const date = new Date().toISOString().slice(0, 10);
     const dailyCeiling = Number.parseInt(this.env.DAILY_TOKEN_CEILING ?? "500000", 10);
 
-    // Try to persist to DO for durable tracking
-    if (this.env.AGENT_DO) {
-      try {
-        const do_ = this.env.AGENT_DO.get(this.env.AGENT_DO.idFromName("blob"));
-        const res = await do_.fetch("http://do/daily-tokens", withDOAuth(this.env, {
-          method: "POST",
-          body: JSON.stringify({ date, tokens: totalTokens }),
-        }));
-        const { totalTokens: total } = await res.json() as { totalTokens: number };
-        if (!critical && total >= dailyCeiling) {
-          return false;
-        }
-        return true;
-      } catch (err) {
-        logEvent(this.env, "cost", "daily_budget_do_unreachable", { error: String(err) });
-        // Fall back to local tracking
-      }
-    }
-
-    const current = dailyTokenUsageLocal.get(date) ?? 0;
-    if (!critical && current >= dailyCeiling) {
+    if (!this.env.AGENT_DO) {
+      logEvent(this.env, "cost", "daily_budget_do_missing");
       return false;
     }
-    dailyTokenUsageLocal.set(date, current + totalTokens);
-    return true;
+
+    try {
+      const do_ = this.env.AGENT_DO.get(this.env.AGENT_DO.idFromName("blob"));
+      const res = await do_.fetch("http://do/daily-tokens", withDOAuth(this.env, {
+        method: "POST",
+        body: JSON.stringify({ date, tokens: totalTokens }),
+      }));
+      if (!res.ok) {
+        logEvent(this.env, "cost", "daily_budget_do_rejected", { status: res.status });
+        return false;
+      }
+
+      const { totalTokens: total } = await res.json() as { totalTokens: number };
+      if (!critical && total >= dailyCeiling) {
+        return false;
+      }
+      return true;
+    } catch (err) {
+      logEvent(this.env, "cost", "daily_budget_do_unreachable", { error: String(err) });
+      return false;
+    }
   }
 
 

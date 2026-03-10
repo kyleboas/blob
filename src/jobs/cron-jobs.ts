@@ -126,10 +126,12 @@ async function runContentScan(env: Env): Promise<string> {
   const sources = config.sources ?? [];
   const store = new R2MemoryStore(env.REPO_STORE);
   let findings = 0;
+  const timeoutMs = Number.parseInt(env.CONTENT_SCAN_TIMEOUT_MS ?? "10000", 10);
+  const maxBytes = 1024 * 1024;
 
   for (const source of sources) {
-    const res = await fetch(source.url);
-    const content = await res.text();
+    const res = await fetch(source.url, { signal: AbortSignal.timeout(timeoutMs) });
+    const content = await readLimitedBody(res, maxBytes);
     const snippet = content.slice(0, 500);
     await writeMemoryItem(env, store, {
       scope: `source:${source.name}`,
@@ -140,6 +142,40 @@ async function runContentScan(env: Env): Promise<string> {
   }
 
   return `Scanned ${sources.length} targets, stored ${findings} findings`;
+}
+
+async function readLimitedBody(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) {
+    return await response.text();
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  while (total < maxBytes) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+
+    const remaining = maxBytes - total;
+    const slice = value.byteLength > remaining ? value.slice(0, remaining) : value;
+    chunks.push(slice);
+    total += slice.byteLength;
+
+    if (value.byteLength > remaining) {
+      break;
+    }
+  }
+
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return new TextDecoder().decode(merged);
 }
 
 async function runMemoryCompaction(env: Env): Promise<string> {

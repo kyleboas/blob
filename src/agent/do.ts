@@ -25,7 +25,14 @@ export interface BlobState {
   settings?: { verbosity?: "minimal" | "verbose"; heartbeatIntervalMs?: number; heartbeatModelCallLimit?: number };
   learnedMemory?: { lastFlushAt?: string; lastFlushCount?: number; lastRecordTimestamp?: string; lastRecordSummary?: string };
   vectorizeMemory?: { lastUpsertAt?: string; lastUpsertOk?: boolean; lastUpsertError?: string; lastQueryAt?: string; lastQueryCount?: number };
-  heartbeat?: { lastStartedAt?: string; lastCompletedAt?: string; callsRemaining?: number };
+  heartbeat?: {
+    lastStartedAt?: string;
+    lastCompletedAt?: string;
+    callsRemaining?: number;
+    consecutiveHeartbeatFailures?: number;
+    currentIntervalMs?: number;
+    lastError?: string;
+  };
 }
 
 const DEFAULT_CATALOG = {

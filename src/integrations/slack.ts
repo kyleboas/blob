@@ -5,6 +5,7 @@ import { redactSecrets } from "../core/safety";
 import { classifyIntent, handleCommand } from "./slack-commands";
 import { withDOAuth } from "../core/do-auth";
 import { processIntentOrChat, type SlackEventPayload } from "./slack-message-processing";
+import { checkRateLimit, configureRateLimit } from "./slack-rate-limit";
 
 const inFlightEvents = new Set<string>();
 
@@ -46,6 +47,21 @@ async function processSlackMessage(body: SlackEventPayload, env: Env): Promise<v
 
   if (!(body.type === "event_callback" && body.event?.type === "message" && body.event.text)) return;
   if (!body.event.channel || body.event.bot_id) return;
+
+  configureRateLimit({
+    windowMs: Number.parseInt(env.RATE_LIMIT_WINDOW_MS ?? "60000", 10),
+    maxMessages: Number.parseInt(env.RATE_LIMIT_MAX_MESSAGES ?? "20", 10),
+  });
+  const limit = checkRateLimit(body.event.channel, Date.now());
+  if (!limit.allowed) {
+    const waitSeconds = Math.ceil((limit.retryAfterMs ?? 0) / 1000);
+    await postToSlack(body.event.channel, `⏳ Rate limit reached for this channel. Please retry in ~${waitSeconds}s.`, env);
+    logEvent(env, "slack_ingest", "rate_limited", {
+      channel: body.event.channel,
+      retryAfterMs: limit.retryAfterMs ?? 0,
+    });
+    return;
+  }
 
   const eventId = body.event_id || body.event.ts;
   if (eventId && env.AGENT_DO) {

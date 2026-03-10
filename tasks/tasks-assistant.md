@@ -135,18 +135,18 @@ Update the file after completing each sub-task, not just after completing an ent
 
 -----
 
-- [ ] 5.0 Add operational resilience: health checks, backoff, rate limiting, bounded fetches, durable token tracking (FR-15, FR-16, FR-17, FR-18, FR-19)
-  - [ ] 5.1 Add a `GET /health` endpoint to `src/index.ts`. It should check: (a) R2 — attempt a `head` on a known key, (b) Sandbox — call `start()` if available, (c) DO — fetch `/heartbeat/status`. Return `{ status: "healthy" | "degraded" | "unhealthy", checks: { r2: bool, sandbox: bool, do: bool } }`. Each check has a 5s timeout.
-  - [ ] 5.2 Add graceful degradation to `pi-agent.ts`. Wrap `querySemanticMemory` at the start of `run()` in a try-catch that logs and continues with empty matches (already partially done, but verify). Wrap `persistLearnedMemory` in `finishRun` to log and continue on failure (already partially done, but ensure `logEvent` is called, not silent).
-  - [ ] 5.3 Add heartbeat backoff to `alarm()` in the DO. Track `consecutiveHeartbeatFailures` in `BlobState`. On heartbeat error, increment the counter. If counter >= 3 (configurable via `HEARTBEAT_BACKOFF_THRESHOLD`), double the alarm interval up to max 1 hour. On success, reset counter and interval to default.
-  - [ ] 5.4 Update `runContentScan` in `cron-jobs.ts`. Replace `await fetch(source.url)` with a bounded fetch: add `AbortSignal.timeout(10000)` (10s, configurable via `CONTENT_SCAN_TIMEOUT_MS`) and limit response body to 1MB by reading only the first 1MB of the response stream.
-  - [ ] 5.5 Create `src/integrations/slack-rate-limit.ts`. Implement a sliding-window rate limiter: `checkRateLimit(channelId: string, now: number): { allowed: boolean; retryAfterMs?: number }`. Store timestamps in a module-level `Map<string, number[]>`. Configurable window (default 60s) and max messages (default 20) via env vars `RATE_LIMIT_WINDOW_MS` and `RATE_LIMIT_MAX_MESSAGES`.
-  - [ ] 5.6 Integrate rate limiting into `slack.ts`. After signature verification and before intent classification, call `checkRateLimit`. If not allowed, reply with a short rate-limit message to Slack and return early.
-  - [ ] 5.7 Remove `dailyTokenUsageLocal` (the module-level `Map`) from `pi-agent.ts`. Update `consumeDailyBudget` to use the DO as the only path. If the DO is unreachable, fail-closed: return `false` (reject the request). Log the failure.
-  - [ ] 5.8 Add `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX_MESSAGES`, `HEARTBEAT_BACKOFF_THRESHOLD`, `CONTENT_SCAN_TIMEOUT_MS` to `src/core/types.ts` Env interface.
-  - [ ] 5.9 Create `src/tests/rate-limit.test.ts`. Test: allow messages up to limit, block message at limit+1, allow after window expires.
-  - [ ] 5.10 Create `src/tests/heartbeat-backoff.test.ts`. Test: 3 failures double interval, success resets, max interval is capped at 1 hour.
-  - [ ] 5.11 Run `npm run typecheck && npm test`. Verify `grep -r "dailyTokenUsageLocal" src/ --include="*.ts"` returns nothing.
+- [x] 5.0 Add operational resilience: health checks, backoff, rate limiting, bounded fetches, durable token tracking (FR-15, FR-16, FR-17, FR-18, FR-19)
+  - [x] 5.1 Add a `GET /health` endpoint to `src/index.ts`. It should check: (a) R2 — attempt a `head` on a known key, (b) Sandbox — call `start()` if available, (c) DO — fetch `/heartbeat/status`. Return `{ status: "healthy" | "degraded" | "unhealthy", checks: { r2: bool, sandbox: bool, do: bool } }`. Each check has a 5s timeout.
+  - [x] 5.2 Add graceful degradation to `pi-agent.ts`. Wrap `querySemanticMemory` at the start of `run()` in a try-catch that logs and continues with empty matches (already partially done, but verify). Wrap `persistLearnedMemory` in `finishRun` to log and continue on failure (already partially done, but ensure `logEvent` is called, not silent).
+  - [x] 5.3 Add heartbeat backoff to `alarm()` in the DO. Track `consecutiveHeartbeatFailures` in `BlobState`. On heartbeat error, increment the counter. If counter >= 3 (configurable via `HEARTBEAT_BACKOFF_THRESHOLD`), double the alarm interval up to max 1 hour. On success, reset counter and interval to default.
+  - [x] 5.4 Update `runContentScan` in `cron-jobs.ts`. Replace `await fetch(source.url)` with a bounded fetch: add `AbortSignal.timeout(10000)` (10s, configurable via `CONTENT_SCAN_TIMEOUT_MS`) and limit response body to 1MB by reading only the first 1MB of the response stream.
+  - [x] 5.5 Create `src/integrations/slack-rate-limit.ts`. Implement a sliding-window rate limiter: `checkRateLimit(channelId: string, now: number): { allowed: boolean; retryAfterMs?: number }`. Store timestamps in a module-level `Map<string, number[]>`. Configurable window (default 60s) and max messages (default 20) via env vars `RATE_LIMIT_WINDOW_MS` and `RATE_LIMIT_MAX_MESSAGES`.
+  - [x] 5.6 Integrate rate limiting into `slack.ts`. After signature verification and before intent classification, call `checkRateLimit`. If not allowed, reply with a short rate-limit message to Slack and return early.
+  - [x] 5.7 Remove `dailyTokenUsageLocal` (the module-level `Map`) from `pi-agent.ts`. Update `consumeDailyBudget` to use the DO as the only path. If the DO is unreachable, fail-closed: return `false` (reject the request). Log the failure.
+  - [x] 5.8 Add `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX_MESSAGES`, `HEARTBEAT_BACKOFF_THRESHOLD`, `CONTENT_SCAN_TIMEOUT_MS` to `src/core/types.ts` Env interface.
+  - [x] 5.9 Create `src/tests/rate-limit.test.ts`. Test: allow messages up to limit, block message at limit+1, allow after window expires.
+  - [x] 5.10 Create `src/tests/heartbeat-backoff.test.ts`. Test: 3 failures double interval, success resets, max interval is capped at 1 hour.
+  - [x] 5.11 Run `npm run typecheck && npm test`. Verify `grep -r "dailyTokenUsageLocal" src/ --include="*.ts"` returns nothing.
 
 -----
 

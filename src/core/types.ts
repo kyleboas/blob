@@ -45,7 +45,11 @@ export interface Env {
   JOB_MAX_OUTPUT_TOKENS?: string;
   HEARTBEAT_MODEL_CALL_LIMIT?: string;
   HEARTBEAT_INTERVAL_MS?: string;
+  HEARTBEAT_BACKOFF_THRESHOLD?: string;
   DAILY_TOKEN_CEILING?: string;
+  RATE_LIMIT_WINDOW_MS?: string;
+  RATE_LIMIT_MAX_MESSAGES?: string;
+  CONTENT_SCAN_TIMEOUT_MS?: string;
   MAX_CONSECUTIVE_TOOL_FAILURES?: string;
   LLM_MODEL?: string;
   VERIFY_COMMAND?: string;
