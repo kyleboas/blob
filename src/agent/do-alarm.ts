@@ -60,53 +60,83 @@ export async function runHeartbeatAlarm(state: DurableObjectState, env: Env, dat
   const startedAt = new Date().toISOString();
   data.heartbeat = { ...(data.heartbeat ?? {}), lastStartedAt: startedAt };
   logEvent(env, "heartbeat", "alarm_start");
-  const { intervalMs, modelCallLimit: maxCalls } = getEffectiveHeartbeatConfig(data, env);
+  const { intervalMs: defaultIntervalMs, modelCallLimit: maxCalls } = getEffectiveHeartbeatConfig(data, env);
+  const backoffThreshold = Number.parseInt(env.HEARTBEAT_BACKOFF_THRESHOLD ?? "3", 10);
+  const maxBackoffIntervalMs = 60 * 60 * 1000;
+  const currentIntervalMs = data.heartbeat?.currentIntervalMs ?? defaultIntervalMs;
   const now = Date.now();
   let callsRemaining = maxCalls;
 
-  const runningJobs = state.storage.sql.exec(
-    "SELECT id, status, created_at, estimated_calls FROM jobs WHERE status IN ('queued', 'paused') ORDER BY created_at ASC",
-  );
+  try {
+    const runningJobs = state.storage.sql.exec(
+      "SELECT id, status, created_at, estimated_calls FROM jobs WHERE status IN ('queued', 'paused') ORDER BY created_at ASC",
+    );
 
-  for (const row of runningJobs) {
-    if (callsRemaining <= 0) break;
-    const id = String(row.id);
-    const createdAt = Number(row.created_at);
-    const estimatedCalls = Number(row.estimated_calls ?? 1);
+    for (const row of runningJobs) {
+      if (callsRemaining <= 0) break;
+      const id = String(row.id);
+      const createdAt = Number(row.created_at);
+      const estimatedCalls = Number(row.estimated_calls ?? 1);
 
-    if (estimatedCalls > callsRemaining) continue;
+      if (estimatedCalls > callsRemaining) continue;
 
-    if (shouldForcePause(createdAt, now)) {
-      state.storage.sql.exec("UPDATE jobs SET status='paused', updated_at=? WHERE id=?", now, id);
-      continue;
+      if (shouldForcePause(createdAt, now)) {
+        state.storage.sql.exec("UPDATE jobs SET status='paused', updated_at=? WHERE id=?", now, id);
+        continue;
+      }
+
+      state.storage.sql.exec(
+        "UPDATE jobs SET status='running', updated_at=?, model_call_count=model_call_count+1 WHERE id=?",
+        now,
+        id,
+      );
+      callsRemaining -= estimatedCalls;
     }
 
-    state.storage.sql.exec(
-      "UPDATE jobs SET status='running', updated_at=?, model_call_count=model_call_count+1 WHERE id=?",
-      now,
-      id,
-    );
-    callsRemaining -= estimatedCalls;
-  }
+    const today = new Date().toISOString().slice(0, 10);
+    if (data.lastDailySummaryDate !== today) {
+      await postDailySummary(env, today);
+      data.lastDailySummaryDate = today;
+      await save();
+    }
 
-  const today = new Date().toISOString().slice(0, 10);
-  if (data.lastDailySummaryDate !== today) {
-    await postDailySummary(env, today);
-    data.lastDailySummaryDate = today;
+    await checkCronHealthAlerts(env, data.cronOutcomes);
+
+    data.heartbeat = {
+      ...(data.heartbeat ?? {}),
+      lastCompletedAt: new Date().toISOString(),
+      callsRemaining,
+      consecutiveHeartbeatFailures: 0,
+      currentIntervalMs: defaultIntervalMs,
+      lastError: undefined,
+    };
     await save();
+
+    logEvent(env, "heartbeat", "alarm_complete", { callsRemaining, intervalMs: defaultIntervalMs, maxCalls });
+    await state.storage.setAlarm(Date.now() + defaultIntervalMs);
+  } catch (err) {
+    const consecutive = (data.heartbeat?.consecutiveHeartbeatFailures ?? 0) + 1;
+    const shouldBackoff = consecutive >= backoffThreshold;
+    const nextIntervalMs = shouldBackoff
+      ? Math.min(Math.max(currentIntervalMs, defaultIntervalMs) * 2, maxBackoffIntervalMs)
+      : defaultIntervalMs;
+
+    data.heartbeat = {
+      ...(data.heartbeat ?? {}),
+      consecutiveHeartbeatFailures: consecutive,
+      currentIntervalMs: nextIntervalMs,
+      lastError: err instanceof Error ? err.message : String(err),
+    };
+    await save();
+
+    logEvent(env, "heartbeat", "alarm_failed", {
+      error: String(err),
+      consecutiveHeartbeatFailures: consecutive,
+      backoffApplied: shouldBackoff,
+      nextIntervalMs,
+    });
+    await state.storage.setAlarm(Date.now() + nextIntervalMs);
   }
-
-  await checkCronHealthAlerts(env, data.cronOutcomes);
-
-  data.heartbeat = {
-    ...(data.heartbeat ?? {}),
-    lastCompletedAt: new Date().toISOString(),
-    callsRemaining,
-  };
-  await save();
-
-  logEvent(env, "heartbeat", "alarm_complete", { callsRemaining, intervalMs, maxCalls });
-  await state.storage.setAlarm(Date.now() + intervalMs);
 }
 
 async function postDailySummary(env: Env, date: string): Promise<void> {

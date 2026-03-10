@@ -5,8 +5,26 @@ import { __resetSandboxSessionsForTests } from "../integrations/sandbox";
 import type { Env } from "../core/types";
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
+  const dailyTotals = new Map<string, number>();
+  const doStub = {
+    fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/daily-tokens") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}")) as { date?: string; tokens?: number };
+        const date = payload.date ?? new Date().toISOString().slice(0, 10);
+        const next = (dailyTotals.get(date) ?? 0) + Number(payload.tokens ?? 0);
+        dailyTotals.set(date, next);
+        return new Response(JSON.stringify({ date, totalTokens: next }), { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    },
+  } as DurableObjectStub;
+
   return {
-    AGENT_DO: {} as DurableObjectNamespace,
+    AGENT_DO: {
+      idFromName: () => "blob" as DurableObjectId,
+      get: () => doStub,
+    } as DurableObjectNamespace,
     SANDBOX: {
       start: async () => undefined,
       exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),

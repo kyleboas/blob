@@ -32,6 +32,9 @@ export async function handleGetHeartbeatStatus(ctx: HeartbeatHandlerCtx): Promis
     lastStartedAt: ctx.data.heartbeat?.lastStartedAt ?? null,
     lastCompletedAt: ctx.data.heartbeat?.lastCompletedAt ?? null,
     callsRemaining: ctx.data.heartbeat?.callsRemaining ?? null,
+    consecutiveHeartbeatFailures: ctx.data.heartbeat?.consecutiveHeartbeatFailures ?? 0,
+    currentIntervalMs: ctx.data.heartbeat?.currentIntervalMs ?? ctx.getEffectiveHeartbeatConfig().intervalMs,
+    lastError: ctx.data.heartbeat?.lastError ?? null,
     jobs: jobCounts,
     config: ctx.getEffectiveHeartbeatConfig(),
   });
