@@ -18,6 +18,7 @@ import type {
   HistoryRecord,
   OptimizationSettings,
   OptimizationCycleResult,
+  ConfigDiffEntry,
 } from "./types";
 import { DEFAULT_SCORING_CONFIG, DEFAULT_OPTIMIZATION_SETTINGS } from "./types";
 import { generateCandidates } from "./mutator";
@@ -107,6 +108,42 @@ async function logCycleResult(
   await store.put(LOG_KEY, prev ? `${prev}\n${line}` : line);
 }
 
+/** Compute what changed between old and new config. */
+export function diffConfigs(oldConfig: ScoringConfig, newConfig: ScoringConfig): ConfigDiffEntry[] {
+  const diffs: ConfigDiffEntry[] = [];
+
+  const sections: Array<"thresholds" | "weights" | "penalties"> = ["thresholds", "weights", "penalties"];
+  for (const section of sections) {
+    const oldSection = oldConfig[section] as Record<string, number>;
+    const newSection = newConfig[section] as Record<string, number>;
+    for (const key of new Set([...Object.keys(oldSection), ...Object.keys(newSection)])) {
+      const oldVal = oldSection[key] ?? 0;
+      const newVal = newSection[key] ?? 0;
+      if (oldVal !== newVal) {
+        const changePercent = oldVal !== 0 ? ((newVal - oldVal) / oldVal) * 100 : 100;
+        diffs.push({
+          param: `${section}.${key}`,
+          oldValue: oldVal,
+          newValue: newVal,
+          changePercent: Math.round(changePercent * 10) / 10,
+        });
+      }
+    }
+  }
+  return diffs;
+}
+
+/** Format a config diff as a readable string. */
+function formatDiff(diffs: ConfigDiffEntry[]): string {
+  if (diffs.length === 0) return "No parameter changes";
+  return diffs
+    .map((d) => {
+      const arrow = d.changePercent > 0 ? "↑" : "↓";
+      return `${d.param}: ${d.oldValue} → ${d.newValue} (${arrow}${Math.abs(d.changePercent)}%)`;
+    })
+    .join("\n");
+}
+
 /**
  * Run a full self-improvement optimization cycle.
  * Returns a human-readable summary string suitable for cron output.
@@ -150,11 +187,15 @@ export async function runOptimizationCycle(env: Env): Promise<string> {
   );
 
   // 5. Promote or reject
+  let configDiff: ConfigDiffEntry[] = [];
+  let newVersion = config.version;
   if (decision.promoted) {
     const newConfig = {
       ...tournament.winner.config,
       version: config.version + 1,
     };
+    newVersion = newConfig.version;
+    configDiff = diffConfigs(config, newConfig);
 
     await archiveConfig(store, config);
     await saveConfig(store, newConfig);
@@ -168,18 +209,33 @@ export async function runOptimizationCycle(env: Env): Promise<string> {
     bestCandidateComposite: tournament.winner.result.compositeScore,
     promoted: decision.promoted,
     promotedConfigId: decision.promoted ? tournament.winner.config.id : undefined,
+    promotedVersion: decision.promoted ? newVersion : undefined,
+    configDiff: decision.promoted ? configDiff : undefined,
     gates: decision.gates,
     rejectionReason: decision.rejectionReason,
   };
   await logCycleResult(store, cycleResult);
 
-  const verdict = decision.promoted ? "PROMOTED" : "REJECTED";
-  const reason = decision.rejectionReason ? ` — ${decision.rejectionReason}` : "";
+  // 7. Build human-readable summary
+  const br = tournament.baseline.result;
+  const wr = tournament.winner.result;
+
+  if (decision.promoted) {
+    const diffText = formatDiff(configDiff);
+    return [
+      `Self-improve: PROMOTED (v${config.version} → v${newVersion})`,
+      `Composite: ${br.compositeScore.toFixed(3)} → ${wr.compositeScore.toFixed(3)}`,
+      `Precision: ${br.precision.toFixed(3)} → ${wr.precision.toFixed(3)}`,
+      `Recall: ${br.recall.toFixed(3)} → ${wr.recall.toFixed(3)}`,
+      `FP rate: ${br.falsePositiveRate.toFixed(3)} → ${wr.falsePositiveRate.toFixed(3)}`,
+      `What changed:\n${diffText}`,
+      `History: ${history.length} records, Candidates tested: ${candidates.length}`,
+    ].join("\n");
+  }
+
   return [
-    `Self-improve: ${verdict}${reason}`,
-    `Baseline: ${tournament.baseline.result.compositeScore.toFixed(3)}`,
-    `Best candidate: ${tournament.winner.result.compositeScore.toFixed(3)}`,
-    `History: ${history.length} records`,
-    `Candidates tested: ${candidates.length}`,
-  ].join(", ");
+    `Self-improve: REJECTED — ${decision.rejectionReason}`,
+    `Baseline: ${br.compositeScore.toFixed(3)}, Best candidate: ${wr.compositeScore.toFixed(3)}`,
+    `History: ${history.length} records, Candidates tested: ${candidates.length}`,
+  ].join("\n");
 }

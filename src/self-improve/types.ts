@@ -70,6 +70,14 @@ export interface RatchetDecision {
   rejectionReason?: string;
 }
 
+/** A single parameter change between old and new config. */
+export interface ConfigDiffEntry {
+  param: string;
+  oldValue: number;
+  newValue: number;
+  changePercent: number;
+}
+
 /** Full cycle result for logging and observability. */
 export interface OptimizationCycleResult {
   timestamp: string;
@@ -78,6 +86,8 @@ export interface OptimizationCycleResult {
   bestCandidateComposite: number;
   promoted: boolean;
   promotedConfigId?: string;
+  promotedVersion?: number;
+  configDiff?: ConfigDiffEntry[];
   gates: GateResult[];
   rejectionReason?: string;
 }

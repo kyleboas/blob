@@ -5,7 +5,7 @@ import { backtest } from "../self-improve/backtester";
 import { mutate, generateCandidates } from "../self-improve/mutator";
 import { runTournament } from "../self-improve/tournament";
 import { checkGates, ratchet } from "../self-improve/ratchet";
-import { loadConfig, loadHistory, saveConfig, appendToHistory, runOptimizationCycle } from "../self-improve/index";
+import { loadConfig, loadHistory, saveConfig, appendToHistory, runOptimizationCycle, diffConfigs } from "../self-improve/index";
 import type { ScoringConfig, HistoryRecord, OptimizationSettings } from "../self-improve/types";
 import { DEFAULT_SCORING_CONFIG, DEFAULT_OPTIMIZATION_SETTINGS } from "../self-improve/types";
 import type { Env } from "../core/types";
@@ -345,10 +345,30 @@ test("runOptimizationCycle runs full cycle with enough history", async () => {
 
   const result = await runOptimizationCycle(env);
   assert.ok(result.includes("Self-improve:"));
-  assert.ok(result.includes("Baseline:"));
   assert.ok(result.includes("Candidates tested:"));
 
   // Verify cycle log was written
   const logObj = bucket.store.get("self-improve/cycle-log.jsonl");
   assert.ok(logObj);
+});
+
+test("diffConfigs detects parameter changes", () => {
+  const oldConfig = makeConfig();
+  const newConfig = makeConfig({
+    id: "new",
+    thresholds: { highSignal: 75, medium: 50, low: 20 },
+    weights: { engagementScore: 0.5, qualityScore: 0.5 },
+  });
+  const diffs = diffConfigs(oldConfig, newConfig);
+
+  const highSignalDiff = diffs.find((d) => d.param === "thresholds.highSignal");
+  assert.ok(highSignalDiff);
+  assert.equal(highSignalDiff.oldValue, 80);
+  assert.equal(highSignalDiff.newValue, 75);
+  assert.ok(highSignalDiff.changePercent < 0); // decreased
+
+  const engagementDiff = diffs.find((d) => d.param === "weights.engagementScore");
+  assert.ok(engagementDiff);
+  assert.equal(engagementDiff.oldValue, 0.4);
+  assert.equal(engagementDiff.newValue, 0.5);
 });
