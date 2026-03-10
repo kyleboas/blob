@@ -6,6 +6,7 @@ import { mutate, generateCandidates } from "../self-improve/mutator";
 import { runTournament } from "../self-improve/tournament";
 import { checkGates, ratchet } from "../self-improve/ratchet";
 import { loadConfig, loadHistory, saveConfig, appendToHistory, runOptimizationCycle, diffConfigs, recordOutcome } from "../self-improve/index";
+import { getExactKeywordCommand } from "../integrations/slack-commands";
 import type { ScoringConfig, HistoryRecord, OptimizationSettings } from "../self-improve/types";
 import { DEFAULT_SCORING_CONFIG, DEFAULT_OPTIMIZATION_SETTINGS } from "../self-improve/types";
 import type { Env } from "../core/types";
@@ -434,4 +435,37 @@ test("recordOutcome updates matching history records", async () => {
   const history = await loadHistory(store);
   assert.equal(history[0].outcome, true);
   assert.equal(history[1].outcome, true);
+});
+
+// ---------------------------------------------------------------------------
+// Slack command tests
+// ---------------------------------------------------------------------------
+
+test("self-improve is recognized as an exact keyword command", () => {
+  assert.equal(getExactKeywordCommand("self-improve"), "self-improve");
+  assert.equal(getExactKeywordCommand("Self-Improve"), "self-improve");
+  assert.equal(getExactKeywordCommand("  self-improve  "), "self-improve");
+});
+
+// ---------------------------------------------------------------------------
+// Memory config integration tests
+// ---------------------------------------------------------------------------
+
+test("default config includes memory thresholds", () => {
+  const config = DEFAULT_SCORING_CONFIG;
+  assert.ok(config.memory);
+  assert.equal(config.memory.maxTokensPerItem, 2000);
+  assert.equal(config.memory.duplicateThreshold, 0.95);
+  assert.equal(config.memory.recallMaxItems, 10);
+  assert.equal(config.memory.recallMaxTokens, 4000);
+});
+
+test("loadConfig preserves memory thresholds", async () => {
+  const bucket = new FakeR2Bucket();
+  const store = bucket as unknown as R2Bucket;
+  const config = { ...DEFAULT_SCORING_CONFIG, memory: { maxTokensPerItem: 3000, duplicateThreshold: 0.9, recallMaxItems: 15, recallMaxTokens: 5000 } };
+  await saveConfig(store, config);
+  const loaded = await loadConfig(store);
+  assert.equal(loaded.memory?.maxTokensPerItem, 3000);
+  assert.equal(loaded.memory?.duplicateThreshold, 0.9);
 });

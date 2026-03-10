@@ -17,6 +17,17 @@ export interface ScoringConfig {
   };
   weights: Record<string, number>;
   penalties: Record<string, number>;
+  /** Tunable thresholds for memory ingestion and recall. */
+  memory?: {
+    /** Max tokens per memory item (default 2000). */
+    maxTokensPerItem: number;
+    /** Cosine similarity above which content is considered duplicate (default 0.95). */
+    duplicateThreshold: number;
+    /** Max items to recall per query (default 10). */
+    recallMaxItems: number;
+    /** Max token budget for recall (default 4000). */
+    recallMaxTokens: number;
+  };
 }
 
 /** A single historical record: what the agent scored/flagged vs what actually happened. */
@@ -147,6 +158,12 @@ export const DEFAULT_SCORING_CONFIG: ScoringConfig = {
   penalties: {
     tooShort: 20,
     duplicate: 30,
+  },
+  memory: {
+    maxTokensPerItem: 2000,
+    duplicateThreshold: 0.95,
+    recallMaxItems: 10,
+    recallMaxTokens: 4000,
   },
 };
 
