@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { appendLearnedRecord, flushLearnedRecordsToR2, updateLearnedMemoryStatus, type LearnedRecord } from "../core/memory";
+import { appendLearnedRecord, flushLearnedRecordsToR2, updateLearnedMemoryStatus, type LearnedRecord } from "../core/memory-system";
 import type { Env } from "../core/types";
 
 class FakeObj {

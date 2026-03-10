@@ -333,6 +333,250 @@ export async function compactScope(env: Env, store: R2MemoryStore, scope: string
   return { replaced: selected.length, newItem: created };
 }
 
+// ---------------------------------------------------------------------------
+// Legacy learned-record types and functions (migrated from memory.ts)
+// ---------------------------------------------------------------------------
+
+const BLOB_ID = "blob";
+const LEARNED_FILE_PATH = "/workspace/blob_state/learned.jsonl";
+const EMBEDDING_MODEL = "@cf/baai/bge-small-en-v1.5";
+
+export interface SemanticMemoryMatch {
+  id: string;
+  score: number;
+  conversationKey?: string;
+  r2Key?: string;
+  snippet?: string;
+  timestamp?: string;
+}
+
+export interface LearnedRecord {
+  timestamp: string;
+  conversationKey: string;
+  summary: string;
+  tags: string[];
+  sourceRefs?: string[];
+}
+
+async function getAgentDO(env: Env): Promise<DurableObjectStub> {
+  if (!env.AGENT_DO) throw new Error("AGENT_DO binding not found");
+  return env.AGENT_DO.get(env.AGENT_DO.idFromName(BLOB_ID));
+}
+
+export async function appendLearnedRecord(env: Env, record: LearnedRecord): Promise<void> {
+  const current = await env.SANDBOX.readFile(LEARNED_FILE_PATH).catch(() => "");
+  const line = `${JSON.stringify(record)}\n`;
+  await env.SANDBOX.writeFile(LEARNED_FILE_PATH, `${current}${line}`);
+}
+
+export async function flushLearnedRecordsToR2(env: Env, conversationKey: string): Promise<{ key: string; count: number; lastRecord?: LearnedRecord }> {
+  const content = await env.SANDBOX.readFile(LEARNED_FILE_PATH).catch(() => "");
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return { key: "", count: 0 };
+  }
+
+  const rows: LearnedRecord[] = [];
+  for (const rawLine of trimmed.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    try {
+      rows.push(JSON.parse(line) as LearnedRecord);
+    } catch {
+      logEvent(env, "memory_ops", "malformed_learned_line", { line: line.slice(0, 80) });
+    }
+  }
+  const date = new Date().toISOString().slice(0, 10);
+  const key = `memory/${conversationKey}/${date}/learned.jsonl`;
+  const existing = await env.REPO_STORE.get(key);
+  const existingText = existing ? await existing.text() : "";
+  await env.REPO_STORE.put(key, `${existingText}${content.endsWith("\n") ? content : `${content}\n`}`);
+  await env.SANDBOX.writeFile(LEARNED_FILE_PATH, "");
+  return { key, count: rows.length, lastRecord: rows[rows.length - 1] };
+}
+
+export function buildVectorId(conversationKey: string, timestamp: string): string {
+  return `conv:${conversationKey}:${timestamp}`;
+}
+
+export async function upsertSemanticMemory(env: Env, params: {
+  conversationKey: string;
+  record: LearnedRecord;
+  r2Key: string;
+}): Promise<{ ok: boolean; id?: string; error?: string }> {
+  if (!env.PI_VECTORS) {
+    return { ok: false, error: "PI_VECTORS binding missing" };
+  }
+  const vector = await embedText(env, `${params.record.summary}\n${params.record.tags.join(" ")}`);
+  if (!vector) {
+    return { ok: false, error: "embedding generation failed" };
+  }
+  const id = buildVectorId(params.conversationKey, params.record.timestamp);
+  await env.PI_VECTORS.upsert([
+    {
+      id,
+      values: vector,
+      metadata: {
+        conversationKey: params.conversationKey,
+        r2Key: params.r2Key,
+        snippet: params.record.summary.slice(0, 240),
+        timestamp: params.record.timestamp,
+      },
+    },
+  ]);
+  return { ok: true, id };
+}
+
+export async function querySemanticMemory(env: Env, params: {
+  conversationKey: string;
+  query: string;
+  topK?: number;
+}): Promise<SemanticMemoryMatch[]> {
+  if (!env.PI_VECTORS) return [];
+  const vector = await embedText(env, params.query);
+  if (!vector) return [];
+  const result = await env.PI_VECTORS.query(vector, {
+    topK: params.topK ?? 5,
+    returnMetadata: "all",
+    filter: { conversationKey: params.conversationKey },
+  });
+
+  return (result.matches ?? []).map((match) => {
+    const metadata = (match.metadata ?? {}) as Record<string, unknown>;
+    return {
+      id: String(match.id),
+      score: Number(match.score ?? 0),
+      conversationKey: typeof metadata.conversationKey === "string" ? metadata.conversationKey : undefined,
+      r2Key: typeof metadata.r2Key === "string" ? metadata.r2Key : undefined,
+      snippet: typeof metadata.snippet === "string" ? metadata.snippet : undefined,
+      timestamp: typeof metadata.timestamp === "string" ? metadata.timestamp : undefined,
+    };
+  });
+}
+
+export async function buildSemanticMemoryContext(env: Env, matches: SemanticMemoryMatch[], maxChars = 1200): Promise<string> {
+  const lines: string[] = [];
+  let total = 0;
+  for (const match of matches) {
+    let snippet = match.snippet ?? "";
+    if (!snippet && match.r2Key) {
+      const obj = await env.REPO_STORE.get(match.r2Key);
+      if (obj) {
+        const firstLine = (await obj.text()).split("\n").find((line) => line.trim().length > 0) ?? "";
+        snippet = firstLine.slice(0, 240);
+      }
+    }
+    if (!snippet) continue;
+    const line = `- ${snippet}`;
+    if (total + line.length > maxChars) break;
+    lines.push(line);
+    total += line.length;
+  }
+
+  return lines.length > 0 ? `Relevant learned memory:\n${lines.join("\n")}` : "";
+}
+
+// ---------------------------------------------------------------------------
+// DO fetch wrappers for memory status
+// ---------------------------------------------------------------------------
+
+export async function updateLearnedMemoryStatus(env: Env, payload: { lastFlushAt: string; lastFlushCount: number; lastRecordTimestamp?: string; lastRecordSummary?: string }): Promise<void> {
+  try {
+    const do_ = await getAgentDO(env);
+    await do_.fetch("http://do/memory/learned/status", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    logEvent(env, "memory_ops", "learned_status_update_failed", { error: String(err) });
+  }
+}
+
+export async function getLearnedMemoryStatus(env: Env): Promise<{ lastFlushAt: string | null; lastFlushCount: number }> {
+  try {
+    const do_ = await getAgentDO(env);
+    const res = await do_.fetch("http://do/memory/learned/status");
+    const data = await res.json() as { lastFlushAt: string | null; lastFlushCount: number };
+    return {
+      lastFlushAt: data.lastFlushAt,
+      lastFlushCount: data.lastFlushCount ?? 0,
+    };
+  } catch (err) {
+    logEvent(env, "memory_ops", "learned_status_get_failed", { error: String(err) });
+    return { lastFlushAt: null, lastFlushCount: 0 };
+  }
+}
+
+export async function updateVectorizeMemoryStatus(env: Env, payload: {
+  lastUpsertAt?: string;
+  lastUpsertOk?: boolean;
+  lastUpsertError?: string;
+  lastQueryAt?: string;
+  lastQueryCount?: number;
+}): Promise<void> {
+  try {
+    const do_ = await getAgentDO(env);
+    await do_.fetch("http://do/memory/vectorize/status", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    logEvent(env, "memory_ops", "vectorize_status_update_failed", { error: String(err) });
+  }
+}
+
+export async function getVectorizeMemoryStatus(env: Env): Promise<{
+  lastUpsertAt: string | null;
+  lastUpsertOk: boolean | null;
+  lastUpsertError: string | null;
+  lastQueryAt: string | null;
+  lastQueryCount: number;
+}> {
+  try {
+    const do_ = await getAgentDO(env);
+    const res = await do_.fetch("http://do/memory/vectorize/status");
+    const data = await res.json() as {
+      lastUpsertAt: string | null;
+      lastUpsertOk: boolean | null;
+      lastUpsertError: string | null;
+      lastQueryAt: string | null;
+      lastQueryCount: number;
+    };
+    return data;
+  } catch (err) {
+    logEvent(env, "memory_ops", "vectorize_status_get_failed", { error: String(err) });
+    return {
+      lastUpsertAt: null,
+      lastUpsertOk: null,
+      lastUpsertError: null,
+      lastQueryAt: null,
+      lastQueryCount: 0,
+    };
+  }
+}
+
+export async function getModelCatalog(env: Env): Promise<Record<string, { name: string; description: string; maxTokens: number }>> {
+  try {
+    const do_ = await getAgentDO(env);
+    const res = await do_.fetch("http://do/catalog");
+    const data = await res.json() as { catalog: Record<string, { name: string; description: string; maxTokens: number }> };
+    return data.catalog;
+  } catch (err) {
+    logEvent(env, "memory_ops", "model_catalog_get_failed", { error: String(err) });
+    return {
+      "anthropic/claude-sonnet-4-6": {
+        name: "Claude Sonnet 4.6",
+        description: "Best-in-class tool calling and code generation via AI Gateway.",
+        maxTokens: 8192
+      }
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reconciliation
+// ---------------------------------------------------------------------------
+
 export async function reconcileMemory(env: Env, store: R2MemoryStore, vectorIds?: string[]): Promise<{ deletedOrphans: number; reindexed: number }> {
   let deletedOrphans = 0;
   let reindexed = 0;

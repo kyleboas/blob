@@ -11,7 +11,7 @@ import {
   updateLearnedMemoryStatus,
   updateVectorizeMemoryStatus,
   upsertSemanticMemory,
-} from "../core/memory";
+} from "../core/memory-system";
 
 interface PiMessage {
   role: "system" | "user" | "assistant";

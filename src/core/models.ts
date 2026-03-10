@@ -1,5 +1,5 @@
 import type { Env } from "./types";
-import { getModelCatalog } from "./memory";
+import { getModelCatalog } from "./memory-system";
 
 // Default model for AI Gateway (OpenAI-compatible endpoint)
 export const DEFAULT_MODEL = "anthropic/claude-sonnet-4-6";

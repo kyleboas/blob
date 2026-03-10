@@ -94,16 +94,16 @@ Update the file after completing each sub-task, not just after completing an ent
 
 -----
 
-- [ ] 2.0 Consolidate memory systems and shared utilities (FR-2, FR-11)
-  - [ ] 2.1 Audit all imports of `src/core/memory.ts`. List every function imported and by which files: `pi-agent.ts`, `slack.ts`, `cron-jobs.ts`, and any others.
-  - [ ] 2.2 For each function in `memory.ts`, identify the equivalent in `memory-system.ts` or create a thin wrapper in `memory-system.ts` that provides the same interface. Key mappings: `appendLearnedRecord` → use `writeMemoryItem` or a new `appendLearned` wrapper. `flushLearnedRecordsToR2` → use `appendDailyLearned` + R2 put. `querySemanticMemory` → use `queryVectors` + `R2MemoryStore.read`. `buildSemanticMemoryContext` → use `buildRetrievedMemoryBlock` or adapt. `upsertSemanticMemory` → use `upsertVector`. Status update functions → keep as thin DO fetch wrappers in a separate `memory-status.ts` (already extracted in task 1.8).
-  - [ ] 2.3 Update `pi-agent.ts` to import from `memory-system.ts` instead of `memory.ts`. Replace all `memory.ts` function calls with `memory-system.ts` equivalents. Verify the R2 key schema is consistent (use `memory-system.ts`’s `mem/{id}.json` pattern everywhere).
-  - [ ] 2.4 Update `slack.ts` to import `getLearnedMemoryStatus` and `getVectorizeMemoryStatus` from the handler module or from `memory-system.ts`.
-  - [ ] 2.5 Update `cron-jobs.ts` — it already uses `memory-system.ts`, so verify no `memory.ts` imports remain.
-  - [ ] 2.6 Replace all occurrences of `Math.ceil(text.length / 4)` (the char-based estimator in `pi-agent.ts`) with `estimateTokens` from `src/core/tokens.ts`. Replace all occurrences of the word-count estimator in `memory-system.ts` with the same import.
-  - [ ] 2.7 Delete `src/core/memory.ts`.
-  - [ ] 2.8 Create `src/tests/memory-consolidated.test.ts`. Test: write a memory item, recall it by semantic query, compact a scope, verify retention policy, verify duplicate detection.
-  - [ ] 2.9 Run `npm run typecheck && npm test`. Verify `grep -r "from.*memory\.ts\|from.*\/memory\"" src/ --include="*.ts" | grep -v memory-system | grep -v test` returns nothing.
+- [x] 2.0 Consolidate memory systems and shared utilities (FR-2, FR-11)
+  - [x] 2.1 Audit all imports of `src/core/memory.ts`. List every function imported and by which files: `pi-agent.ts`, `slack.ts`, `cron-jobs.ts`, and any others.
+  - [x] 2.2 For each function in `memory.ts`, identify the equivalent in `memory-system.ts` or create a thin wrapper in `memory-system.ts` that provides the same interface. Key mappings: `appendLearnedRecord` → use `writeMemoryItem` or a new `appendLearned` wrapper. `flushLearnedRecordsToR2` → use `appendDailyLearned` + R2 put. `querySemanticMemory` → use `queryVectors` + `R2MemoryStore.read`. `buildSemanticMemoryContext` → use `buildRetrievedMemoryBlock` or adapt. `upsertSemanticMemory` → use `upsertVector`. Status update functions → keep as thin DO fetch wrappers in a separate `memory-status.ts` (already extracted in task 1.8).
+  - [x] 2.3 Update `pi-agent.ts` to import from `memory-system.ts` instead of `memory.ts`. Replace all `memory.ts` function calls with `memory-system.ts` equivalents. Verify the R2 key schema is consistent (use `memory-system.ts`’s `mem/{id}.json` pattern everywhere).
+  - [x] 2.4 Update `slack.ts` to import `getLearnedMemoryStatus` and `getVectorizeMemoryStatus` from the handler module or from `memory-system.ts`.
+  - [x] 2.5 Update `cron-jobs.ts` — it already uses `memory-system.ts`, so verify no `memory.ts` imports remain.
+  - [x] 2.6 Replace all occurrences of `Math.ceil(text.length / 4)` (the char-based estimator in `pi-agent.ts`) with `estimateTokens` from `src/core/tokens.ts`. Replace all occurrences of the word-count estimator in `memory-system.ts` with the same import.
+  - [x] 2.7 Delete `src/core/memory.ts`.
+  - [x] 2.8 Create `src/tests/memory-consolidated.test.ts`. Test: write a memory item, recall it by semantic query, compact a scope, verify retention policy, verify duplicate detection.
+  - [x] 2.9 Run `npm run typecheck && npm test`. Verify `grep -r "from.*memory\.ts\|from.*\/memory\"" src/ --include="*.ts" | grep -v memory-system | grep -v test` returns nothing.
 
 -----
 
