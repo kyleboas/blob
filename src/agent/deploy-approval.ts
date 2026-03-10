@@ -22,7 +22,8 @@ async function loadApprovers(env: Env): Promise<Set<string>> {
     if (!obj) return new Set();
     const data = await obj.json<{ allowedUserIds?: string[] }>();
     return new Set(data.allowedUserIds ?? []);
-  } catch {
+  } catch (err) {
+    console.error("loadApprovers failed", err);
     return new Set();
   }
 }
