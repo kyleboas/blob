@@ -150,7 +150,8 @@ async function callLLMRaw(
     throw new Error("No choices in LLM response");
   }
   
-  return data.choices[0]?.message?.content ?? "";
+  const content = data.choices[0]?.message?.content ?? "";
+  return typeof content === "string" ? content : JSON.stringify(content);
 }
 
 // Simple call without model selection
