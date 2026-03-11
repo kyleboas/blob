@@ -126,6 +126,9 @@ function makeEnv() {
               jobs: { queued: 1, paused: 0, running: 2 },
             });
           }
+          if (path === "/daily-tokens" && init?.method === "POST") {
+            return Response.json({ totalTokens: 1 });
+          }
           return new Response("not found", { status: 404 });
         },
       }),
@@ -204,6 +207,49 @@ test("status with extra text is treated as normal chat", async () => {
 
     await handleSlackEvent(req, env);
     assert.equal(posts[0], "normal chat response");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("sandbox chat still posts a fallback Slack message when agent final text is empty", async () => {
+  const { env, posts } = makeEnv();
+  env.AI.run = async (_model: string, inputs: { messages?: Array<{ role: string; content: string }>; text?: string }) => {
+    if (inputs.messages) {
+      const user = inputs.messages.find((m) => m.role === "user")?.content ?? "";
+      if (user.includes("intent classifier")) {
+        return { response: '{"intent":"chat","needsSandbox":true}' };
+      }
+      return { response: "" };
+    }
+    return { data: [[0.1, 0.2, 0.3]] };
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes("slack.com/api/chat.postMessage")) {
+      const body = JSON.parse(String(init?.body)) as { text: string };
+      posts.push(body.text);
+      return Response.json({ ok: true });
+    }
+    return new Response("unexpected", { status: 500 });
+  }) as typeof fetch;
+
+  try {
+    const req = new Request("https://example.com/slack/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "event_callback",
+        event_id: "E-sandbox-empty",
+        team_id: "T1",
+        event: { type: "message", text: "please run a tool", channel: "C1", ts: "8" },
+      }),
+    });
+
+    await handleSlackEvent(req, env);
+    assert.equal(posts[0], "Working…");
+    assert.equal(posts[1], "(No textual response generated. Please check logs/tool output.)");
   } finally {
     globalThis.fetch = originalFetch;
   }
