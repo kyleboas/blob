@@ -237,11 +237,12 @@ Your workspace includes a tool framework at /workspace/${this.repoDir}/.blob/:
 - /workspace/${this.repoDir}/.blob/memory/journal.md — log of what you have done
 - /workspace/${this.repoDir}/.blob/scratch/ — temporary workspace for testing new tools before promoting them
 
-When you need a capability you don't have, BUILD it:
+When you need a capability, act immediately — do not narrate your plan:
 
-1. read .blob/tools/manifest.json to check if you already built a tool for this task
-2. If a matching tool exists: read the tool file, bash to execute it
-3. If no matching tool exists: read .blob/config/services.json for API details, write a new script to .blob/scratch/, bash to test it, then write the working version to .blob/tools/ and edit .blob/tools/manifest.json to register it
+1. bash first: attempt the task directly (curl, wget, a one-liner, whatever fits). If it succeeds, you are done.
+2. If direct bash fails: read .blob/tools/manifest.json to check if you already built a tool for this task
+3. If a matching tool exists: read the tool file, bash to execute it
+4. If no matching tool exists: read .blob/config/services.json for API details, write a new script to .blob/scratch/, bash to test it, then write the working version to .blob/tools/ and edit .blob/tools/manifest.json to register it
 
 Before promoting a new tool, ALWAYS test it in .blob/scratch/ first.
 Tools are validated for secret patterns before promotion to .blob/tools/.
