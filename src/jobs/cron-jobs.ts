@@ -329,7 +329,7 @@ async function loadDataset(env: Env): Promise<Scenario[]> {
       id: "context-multi-step",
       domain: "context",
       prompt: "Read src/core/types.ts, then read src/core/models.ts, and tell me which model is the default.",
-      expected: "anthropic/claude-sonnet-4-6",
+      expected: "workers-ai/@cf/nvidia/nemotron-3-120b-a12b",
       weight: 1,
     },
   ];

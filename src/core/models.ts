@@ -2,13 +2,13 @@ import type { Env } from "./types";
 import { getModelCatalog } from "./memory-system";
 
 // Default model for AI Gateway (OpenAI-compatible endpoint)
-export const DEFAULT_MODEL = "anthropic/claude-sonnet-4-6";
+export const DEFAULT_MODEL = "workers-ai/@cf/nvidia/nemotron-3-120b-a12b";
 
 // Free fallback model for Workers AI (used when AI Gateway is not configured)
-export const WORKERS_AI_FALLBACK_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+export const WORKERS_AI_FALLBACK_MODEL = "@cf/nvidia/nemotron-3-120b-a12b";
 
 // Workers AI model routed through AI Gateway (OpenAI-compatible endpoint)
-export const WORKERS_AI_GATEWAY_MODEL = "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+export const WORKERS_AI_GATEWAY_MODEL = "workers-ai/@cf/nvidia/nemotron-3-120b-a12b";
 
 // Get catalog from DO (async)
 export async function getCatalog(env: Env): Promise<Record<string, { name: string; description: string; maxTokens: number }>> {

@@ -236,7 +236,7 @@ export function redactSecrets(input: string, env?: Pick<Env, "SECRET_PATTERNS">)
 export async function extractLearnedEntries(env: Env, transcript: string, scope: string): Promise<LearnedEntry[]> {
   if (!env.AI) return [];
   const prompt = `Extract durable learnings as JSONL. Fields: timestamp, scope, category(decision|fact|preference|lesson), content(one sentence), confidence(high|medium|low). Input:\n${transcript}`;
-  const result = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+  const result = await env.AI.run("@cf/nvidia/nemotron-3-120b-a12b", {
     messages: [{ role: "user", content: prompt }],
     max_tokens: 800,
   }) as { response?: string };
@@ -584,9 +584,9 @@ export async function getModelCatalog(env: Env): Promise<Record<string, { name: 
   } catch (err) {
     logEvent(env, "memory_ops", "model_catalog_get_failed", { error: String(err) });
     return {
-      "anthropic/claude-sonnet-4-6": {
-        name: "Claude Sonnet 4.6",
-        description: "Best-in-class tool calling and code generation via AI Gateway.",
+      "workers-ai/@cf/nvidia/nemotron-3-120b-a12b": {
+        name: "NVIDIA Nemotron 3 120B",
+        description: "Primary model for coding and tool-calling via AI Gateway.",
         maxTokens: 8192
       }
     };
