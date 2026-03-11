@@ -8,16 +8,6 @@ import {
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { ensureSandboxStarted, runSandboxOperation } from "./sandbox-retry";
 
-function withTimeout<T>(p: Promise<T>, ms: number, label = "timeout"): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error(`${label} after ${ms}ms`)), ms);
-    p.then(
-      (v) => { clearTimeout(t); resolve(v); },
-      (e) => { clearTimeout(t); reject(e); },
-    );
-  });
-}
-
 // Wrangler "class_name = Sandbox" will look for this exact export.
 export class Sandbox extends SandboxDO {
   async alarm(): Promise<void> {
@@ -25,11 +15,7 @@ export class Sandbox extends SandboxDO {
     try {
       console.log("[alarm] fired", new Date().toISOString());
       // super.alarm expects a context; Cloudflare doesn't pass one to your override.
-      await withTimeout(
-        (super.alarm as unknown as (arg: any) => Promise<void>)({ isRetry: false }),
-        30_000,
-        "alarm super.alarm()"
-      );
+      await (super.alarm as unknown as (arg: any) => Promise<void>)({ isRetry: false });
     } catch (err: unknown) {
       const error = err instanceof Error ? err : new Error(String(err));
       console.error("[alarm] failed", {
