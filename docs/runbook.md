@@ -9,6 +9,7 @@ Use these exact commands in a conversation with the bot (case-insensitive, trimm
 - `set verbose` — enable per-tool ledger updates and short error summaries.
 - `status` — inspect sandbox, workspace, tool ledger, and memory health.
 - `selftest` — execute safe end-to-end health checks including R2 + Vectorize.
+- `jobs` — list recent jobs with status, token usage, model call counts, and tool call breakdown.
 
 Keyword commands only trigger on exact matches. Example: `status please` is treated as a normal chat message.
 
