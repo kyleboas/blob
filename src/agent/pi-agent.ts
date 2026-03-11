@@ -168,7 +168,7 @@ function buildBootstrapScript(repoDir: string, repo: string): string {
   const hasRepoSlug = repo.includes("/");
   const cloneUrl = hasRepoSlug ? `https://github.com/${repo}.git` : "";
   const cloneStep = hasRepoSlug
-    ? `    git clone ${shellQuote(cloneUrl)} ${shellQuote(workspaceRoot)}\n`
+    ? `    git clone --depth=1 ${shellQuote(cloneUrl)} ${shellQuote(workspaceRoot)}\n`
     : `    mkdir -p ${shellQuote(workspaceRoot)}\n`;
 
   return `set -eu
@@ -185,7 +185,7 @@ fi
 mkdir -p /workspace
 if [ -d ${shellQuote(`${workspaceRoot}/.git`)} ]; then
   cd ${shellQuote(workspaceRoot)}
-  git fetch --prune origin
+  git fetch --depth=1 --prune origin
   if git show-ref --verify --quiet refs/remotes/origin/main; then
     git reset --hard origin/main
   elif git show-ref --verify --quiet refs/remotes/origin/master; then
