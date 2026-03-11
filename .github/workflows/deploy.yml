@@ -1,0 +1,27 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_vectorize:
+        description: "Create Vectorize index (blob-vectors) if it does not exist"
+        type: boolean
+        default: false
+
+jobs:
+  vectorize:
+    name: Create Vectorize index
+    runs-on: ubuntu-latest
+    if: inputs.create_vectorize == true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Create blob-vectors index
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          npx wrangler vectorize create blob-vectors --dimensions=384 --metric=cosine || echo "Index may already exist, continuing"
