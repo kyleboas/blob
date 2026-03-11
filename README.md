@@ -21,7 +21,9 @@ The runtime flow is:
 - Cloudflare account with Workers, Durable Objects, R2, AI, and Sandbox support
 - Slack app + bot token
 
-## Setup
+## Quickstart
+
+Install dependencies and validate the project:
 
 ```bash
 npm install
@@ -29,15 +31,24 @@ npm run typecheck
 npm test
 ```
 
-Deploy sandbox worker:
+## Deployment
+
+Deploy sandbox worker first:
 
 ```bash
-wrangler deploy -c wrangler.sandbox.toml
+npm run deploy:sandbox
 ```
 
 Deploy agent worker:
 
 ```bash
+npm run deploy
+```
+
+Equivalent Wrangler commands:
+
+```bash
+wrangler deploy -c wrangler.sandbox.toml
 wrangler deploy -c wrangler.agent.toml
 ```
 
@@ -69,7 +80,7 @@ Operational controls:
 3. Subscribe to message events used by your workspace.
 4. Install/reinstall app after scope changes.
 
-## Docs
+## Useful docs
 
 - `docs/architecture.md`
 - `docs/cron-jobs.md`
