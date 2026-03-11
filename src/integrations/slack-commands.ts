@@ -274,7 +274,9 @@ export async function handleCommand(
           const counts = history.reduce((acc: Record<string, number>, e) => { acc[e.tool] = (acc[e.tool] ?? 0) + 1; return acc; }, {});
           toolSummary = ` [${Object.entries(counts).map(([t, n]) => `${t}×${n}`).join(", ")}]`;
         }
-      } catch { /* ignore malformed tool_history */ }
+      } catch (_e) {
+        toolSummary = "";
+      }
       return `• \`${job.id.slice(0, 8)}\` ${job.status} ${ageText} — ${job.token_usage} tokens, ${job.model_call_count}/${job.estimated_calls} calls${toolSummary}${step}`;
     });
     return { handled: true, response: `Recent jobs (last ${lines.length}):\n${lines.join("\n")}` };
