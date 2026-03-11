@@ -49,8 +49,8 @@ export interface BlobState {
 }
 
 const DEFAULT_CATALOG = {
-  "anthropic/claude-sonnet-4-6": { name: "Claude Sonnet 4.6", description: "Best-in-class tool calling and code generation via AI Gateway.", maxTokens: 8192 },
-  "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast": { name: "Llama 3.3 70B Fast", description: "Fast, capable model for most coding tasks. Free tier fallback.", maxTokens: 4096 },
+  "workers-ai/@cf/nvidia/nemotron-3-120b-a12b": { name: "NVIDIA Nemotron 3 120B", description: "Primary model for coding and tool-calling via AI Gateway.", maxTokens: 8192 },
+  "@cf/nvidia/nemotron-3-120b-a12b": { name: "NVIDIA Nemotron 3 120B", description: "Primary Workers AI fallback model when AI Gateway is unavailable.", maxTokens: 8192 },
 } as const;
 
 export class AgentDO {

@@ -72,7 +72,7 @@ async function callJudge(
 ): Promise<string> {
   const baseUrl = (env.AI_GATEWAY_BASE_URL ?? "").replace(/\/$/, "");
   const url = baseUrl.endsWith("/chat/completions") ? baseUrl : `${baseUrl}/chat/completions`;
-  const model = env.LLM_MODEL ?? "anthropic/claude-sonnet-4-6";
+  const model = env.LLM_MODEL ?? "workers-ai/@cf/nvidia/nemotron-3-120b-a12b";
 
   const res = await fetch(url, {
     method: "POST",
