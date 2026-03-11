@@ -14,9 +14,9 @@ function globalDO(env: Env): DurableObjectStub | null {
   return env.AGENT_DO ? env.AGENT_DO.get(env.AGENT_DO.idFromName("blob")) : null;
 }
 
-export function getExactKeywordCommand(text: string): "settings" | "status" | "selftest" | "set minimal" | "set verbose" | "secrets" | "heartbeat config" | "self-improve" | null {
+export function getExactKeywordCommand(text: string): "settings" | "status" | "selftest" | "set minimal" | "set verbose" | "secrets" | "heartbeat config" | "self-improve" | "jobs" | null {
   const normalized = text.trim().toLowerCase();
-  if (["settings", "status", "selftest", "set minimal", "set verbose", "secrets", "heartbeat config", "self-improve"].includes(normalized)) {
+  if (["settings", "status", "selftest", "set minimal", "set verbose", "secrets", "heartbeat config", "self-improve", "jobs"].includes(normalized)) {
     return normalized as ReturnType<typeof getExactKeywordCommand>;
   }
   return null;
@@ -255,6 +255,31 @@ export async function handleCommand(
   if (keywordCommand === "self-improve") {
     return await handleSelfImproveCommand(env);
   }
+  if (keywordCommand === "jobs") {
+    const do_ = globalDO(env);
+    if (!do_) return { handled: true, response: "No jobs found." };
+    const res = await do_.fetch("http://do/jobs", withDOAuth(env));
+    const { jobs } = await res.json() as { jobs: Array<{ id: string; status: string; created_at: number; updated_at: number; current_step: string; tool_history: string; token_usage: number; model_call_count: number; estimated_calls: number; sandbox_id: string | null }> };
+    if (jobs.length === 0) {
+      return { handled: true, response: "No jobs found." };
+    }
+    const lines = jobs.slice(-10).map((job) => {
+      const age = Math.round((Date.now() - job.created_at) / 60000);
+      const ageText = age < 60 ? `${age}m ago` : `${Math.round(age / 60)}h ago`;
+      const step = job.current_step ? ` — ${job.current_step.slice(0, 60)}` : "";
+      let toolSummary = "";
+      try {
+        const history = JSON.parse(job.tool_history) as Array<{ tool: string; ok: boolean }>;
+        if (history.length > 0) {
+          const counts = history.reduce((acc: Record<string, number>, e) => { acc[e.tool] = (acc[e.tool] ?? 0) + 1; return acc; }, {});
+          toolSummary = ` [${Object.entries(counts).map(([t, n]) => `${t}×${n}`).join(", ")}]`;
+        }
+      } catch { /* ignore malformed tool_history */ }
+      return `• \`${job.id.slice(0, 8)}\` ${job.status} ${ageText} — ${job.token_usage} tokens, ${job.model_call_count}/${job.estimated_calls} calls${toolSummary}${step}`;
+    });
+    return { handled: true, response: `Recent jobs (last ${lines.length}):\n${lines.join("\n")}` };
+  }
+
   if (keywordCommand === "selftest") {
     const repos = await getRepos(env);
     const repo = repos[0] ?? "default";
