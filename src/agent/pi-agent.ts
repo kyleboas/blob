@@ -163,6 +163,35 @@ function summarizeText(text: string, maxChars = 300): string {
   return `${normalized.slice(0, maxChars)}…`;
 }
 
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const len = bytes.length;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+function base64ToUint8Array(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
+  const total = arrays.reduce((sum, a) => sum + a.length, 0);
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const a of arrays) {
+    result.set(a, offset);
+    offset += a.length;
+  }
+  return result;
+}
+
 function buildBootstrapScript(repoDir: string, repo: string): string {
   const workspaceRoot = `/workspace/${repoDir}`;
   const hasRepoSlug = repo.includes("/");
@@ -279,12 +308,91 @@ Use structured tool calls via the provided tool schema whenever you need to exec
 Stop when done and provide a concise summary.`;
   }
 
+  private async restoreRepoCacheFromR2(sandboxId: string): Promise<boolean> {
+    if (!this.env.REPO_STORE) return false;
+
+    const obj = await this.env.REPO_STORE.get(`repo-cache/${this.repoDir}.tar.gz`);
+    if (!obj) return false;
+
+    const buffer = await obj.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    const CHUNK_SIZE = 3 * 1024 * 1024;
+    const numChunks = Math.ceil(bytes.length / CHUNK_SIZE);
+
+    for (let i = 0; i < numChunks; i++) {
+      const chunk = bytes.slice(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, bytes.length));
+      await this.env.SANDBOX.writeFile(`/tmp/repo-chunk-${i}.b64`, uint8ArrayToBase64(chunk));
+    }
+
+    const lastChunk = numChunks - 1;
+    const extractResult = await executeInSandbox(
+      `mkdir -p /workspace && for i in $(seq 0 ${lastChunk}); do cat /tmp/repo-chunk-$i.b64; done | base64 -d > /tmp/repo-cache.tar.gz && tar -xzf /tmp/repo-cache.tar.gz -C /workspace && rm -f /tmp/repo-cache.tar.gz /tmp/repo-chunk-*.b64`,
+      this.env,
+      { sandboxId, timeout: 120000 },
+    );
+
+    if (extractResult.exitCode !== 0) {
+      await executeInSandbox(`rm -f /tmp/repo-cache.tar.gz /tmp/repo-chunk-*.b64`, this.env, { sandboxId }).catch(() => {});
+      return false;
+    }
+
+    logEvent(this.env, "bootstrap", "cache_restored", { repoDir: this.repoDir, bytes: bytes.length });
+    return true;
+  }
+
+  private async uploadRepoCacheToR2(sandboxId: string): Promise<void> {
+    if (!this.env.REPO_STORE) return;
+
+    const CHUNK_SIZE = 3 * 1024 * 1024;
+    const tarResult = await executeInSandbox(
+      `tar -czf /tmp/repo-cache.tar.gz -C /workspace ${shellQuote(this.repoDir)} 2>/dev/null && wc -c < /tmp/repo-cache.tar.gz`,
+      this.env,
+      { sandboxId, timeout: 60000 },
+    );
+
+    if (tarResult.exitCode !== 0) {
+      throw new Error(`cache tar failed: ${tarResult.stderr}`);
+    }
+
+    const totalBytes = parseInt(tarResult.stdout.trim(), 10);
+    if (!Number.isFinite(totalBytes) || totalBytes <= 0) return;
+
+    const numChunks = Math.ceil(totalBytes / CHUNK_SIZE);
+    const parts: Uint8Array[] = [];
+
+    for (let i = 0; i < numChunks; i++) {
+      const chunkResult = await executeInSandbox(
+        `dd if=/tmp/repo-cache.tar.gz bs=${CHUNK_SIZE} count=1 skip=${i} status=none 2>/dev/null | base64 -w0`,
+        this.env,
+        { sandboxId, timeout: 30000, maxOutputBytes: 5 * 1024 * 1024 },
+      );
+      if (!chunkResult.stdout.trim()) break;
+      parts.push(base64ToUint8Array(chunkResult.stdout.trim()));
+    }
+
+    if (parts.length > 0) {
+      await this.env.REPO_STORE.put(`repo-cache/${this.repoDir}.tar.gz`, concatUint8Arrays(parts));
+      logEvent(this.env, "bootstrap", "cache_uploaded", { repoDir: this.repoDir, bytes: totalBytes });
+    }
+
+    await executeInSandbox(`rm -f /tmp/repo-cache.tar.gz`, this.env, { sandboxId }).catch(() => {});
+  }
+
   private async ensureRepoBootstrapped(
     sandboxId: string,
     onProgress?: RunOptions["onProgress"],
     verbosity: RunOptions["verbosity"] = "minimal",
   ): Promise<void> {
     await ensureSandboxSession(sandboxId, this.env);
+
+    try {
+      const restored = await this.restoreRepoCacheFromR2(sandboxId);
+      if (restored && verbosity === "verbose" && onProgress) {
+        await onProgress(`Cache restored for /workspace/${this.repoDir}`);
+      }
+    } catch (err) {
+      logEvent(this.env, "bootstrap", "cache_restore_failed", { error: String(err) });
+    }
 
     const result = await executeInSandbox(buildBootstrapScript(this.repoDir, this.repo), this.env, {
       sandboxId,
@@ -301,6 +409,12 @@ Stop when done and provide a concise summary.`;
     if (result.exitCode !== 0) {
       const excerpt = summarizeText(result.stderr || result.stdout || "unknown bootstrap error");
       throw new Error(`repo bootstrap failed (${this.repoDir}): ${excerpt}`);
+    }
+
+    try {
+      await this.uploadRepoCacheToR2(sandboxId);
+    } catch (err) {
+      logEvent(this.env, "bootstrap", "cache_upload_failed", { error: String(err) });
     }
 
     await this.ensureToolFramework(sandboxId);

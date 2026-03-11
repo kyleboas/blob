@@ -203,7 +203,7 @@ export async function cleanupSandboxForJob(
 export async function executeInSandbox(
   command: string,
   env: Env,
-  opts: { timeout?: number; sandboxId?: string; workspaceRoot?: string; envVars?: Record<string, string> } = {},
+  opts: { timeout?: number; sandboxId?: string; workspaceRoot?: string; envVars?: Record<string, string>; maxOutputBytes?: number } = {},
 ): Promise<SandboxResult> {
   // Security boundary: Cloudflare Sandbox (Firecracker microVM) provides execution isolation. No application-level command filtering.
 
@@ -214,7 +214,7 @@ export async function executeInSandbox(
   }
 
   const timeout = opts.timeout ?? Number.parseInt(env.BASH_TIMEOUT_MS ?? "120000", 10);
-  const maxOutputBytes = Number.parseInt(env.BASH_MAX_OUTPUT_BYTES ?? "1000000", 10);
+  const maxOutputBytes = opts.maxOutputBytes ?? Number.parseInt(env.BASH_MAX_OUTPUT_BYTES ?? "1000000", 10);
   const workspaceRoot = opts.workspaceRoot ? resolveWorkspaceRoot(opts.workspaceRoot) : undefined;
   const envExports = Object.entries(opts.envVars ?? {})
     .map(([key, value]) => `export ${key}=${JSON.stringify(value)};`)
