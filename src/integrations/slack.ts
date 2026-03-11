@@ -121,9 +121,16 @@ async function postToSlack(channel: string, text: string, env: Env, threadTs?: s
     outbound = `${outbound} (ref: ${logRef})`;
   }
 
-  const plainText = stripFormatting(redactSecrets(outbound, env));
+  let plainText = stripFormatting(redactSecrets(outbound, env)).trim();
+  if (!plainText) {
+    plainText = "(No textual response generated. Please check logs/tool output.)";
+  }
+  const slackMaxText = 39000;
+  if (plainText.length > slackMaxText) {
+    plainText = `${plainText.slice(0, slackMaxText)}\n\n…(truncated)`;
+  }
 
-  await fetch("https://slack.com/api/chat.postMessage", {
+  const response = await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${env.SLACK_BOT_TOKEN}`,
@@ -135,6 +142,11 @@ async function postToSlack(channel: string, text: string, env: Env, threadTs?: s
       ...(threadTs ? { thread_ts: threadTs } : {}),
     }),
   });
+
+  const result = await response.json().catch(() => ({ ok: response.ok }));
+  if (!response.ok || !result.ok) {
+    throw new Error(`Slack post failed (${response.status}): ${JSON.stringify(result)}`);
+  }
 }
 
 function stripFormatting(text: string): string {
