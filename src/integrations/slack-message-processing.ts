@@ -172,8 +172,10 @@ export async function processIntentOrChat(params: {
         onToolLedger: verbosity === "verbose" ? (entry) => postToSlack(channel, formatToolLedger(entry), env) : undefined,
         conversationKey,
       });
-      await storeExchange(conversationDO, text, response, env);
       await postToSlack(channel, response, env);
+      storeExchange(conversationDO, text, response, env).catch((err) =>
+        logEvent(env, "slack_ingest", "store_exchange_failed", { error: String(err) }),
+      );
       return;
     }
 
@@ -183,8 +185,10 @@ export async function processIntentOrChat(params: {
       { role: "user", content: text },
     ];
     const response = await callLLM(llmMessages, env);
-    await storeExchange(conversationDO, text, response, env);
     await postToSlack(channel, response, env);
+    storeExchange(conversationDO, text, response, env).catch((err) =>
+      logEvent(env, "slack_ingest", "store_exchange_failed", { error: String(err) }),
+    );
   } catch (err) {
     const logRef = createLogRef("slack");
     logEvent(env, "slack_ingest", "process_message_failed", { error: String(err), channel }, logRef);

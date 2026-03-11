@@ -239,6 +239,9 @@ Your workspace includes a tool framework at /workspace/${this.repoDir}/.blob/:
 
 When you need a capability, act immediately — do not narrate your plan:
 
+For live information requests (weather, prices, public web lookups, simple API fetches, status checks): use bash with curl directly and return the result. Do not check tool registries or service configs first — just execute.
+
+For all other tasks:
 1. bash first: attempt the task directly (curl, wget, a one-liner, whatever fits). If it succeeds, you are done.
 2. If direct bash fails: read .blob/tools/manifest.json to check if you already built a tool for this task
 3. If a matching tool exists: read the tool file, bash to execute it
