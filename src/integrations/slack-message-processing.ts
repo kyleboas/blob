@@ -171,6 +171,9 @@ export async function processIntentOrChat(params: {
         onProgress: verbosity === "verbose" ? (msg: string) => postToSlack(channel, msg, env) : undefined,
         onToolLedger: verbosity === "verbose" ? (entry) => postToSlack(channel, formatToolLedger(entry), env) : undefined,
         conversationKey,
+        // Skip repo clone for tasks that only need bash/curl (e.g. weather, news, prices).
+        // The sandbox still runs; we just skip the git clone step to save 30-40s.
+        skipRepoBootstrap: intent.externalDataOnly === true,
       });
       await postToSlack(channel, response, env);
       storeExchange(conversationDO, text, response, env).catch((err) =>

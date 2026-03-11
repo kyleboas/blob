@@ -5,6 +5,8 @@ import type { Env } from "./types";
 export interface IntentResult {
   intent: "list_cron" | "add_cron" | "delete_cron" | "chat";
   needsSandbox?: boolean;
+  /** True when the task only needs bash/curl (no repo clone needed). */
+  externalDataOnly?: boolean;
   schedule?: string;
   task?: string;
   search?: string;
@@ -16,33 +18,42 @@ export interface IntentResult {
  * This runs before the LLM call and acts as a fast-path + safe fallback.
  */
 function likelyNeedsSandbox(text: string): boolean {
+  return !!likelyNeedsSandboxDetail(text);
+}
+
+/**
+ * Returns { needsSandbox, externalDataOnly } based on heuristics.
+ * externalDataOnly=true means the task only needs bash/curl, no repo clone.
+ */
+function likelyNeedsSandboxDetail(text: string): { needsSandbox: true; externalDataOnly: boolean } | null {
   const lower = text.toLowerCase();
 
-  // Real-time / live data requests
-  if (/\b(weather|forecast|temperature|rain|snow|wind|humidity|uv index)\b/.test(lower)) return true;
+  // Real-time / live data requests — no repo needed
+  if (/\b(weather|forecast|temperature|rain|snow|wind|humidity|uv index)\b/.test(lower)) return { needsSandbox: true, externalDataOnly: true };
   if (/\b(current|live|real.?time|latest|today'?s?|right now|at the moment)\b/.test(lower) &&
-      /\b(news|price|stock|score|result|status|time|date|rate|update)\b/.test(lower)) return true;
-  if (/\b(what time is it|what'?s? the time|current time|current date|today'?s? date)\b/.test(lower)) return true;
-  if (/\b(stock price|share price|crypto|bitcoin|exchange rate|currency)\b/.test(lower)) return true;
-  if (/\b(news|headlines|breaking)\b/.test(lower)) return true;
-  if (/\b(score|fixture|match|game|kick.?off|when do .+ play)\b/.test(lower)) return true;
-  if (/\b(check|ping|status of|is .+ (up|down|working|live))\b/.test(lower)) return true;
+      /\b(news|price|stock|score|result|status|time|date|rate|update)\b/.test(lower)) return { needsSandbox: true, externalDataOnly: true };
+  if (/\b(what time is it|what'?s? the time|current time|current date|today'?s? date)\b/.test(lower)) return { needsSandbox: true, externalDataOnly: true };
+  if (/\b(stock price|share price|crypto|bitcoin|exchange rate|currency)\b/.test(lower)) return { needsSandbox: true, externalDataOnly: true };
+  if (/\b(news|headlines|breaking)\b/.test(lower)) return { needsSandbox: true, externalDataOnly: true };
+  if (/\b(score|fixture|match|game|kick.?off|when do .+ play)\b/.test(lower)) return { needsSandbox: true, externalDataOnly: true };
+  if (/\b(check|ping|status of|is .+ (up|down|working|live))\b/.test(lower)) return { needsSandbox: true, externalDataOnly: true };
 
-  // Code / repo tasks
-  if (/\b(run|execute|test|build|deploy|lint|compile|install|npm|yarn|pnpm|git|commit|push|pull request|pr)\b/.test(lower)) return true;
-  if (/\b(fix|debug|refactor|write|create|add|update|delete|remove)\b.{0,40}\b(file|function|class|component|test|code|script|bug|error|issue)\b/.test(lower)) return true;
-  if (/\b(read|open|show|cat|ls|list)\b.{0,30}\b(file|directory|folder|repo|codebase)\b/.test(lower)) return true;
+  // Code / repo tasks — repo clone needed
+  if (/\b(run|execute|test|build|deploy|lint|compile|install|npm|yarn|pnpm|git|commit|push|pull request|pr)\b/.test(lower)) return { needsSandbox: true, externalDataOnly: false };
+  if (/\b(fix|debug|refactor|write|create|add|update|delete|remove)\b.{0,40}\b(file|function|class|component|test|code|script|bug|error|issue)\b/.test(lower)) return { needsSandbox: true, externalDataOnly: false };
+  if (/\b(read|open|show|cat|ls|list)\b.{0,30}\b(file|directory|folder|repo|codebase)\b/.test(lower)) return { needsSandbox: true, externalDataOnly: false };
 
-  // Web / search
-  if (/\b(search|look up|find|google|browse|visit|open)\b.{0,40}\b(web|internet|site|url|link|page)\b/.test(lower)) return true;
-  if (/\bhttps?:\/\//.test(lower)) return true;
+  // Web / search — no repo needed
+  if (/\b(search|look up|find|google|browse|visit|open)\b.{0,40}\b(web|internet|site|url|link|page)\b/.test(lower)) return { needsSandbox: true, externalDataOnly: true };
+  if (/\bhttps?:\/\//.test(lower)) return { needsSandbox: true, externalDataOnly: true };
 
-  return false;
+  return null;
 }
 
 export async function classifyIntent(text: string, env: Env): Promise<IntentResult> {
   // Fast-path: if heuristic is confident, skip LLM call for needsSandbox
-  const heuristicSandbox = likelyNeedsSandbox(text);
+  const heuristicDetail = likelyNeedsSandboxDetail(text);
+  const heuristicSandbox = !!heuristicDetail;
 
   const prompt = `You are an intent classifier for a Slack bot. Analyze the message and extract the user's intent.
 
@@ -80,6 +91,10 @@ Message: "${text}"`;
       // If heuristic says sandbox is needed, override the LLM result
       if (heuristicSandbox && result.intent === "chat") {
         result.needsSandbox = true;
+        // Propagate externalDataOnly from heuristic if LLM didn't set it
+        if (result.externalDataOnly === undefined && heuristicDetail) {
+          result.externalDataOnly = heuristicDetail.externalDataOnly;
+        }
       }
       return result;
     }
@@ -88,7 +103,11 @@ Message: "${text}"`;
   }
 
   // Fallback: use heuristic result rather than always returning false
-  return { intent: "chat", needsSandbox: heuristicSandbox };
+  return {
+    intent: "chat",
+    needsSandbox: heuristicSandbox,
+    externalDataOnly: heuristicDetail?.externalDataOnly,
+  };
 }
 
 export async function classifyNeedsSandbox(text: string, env: Env): Promise<boolean> {
