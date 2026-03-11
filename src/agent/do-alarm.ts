@@ -1,9 +1,12 @@
 import { shouldForcePause } from "../jobs/job-model";
 import { buildCronAlert, detectCronAlerts, postCronAlertWithFallback } from "../jobs/cron-jobs";
 import { logEvent } from "../core/observability";
+import { plan } from "../core/llm";
 import type { Env } from "../core/types";
 import type { BlobState } from "./do";
 import { rollback } from "./deploy-rollback";
+import { PiAgent } from "./pi-agent";
+import { getSecretsForInjection } from "./handlers/secrets";
 
 export function getEffectiveHeartbeatConfig(data: BlobState, env: Env): { intervalMs: number; modelCallLimit: number } {
   return {
@@ -69,11 +72,22 @@ export async function runHeartbeatAlarm(state: DurableObjectState, env: Env, dat
   let callsRemaining = maxCalls;
 
   try {
-    const runningJobs = state.storage.sql.exec(
-      "SELECT id, status, created_at, estimated_calls FROM jobs WHERE status IN ('queued', 'paused') ORDER BY created_at ASC",
+    // Fetch queued/paused jobs with all fields needed for dispatch in a single query.
+    const pendingJobs = state.storage.sql.exec(
+      "SELECT id, status, created_at, estimated_calls, current_step, tool_history, partial_outputs, sandbox_id FROM jobs WHERE status IN ('queued', 'paused') ORDER BY created_at ASC",
     );
 
-    for (const row of runningJobs) {
+    // Collect jobs to dispatch (materialise before mutating rows).
+    const toDispatch: Array<{
+      id: string;
+      status: string;
+      currentStep: string;
+      toolHistory: string;
+      partialOutputs: string;
+      sandboxId: string | undefined;
+    }> = [];
+
+    for (const row of pendingJobs) {
       if (callsRemaining <= 0) break;
       const id = String(row.id);
       const createdAt = Number(row.created_at);
@@ -86,12 +100,79 @@ export async function runHeartbeatAlarm(state: DurableObjectState, env: Env, dat
         continue;
       }
 
+      // Mark as running before dispatching — this is the concurrency guard.
+      // Because the DO is single-threaded, no other heartbeat can observe the
+      // same job as 'queued'/'paused' until after this synchronous loop finishes.
       state.storage.sql.exec(
         "UPDATE jobs SET status='running', updated_at=?, model_call_count=model_call_count+1 WHERE id=?",
         now,
         id,
       );
       callsRemaining -= estimatedCalls;
+
+      toDispatch.push({
+        id,
+        status: String(row.status),
+        currentStep: String(row.current_step ?? ""),
+        toolHistory: String(row.tool_history ?? "[]"),
+        partialOutputs: String(row.partial_outputs ?? "[]"),
+        sandboxId: row.sandbox_id ? String(row.sandbox_id) : undefined,
+      });
+    }
+
+    // Dispatch each job to PiAgent via state.waitUntil so the alarm returns
+    // promptly and the agent work continues in the background.
+    const repo = data.repos?.[0] ?? "default";
+    const secrets = getSecretsForInjection(state.storage);
+    const repoGoals: string[] = data.goals?.[repo] ?? ["improve codebase"];
+    const verbosity = data.settings?.verbosity ?? "minimal";
+
+    for (const job of toDispatch) {
+      const { id, status, currentStep, sandboxId } = job;
+
+      const promise = (async () => {
+        try {
+          // For a fresh queued job with no prior step, derive the task from
+          // the repo's goals using the planner.  For a paused/resumed job,
+          // current_step contains the description of where it left off.
+          let userMessage: string;
+          if (currentStep) {
+            userMessage = currentStep;
+          } else {
+            // Fresh job — ask the planner what to do next given the goals.
+            userMessage = await plan(repoGoals, env).catch(() => repoGoals[0] ?? "improve codebase");
+          }
+
+          logEvent(env, "job_lifecycle", "job_dispatched", { id, status, userMessage: userMessage.slice(0, 120) });
+
+          const agent = new PiAgent(env, repo);
+          await agent.run(userMessage, {
+            sandboxId: sandboxId ?? id,
+            secrets,
+            verbosity,
+            conversationKey: id,
+          });
+
+          // Mark as completed.
+          state.storage.sql.exec(
+            "UPDATE jobs SET status='completed', updated_at=? WHERE id=?",
+            Date.now(),
+            id,
+          );
+          logEvent(env, "job_lifecycle", "job_completed", { id });
+        } catch (error) {
+          // Mark as failed so the job does not get re-dispatched indefinitely.
+          state.storage.sql.exec(
+            "UPDATE jobs SET status='failed', updated_at=? WHERE id=?",
+            Date.now(),
+            id,
+          );
+          logEvent(env, "job_lifecycle", "job_failed", { id, error: String(error) });
+        }
+      })();
+
+      // Non-blocking: let the alarm return while agent work continues.
+      state.waitUntil(promise);
     }
 
     const today = new Date().toISOString().slice(0, 10);
@@ -107,8 +188,6 @@ export async function runHeartbeatAlarm(state: DurableObjectState, env: Env, dat
       data.deployMonitoring.remainingHeartbeats -= 1;
       data.deployMonitoring.consecutiveFailures = 0;
     }
-
-
 
     data.heartbeat = {
       ...(data.heartbeat ?? {}),
