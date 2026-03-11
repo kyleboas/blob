@@ -129,6 +129,12 @@ function makeEnv() {
           if (path === "/daily-tokens" && init?.method === "POST") {
             return Response.json({ totalTokens: 1 });
           }
+          if (path === "/process-message" && init?.method === "POST") {
+            const { processSlackMessage } = await import("../integrations/slack-message-processing-mock");
+            const body = JSON.parse(String(init.body));
+            await processSlackMessage(body, env);
+            return new Response("OK");
+          }
           return new Response("not found", { status: 404 });
         },
       }),
