@@ -242,6 +242,8 @@ test("verification skipped when VERIFY_COMMAND is not set", async () => {
     callCount += 1;
     return { content: "All done.", toolCalls: [] };
   };
+  // Mock the intent classifier so it doesn't make its own LLM call
+  (agent as any).shouldRequireSandboxForMessage = async () => false;
 
   const result = await agent.run("hello");
   assert.equal(result, "All done.");
