@@ -20,3 +20,6 @@ new_sqlite_classes = ["Sandbox"]
 
 [observability.logs]
 enabled = true
+
+[[tail_consumers]]
+service = "blob-tail"

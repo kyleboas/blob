@@ -25,6 +25,9 @@ tag = "v3"
 [observability.logs]
 enabled = true
 
+[[tail_consumers]]
+service = "blob-tail"
+
 [triggers]
 crons = ["*/15 * * * *", "0 */6 * * *", "30 */6 * * *", "0 4 * * *", "15 */2 * * *"]
 

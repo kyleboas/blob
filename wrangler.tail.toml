@@ -1,0 +1,8 @@
+name = "blob-tail"
+main = "src/tail-worker.ts"
+compatibility_date = "2026-02-19"
+
+# Reuses the existing R2 bucket. Logs are written to logs/YYYY-MM-DD.jsonl.
+[[r2_buckets]]
+binding = "LOG_STORE"
+bucket_name = "blob-repo-store"
