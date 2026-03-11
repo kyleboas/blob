@@ -247,6 +247,71 @@ test("bootstrap script includes clone and update logic", () => {
   assert.match(script, /origin\/master/);
 });
 
+
+
+test("bootstrap restores and refreshes repo cache via R2", async () => {
+  __resetSandboxSessionsForTests();
+  const originalFetch = globalThis.fetch;
+  const execCommands: string[] = [];
+  const writes: string[] = [];
+  const putCalls: Array<{ key: string; bytes: Uint8Array }> = [];
+
+  const cachedBytes = new TextEncoder().encode("cached-repo");
+
+  const { env } = makeEnv({
+    SANDBOX: {
+      start: async () => {},
+      exec: async (command: string) => {
+        execCommands.push(command);
+        if (command.includes("ls '/tmp/project.repo-cache.part.'* | wc -l")) {
+          return { stdout: "1\n", stderr: "", exitCode: 0 };
+        }
+        return { stdout: "ok", stderr: "", exitCode: 0 };
+      },
+      writeFile: async (path: string, content: string) => {
+        writes.push(path);
+      },
+      readFile: async (path: string) => {
+        if (path === "/tmp/project.repo-cache.part.0000") {
+          return "Y2FjaGVkLXJlcG8=";
+        }
+        return "ok";
+      },
+    },
+    REPO_STORE: {
+      get: async (key: string) =>
+        key === "repo-cache/project.tar.gz"
+          ? ({ arrayBuffer: async () => cachedBytes.buffer } as R2ObjectBody)
+          : null,
+      put: async (key: string, value: ReadableStream | ArrayBuffer | ArrayBufferView | string | Blob) => {
+        putCalls.push({ key, bytes: new Uint8Array(value as Uint8Array) });
+      },
+    },
+  });
+
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    const message =
+      calls === 1
+        ? { content: '', tool_calls: [{ function: { name: 'read', arguments: '{\"path\":\"README.md\"}' } }] }
+        : { content: "done" };
+    return new Response(JSON.stringify({ choices: [{ message }] }), { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const agent = new PiAgent(env, "owner/project");
+    const result = await agent.run("test", { sandboxId: "cache-hit" });
+    assert.equal(result, "done");
+    assert.ok(execCommands.some((command) => command.includes("base64 -d '/tmp/project.tar.gz.b64' > '/tmp/project.tar.gz'")));
+    assert.ok(execCommands.some((command) => command.includes("git fetch --depth=1 --prune origin")));
+    assert.ok(execCommands.some((command) => command.includes("tar -czf - '/workspace/project'")));
+    assert.ok(writes.some((path) => path.startsWith("/tmp/project.tar.gz.b64.part.")));
+    assert.ok(putCalls.some((call) => call.key === "repo-cache/project.tar.gz"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 test("agent bootstraps once before first tool call", async () => {
   __resetSandboxSessionsForTests();
   const originalFetch = globalThis.fetch;
