@@ -241,8 +241,8 @@ test("agent tools use repo-specific workspace root", async () => {
 
 test("bootstrap script includes clone and update logic", () => {
   const script = __piAgentTestUtils.buildBootstrapScript("project", "owner/project");
-  assert.match(script, /git clone 'https:\/\/github.com\/owner\/project.git' '\/workspace\/project'/);
-  assert.match(script, /git fetch --prune origin/);
+  assert.match(script, /git clone --depth=1 'https:\/\/github.com\/owner\/project.git' '\/workspace\/project'/);
+  assert.match(script, /git fetch --depth=1 --prune origin/);
   assert.match(script, /git reset --hard origin\/main/);
   assert.match(script, /origin\/master/);
 });
