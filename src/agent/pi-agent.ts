@@ -279,12 +279,162 @@ Use structured tool calls via the provided tool schema whenever you need to exec
 Stop when done and provide a concise summary.`;
   }
 
+  // Upload the workspace repo directory as a gzipped tarball to R2 for cold-start caching.
+  // The tarball is read from the sandbox in 5MB binary chunks (base64-encoded so they transit as
+  // text through the exec stdout), decoded on the worker side, and combined into a single
+  // ArrayBuffer before being written to R2.
+  private async uploadRepoCache(sandboxId: string): Promise<void> {
+    if (!this.env.REPO_STORE) return;
+
+    const tarPath = `/tmp/blob-cache-${this.repoDir}.tar.gz`;
+    const cacheKey = `repo-cache/${this.repoDir}.tar.gz`;
+
+    // Create tarball inside the sandbox
+    const createResult = await executeInSandbox(
+      `tar -czf ${shellQuote(tarPath)} -C /workspace ${shellQuote(this.repoDir)} 2>/dev/null && echo OK`,
+      this.env,
+      { sandboxId, timeout: 120000 },
+    );
+    if (createResult.exitCode !== 0 || !createResult.stdout.includes("OK")) {
+      throw new Error(`Cache tar create failed: ${summarizeText(createResult.stderr || createResult.stdout)}`);
+    }
+
+    // Determine tarball size so we know how many chunks to read
+    const sizeResult = await executeInSandbox(
+      `stat -c%s ${shellQuote(tarPath)} 2>/dev/null || wc -c < ${shellQuote(tarPath)}`,
+      this.env,
+      { sandboxId },
+    );
+    const totalBytes = Number.parseInt(sizeResult.stdout.trim(), 10);
+    if (!Number.isFinite(totalBytes) || totalBytes <= 0) {
+      throw new Error("Could not stat repo cache tarball");
+    }
+
+    // Read the tarball in 5MB binary chunks via dd → base64 so the output is safe as a string.
+    // maxOutputBytes is set to 8MB per chunk (~6.7MB base64 for a 5MB binary chunk).
+    const CHUNK_MB = 5;
+    const CHUNK_BYTES = CHUNK_MB * 1024 * 1024;
+    const numChunks = Math.ceil(totalBytes / CHUNK_BYTES);
+    const chunkArrays: Uint8Array[] = [];
+
+    for (let i = 0; i < numChunks; i++) {
+      const chunkResult = await executeInSandbox(
+        `dd if=${shellQuote(tarPath)} bs=${CHUNK_MB}M skip=${i} count=1 2>/dev/null | base64 -w 0`,
+        this.env,
+        { sandboxId, timeout: 60000, maxOutputBytes: 8 * 1024 * 1024 },
+      );
+      const b64 = chunkResult.stdout.trim();
+      if (!b64) continue;
+
+      const binary = atob(b64);
+      const chunk = new Uint8Array(binary.length);
+      for (let j = 0; j < binary.length; j++) {
+        chunk[j] = binary.charCodeAt(j);
+      }
+      chunkArrays.push(chunk);
+    }
+
+    if (chunkArrays.length === 0) {
+      throw new Error("Repo cache tarball produced no data");
+    }
+
+    // Combine chunks into a single ArrayBuffer and upload to R2
+    const totalSize = chunkArrays.reduce((s, c) => s + c.length, 0);
+    const combined = new Uint8Array(totalSize);
+    let offset = 0;
+    for (const c of chunkArrays) {
+      combined.set(c, offset);
+      offset += c.length;
+    }
+
+    await this.env.REPO_STORE.put(cacheKey, combined.buffer);
+
+    // Cleanup temp file — non-fatal if it fails
+    executeInSandbox(`rm -f ${shellQuote(tarPath)}`, this.env, { sandboxId }).catch(() => {});
+  }
+
+  // Restore the workspace repo directory from an R2-cached tarball.
+  // The tarball is downloaded as binary, split into 4MB chunks, base64-encoded per chunk, and
+  // written to the sandbox as text files before being decoded and extracted.  Returns true when
+  // extraction succeeded (the caller can then run git fetch+reset instead of git clone).
+  private async restoreRepoFromCache(sandboxId: string): Promise<boolean> {
+    if (!this.env.REPO_STORE) return false;
+
+    const cacheKey = `repo-cache/${this.repoDir}.tar.gz`;
+    const obj = await this.env.REPO_STORE.get(cacheKey);
+    if (!obj) return false;
+
+    const buf = await obj.arrayBuffer();
+    if (!buf || buf.byteLength === 0) return false;
+
+    const bytes = new Uint8Array(buf);
+    const tarPath = `/tmp/blob-cache-${this.repoDir}.tar.gz`;
+    const b64Path = `/tmp/blob-cache-${this.repoDir}.b64`;
+
+    // Write the binary to the sandbox in 4MB chunks encoded as base64 text, then decode+append
+    // to reconstruct the tarball.  Encoding each chunk independently and appending the decoded
+    // output is correct because base64 encodes/decodes in multiples of 3-byte input groups and
+    // each chunk boundary lands on a whole byte.
+    const CHUNK_BYTES = 4 * 1024 * 1024;
+    let first = true;
+
+    for (let pos = 0; pos < bytes.length; pos += CHUNK_BYTES) {
+      const chunk = bytes.subarray(pos, Math.min(pos + CHUNK_BYTES, bytes.length));
+
+      // Encode this chunk as base64 using 8KB sub-batches to avoid spread stack overflow
+      const ENC_BATCH = 8192;
+      let b64 = "";
+      for (let i = 0; i < chunk.length; i += ENC_BATCH) {
+        b64 += btoa(String.fromCharCode(...chunk.subarray(i, Math.min(i + ENC_BATCH, chunk.length))));
+      }
+
+      // Write base64 text to a temp file in the sandbox, then decode and append to the tarball
+      await this.env.SANDBOX.writeFile(b64Path, b64);
+      const appendCmd = first
+        ? `base64 -d ${shellQuote(b64Path)} > ${shellQuote(tarPath)}`
+        : `base64 -d ${shellQuote(b64Path)} >> ${shellQuote(tarPath)}`;
+      const appendResult = await executeInSandbox(appendCmd, this.env, { sandboxId, timeout: 60000 });
+      if (appendResult.exitCode !== 0) return false;
+      first = false;
+    }
+
+    // Extract the tarball into /workspace
+    const extractResult = await executeInSandbox(
+      `mkdir -p /workspace && tar -xzf ${shellQuote(tarPath)} -C /workspace 2>&1` +
+        ` && rm -f ${shellQuote(tarPath)} ${shellQuote(b64Path)} && echo OK`,
+      this.env,
+      { sandboxId, timeout: 120000 },
+    );
+
+    return extractResult.exitCode === 0 && extractResult.stdout.includes("OK");
+  }
+
   private async ensureRepoBootstrapped(
     sandboxId: string,
     onProgress?: RunOptions["onProgress"],
     verbosity: RunOptions["verbosity"] = "minimal",
   ): Promise<void> {
     await ensureSandboxSession(sandboxId, this.env);
+
+    // Attempt to warm the workspace from the R2 cache before running the bootstrap script.
+    // If the cache is present and extracted successfully the .git directory will already exist,
+    // so buildBootstrapScript will take the fast path (git fetch + reset) instead of git clone.
+    // Any failure here is fully caught — we fall back to a normal clone.
+    let cacheHit = false;
+    try {
+      cacheHit = await this.restoreRepoFromCache(sandboxId);
+      if (cacheHit && verbosity === "verbose" && onProgress) {
+        await onProgress(`Restored /workspace/${this.repoDir} from R2 cache`);
+      }
+    } catch (err) {
+      logEvent(this.env, "bootstrap", "cache_restore_failed", { error: String(err) });
+      // Remove any partial extraction so the clone step starts clean
+      await executeInSandbox(
+        `rm -rf ${shellQuote(`/workspace/${this.repoDir}`)}`,
+        this.env,
+        { sandboxId },
+      ).catch(() => {});
+    }
 
     const result = await executeInSandbox(buildBootstrapScript(this.repoDir, this.repo), this.env, {
       sandboxId,
@@ -301,6 +451,15 @@ Stop when done and provide a concise summary.`;
     if (result.exitCode !== 0) {
       const excerpt = summarizeText(result.stderr || result.stdout || "unknown bootstrap error");
       throw new Error(`repo bootstrap failed (${this.repoDir}): ${excerpt}`);
+    }
+
+    // Re-upload a fresh cache after every successful bootstrap so it stays current.
+    // A cache-miss on first run naturally triggers the initial upload here.
+    // Failure is non-fatal — bootstrap succeeds regardless.
+    try {
+      await this.uploadRepoCache(sandboxId);
+    } catch (err) {
+      logEvent(this.env, "bootstrap", "cache_upload_failed", { error: String(err) });
     }
 
     await this.ensureToolFramework(sandboxId);
