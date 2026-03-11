@@ -16,6 +16,7 @@ import { getSecretsForInjection, handleDeleteSecret, handleListSecrets, handleSa
 import { handleGetHeartbeatSettings, handleGetVerbosity, handleSetHeartbeatSettings, handleSetVerbosity } from "./handlers/settings";
 import { handleGetDeployApproval, handleUpdateDeployApproval } from "./handlers/deploy-approval";
 import { handleRecordOutcome, handleGetScoringConfig } from "./handlers/self-improve";
+import { handleProcessMessage } from "./handlers/slack-message";
 
 export type RouterCtx = {
   state: DurableObjectState;
@@ -217,6 +218,10 @@ export async function routeRequest(
 
   if (pathname === "/self-improve/config" && method === "GET") {
     return handleGetScoringConfig(ctx);
+  }
+
+  if (pathname === "/process-message" && method === "POST") {
+    return handleProcessMessage(request, ctx);
   }
 
   return new Response("Not found", { status: 404 });
