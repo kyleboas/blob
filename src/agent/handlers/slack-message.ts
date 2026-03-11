@@ -112,15 +112,46 @@ export async function handleProcessMessage(request: Request, ctx: RouterCtx): Pr
   }
 
   const intent = await classifyIntent(body.event.text, env);
-  await processIntentOrChat({
-    body,
-    intent,
-    env,
-    conversationDO,
-    conversationKey: key,
-    postToSlack,
-    formatSlackError,
-  });
+
+  // Wrap processIntentOrChat in a timeout so the DO posts a fallback before being killed.
+  // Cloudflare DOs have a wall-clock limit; if we exceed it silently the user gets no response.
+  // Default: 85s (safely under the ~100s observed limit, with headroom for the Slack post itself).
+  const timeoutMs = Number.parseInt(env.MESSAGE_TIMEOUT_MS ?? "85000", 10);
+  const channel = body.event?.channel;
+
+  const timeoutPromise = new Promise<void>((_, reject) =>
+    setTimeout(() => reject(new Error(`message_timeout_${timeoutMs}ms`)), timeoutMs),
+  );
+
+  try {
+    await Promise.race([
+      processIntentOrChat({
+        body,
+        intent,
+        env,
+        conversationDO,
+        conversationKey: key,
+        postToSlack,
+        formatSlackError,
+      }),
+      timeoutPromise,
+    ]);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.startsWith("message_timeout_") && channel) {
+      const logRef = createLogRef("slack");
+      logEvent(env, "slack_ingest", "message_timeout", { channel, timeoutMs }, logRef);
+      await postToSlack(
+        channel,
+        `⏱️ This request is taking longer than expected. I'm still working on it — please try again in a moment if you don't hear back. (ref: ${logRef})`,
+        env,
+      ).catch(() => {});
+    } else if (channel) {
+      const logRef = createLogRef("slack");
+      logEvent(env, "slack_ingest", "process_message_failed", { error: msg, channel }, logRef);
+      await postToSlack(channel, `❌ ${formatSlackError("Unable to process message.", logRef)}`, env).catch(() => {});
+    }
+  }
 
   return new Response("OK");
 }

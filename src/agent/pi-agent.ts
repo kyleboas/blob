@@ -53,6 +53,8 @@ interface RunOptions {
   conversationHistory?: Array<{ role: string; content: string }>;
   conversationKey?: string;
   secrets?: Record<string, string>;
+  /** Skip git clone/repo bootstrap. Use for tasks that only need bash (e.g. curl for external data). Sandbox still runs. */
+  skipRepoBootstrap?: boolean;
 }
 
 interface SelfTestOptions {
@@ -847,15 +849,20 @@ fi
 
       if (!bootstrapAttempted) {
         bootstrapAttempted = true;
-        try {
-          await this.ensureRepoBootstrapped(sandboxId, opts.onProgress, verbosity);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          const failure = `Bootstrap failed: ${message}`;
-          if (opts.onProgress && verbosity === "verbose") {
-            await opts.onProgress(`⚠️ ${failure}`);
+        if (opts.skipRepoBootstrap) {
+          // Bare sandbox — just ensure the session is alive, skip git clone.
+          await ensureSandboxSession(sandboxId, this.env);
+        } else {
+          try {
+            await this.ensureRepoBootstrapped(sandboxId, opts.onProgress, verbosity);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            const failure = `Bootstrap failed: ${message}`;
+            if (opts.onProgress && verbosity === "verbose") {
+              await opts.onProgress(`⚠️ ${failure}`);
+            }
+            return this.finishRun(userMessage, failure, conversationKey, sandboxId);
           }
-          return this.finishRun(userMessage, failure, conversationKey, sandboxId);
         }
       }
 

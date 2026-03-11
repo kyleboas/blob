@@ -57,6 +57,7 @@ export interface Env {
   VERIFY_COMMAND?: string;
   VERIFY_MAX_ATTEMPTS?: string;
   TOOL_EXPIRY_DAYS?: string;
+  MESSAGE_TIMEOUT_MS?: string;
 
   AUTORESEARCH_REPO?: string;
   AUTORESEARCH_BRANCH?: string;
