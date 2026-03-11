@@ -209,6 +209,7 @@ export class PiAgent {
   private messages: PiMessage[];
   private repoDir: string;
   private activeSecrets: Record<string, string> = {};
+  private skipRepoBootstrap = false;
 
   constructor(
     private env: Env,
@@ -442,7 +443,9 @@ fi
             );
             return { output: `Edited ${String(call.args.path ?? "")}` };
           case "bash": {
-            const workspaceRoot = `/workspace/${this.repoDir}`;
+            // When skipRepoBootstrap is set, don't force a cd to the workspace dir
+            // (it doesn't exist). Run the command in the sandbox root instead.
+            const workspaceRoot = this.skipRepoBootstrap ? undefined : `/workspace/${this.repoDir}`;
             const result = await executeInSandbox(String(call.args.command ?? ""), this.env, { sandboxId, workspaceRoot, envVars: this.activeSecrets });
             return { output: result.stdout, error: result.stderr || undefined };
           }
@@ -851,6 +854,7 @@ fi
         bootstrapAttempted = true;
         if (opts.skipRepoBootstrap) {
           // Bare sandbox — just ensure the session is alive, skip git clone.
+          this.skipRepoBootstrap = true;
           await ensureSandboxSession(sandboxId, this.env);
         } else {
           try {
