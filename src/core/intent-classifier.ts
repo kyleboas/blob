@@ -1,5 +1,6 @@
 import { logEvent } from "./observability";
-import { WORKERS_AI_FALLBACK_MODEL } from "./models";
+import { callLLM } from "./llm";
+import { WORKERS_AI_GATEWAY_MODEL } from "./models";
 import type { Env } from "./types";
 
 export interface IntentResult {
@@ -35,11 +36,8 @@ Respond with ONLY a JSON object in this format:
 Message: "${text}"`;
 
   try {
-    const result = await env.AI.run(WORKERS_AI_FALLBACK_MODEL, {
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 200,
-    }) as { response?: string };
-    const jsonMatch = (result.response ?? "").match(/\{[\s\S]*\}/);
+    const response = await callLLM([{ role: "user", content: prompt }], env, { maxTokens: 200, model: WORKERS_AI_GATEWAY_MODEL });
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       return JSON.parse(jsonMatch[0]) as IntentResult;
     }

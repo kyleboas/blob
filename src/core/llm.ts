@@ -157,8 +157,11 @@ async function callLLMRaw(
 export async function callLLM(
   messages: Array<{ role: string; content: string }>,
   env: Env,
-  opts: { maxTokens?: number } = {}
+  opts: { maxTokens?: number; model?: string } = {}
 ): Promise<string> {
+  if (opts.model) {
+    return callLLMRaw(messages, opts.model, opts.maxTokens ?? 8192, env);
+  }
   const result = await callLLMWithModelSelection(messages, env, opts);
   return result.content;
 }
