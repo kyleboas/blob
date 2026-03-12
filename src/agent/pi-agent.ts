@@ -3,7 +3,7 @@ import { DEFAULT_MODEL, WORKERS_AI_FALLBACK_MODEL } from "../core/models";
 import { appendWorkspaceState, editTool, ensureSandboxSession, executeInSandbox, readTool, writeTool } from "../integrations/sandbox";
 import { logEvent } from "../core/observability";
 import { estimateTokens } from "../core/tokens";
-import { classifyNeedsSandbox } from "../core/intent-classifier";
+import { classifyIntent } from "../core/intent-classifier";
 import { withDOAuth } from "../core/do-auth";
 import { expireUnusedTools } from "./tool-lifecycle";
 import {
@@ -883,9 +883,10 @@ fi
     }
   }
 
-  private async shouldRequireSandboxForMessage(userMessage: string): Promise<boolean> {
+  private async shouldForceExternalToolForMessage(userMessage: string): Promise<boolean> {
     try {
-      return await classifyNeedsSandbox(userMessage, this.env);
+      const result = await classifyIntent(userMessage, this.env);
+      return result.intent === "chat" && result.needsSandbox === true && result.externalDataOnly === true;
     } catch (_err) {
       return false;
     }
@@ -912,7 +913,7 @@ fi
     let verifyAttempts = 0;
     let toolCallsExecuted = 0;
     let externalDataGuardAttempts = 0;
-    let needsSandboxForMessage: boolean | null = null;
+    let shouldForceExternalTool: boolean | null = null;
     const maxVerifyAttempts = Number.parseInt(this.env.VERIFY_MAX_ATTEMPTS ?? "3", 10);
 
     const verbosity = opts.verbosity ?? "verbose";
@@ -965,12 +966,12 @@ fi
       const structuredToolCall = llmResponse.toolCalls.length > 0 ? parseStructuredToolCall(llmResponse.toolCalls[0]) : null;
       const toolCall = structuredToolCall;
       if (!toolCall) {
-        if (needsSandboxForMessage === null) {
-          needsSandboxForMessage = await this.shouldRequireSandboxForMessage(userMessage);
+        if (shouldForceExternalTool === null) {
+          shouldForceExternalTool = await this.shouldForceExternalToolForMessage(userMessage);
         }
         const claimedNoAccess = containsToolAvoidanceClaim(responseText);
         const shouldForceToolAttempt =
-          toolCallsExecuted === 0 && externalDataGuardAttempts < 2 && (needsSandboxForMessage || claimedNoAccess);
+          toolCallsExecuted === 0 && externalDataGuardAttempts < 1 && (shouldForceExternalTool || claimedNoAccess);
         if (shouldForceToolAttempt) {
           externalDataGuardAttempts += 1;
           this.messages.push({ role: "assistant", content: responseText });

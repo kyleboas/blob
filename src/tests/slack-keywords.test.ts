@@ -224,7 +224,7 @@ test("sandbox chat still posts a fallback Slack message when agent final text is
     if (inputs.messages) {
       const user = inputs.messages.find((m) => m.role === "user")?.content ?? "";
       if (user.includes("intent classifier")) {
-        return { response: '{"intent":"chat","needsSandbox":true}' };
+        return { response: '{"intent":"chat","needsSandbox":true,"externalDataOnly":true}' };
       }
       return { response: "" };
     }
@@ -273,12 +273,14 @@ test("sandbox chat still posts final result when verbose progress Slack posts fa
   });
 
   const originalFetch = globalThis.fetch;
-  let postCount = 0;
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     if (String(url).includes("slack.com/api/chat.postMessage")) {
-      postCount += 1;
       const body = JSON.parse(String(init?.body)) as { text: string };
-      if (postCount < 3) {
+      const isProgressMessage =
+        body.text.startsWith("Progress update:")
+        || body.text.includes("External/fresh-data request detected")
+        || body.text.includes("Bootstrap ready");
+      if (isProgressMessage) {
         return Response.json({ ok: false, error: "ratelimited" }, { status: 200 });
       }
       posts.push(body.text);
@@ -291,7 +293,7 @@ test("sandbox chat still posts final result when verbose progress Slack posts fa
     if (inputs.messages) {
       const user = [...inputs.messages].reverse().find((m) => m.role === "user")?.content ?? "";
       if (user.includes("intent classifier")) {
-        return { response: '{"intent":"chat","needsSandbox":true}' };
+        return { response: '{"intent":"chat","needsSandbox":true,"externalDataOnly":true}' };
       }
       if (user.includes("Before finalizing, use an available tool")) {
         return { response: "Final answer from model after tool call." };
