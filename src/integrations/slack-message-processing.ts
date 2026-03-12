@@ -163,13 +163,33 @@ export async function processIntentOrChat(params: {
       const agent = new PiAgent(env, repo);
       const verbosity = await getConversationVerbosity(conversationDO, env);
       const secrets = await getSecretsForInjection(env);
+      const postProgressSafe = async (message: string): Promise<void> => {
+        try {
+          await postToSlack(channel, message, env);
+        } catch (err) {
+          logEvent(env, "slack_ingest", "progress_post_failed", { error: String(err), channel });
+        }
+      };
+
+      const postToolLedgerSafe = async (entry: { tool: string; argsSummary?: string; ok: boolean; durationMs: number; error?: string }): Promise<void> => {
+        try {
+          await postToSlack(channel, formatToolLedger(entry), env);
+        } catch (err) {
+          logEvent(env, "slack_ingest", "tool_ledger_post_failed", {
+            error: String(err),
+            channel,
+            tool: entry.tool,
+          });
+        }
+      };
+
       if (verbosity === "minimal") await postToSlack(channel, "Working…", env);
       const response = await agent.run(text, {
         conversationHistory,
         secrets,
         verbosity,
-        onProgress: verbosity === "verbose" ? (msg: string) => postToSlack(channel, msg, env) : undefined,
-        onToolLedger: verbosity === "verbose" ? (entry) => postToSlack(channel, formatToolLedger(entry), env) : undefined,
+        onProgress: verbosity === "verbose" ? postProgressSafe : undefined,
+        onToolLedger: verbosity === "verbose" ? postToolLedgerSafe : undefined,
         conversationKey,
         // Skip repo clone for tasks that only need bash/curl (e.g. weather, news, prices).
         // The sandbox still runs; we just skip the git clone step to save 30-40s.

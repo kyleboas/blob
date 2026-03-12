@@ -261,6 +261,64 @@ test("sandbox chat still posts a fallback Slack message when agent final text is
   }
 });
 
+
+
+test("sandbox chat still posts final result when verbose progress Slack posts fail", async () => {
+  const { env, posts } = makeEnv();
+  const key = "T1:C1:channel";
+  await env.AGENT_DO.get(env.AGENT_DO.idFromName(key)).fetch("http://do/settings/verbosity", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ verbosity: "verbose" }),
+  });
+
+  const originalFetch = globalThis.fetch;
+  let postCount = 0;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes("slack.com/api/chat.postMessage")) {
+      postCount += 1;
+      const body = JSON.parse(String(init?.body)) as { text: string };
+      if (postCount < 3) {
+        return Response.json({ ok: false, error: "ratelimited" }, { status: 200 });
+      }
+      posts.push(body.text);
+      return Response.json({ ok: true });
+    }
+    return new Response("unexpected", { status: 500 });
+  }) as typeof fetch;
+
+  env.AI.run = async (_model: string, inputs: { messages?: Array<{ role: string; content: string }>; text?: string }) => {
+    if (inputs.messages) {
+      const user = [...inputs.messages].reverse().find((m) => m.role === "user")?.content ?? "";
+      if (user.includes("intent classifier")) {
+        return { response: '{"intent":"chat","needsSandbox":true}' };
+      }
+      if (user.includes("Before finalizing, use an available tool")) {
+        return { response: "Final answer from model after tool call." };
+      }
+      return { response: '{"tool":"bash","args":{"command":"echo done"}}' };
+    }
+    return { data: [[0.1, 0.2, 0.3]] };
+  };
+
+  try {
+    const req = new Request("https://example.com/slack/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "event_callback",
+        event_id: "E-progress-fail",
+        team_id: "T1",
+        event: { type: "message", text: "Who is the President", channel: "C1", ts: "9" },
+      }),
+    });
+
+    await handleSlackEvent(req, env);
+    assert.ok(posts.includes("Final answer from model after tool call."));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 test("selftest command runs full workflow and posts result", async () => {
   const { env, posts } = makeEnv();
   const originalFetch = globalThis.fetch;
