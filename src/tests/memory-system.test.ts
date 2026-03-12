@@ -5,6 +5,7 @@ import {
   applyRetention,
   appendDailyLearned,
   compactScope,
+  embedText,
   flushLearnedBeforeCompaction,
   parseLearnedJsonl,
   recallMemory,
@@ -173,6 +174,28 @@ test("reconcileMemory deletes orphan vectors and reindexes unindexed items", asy
   assert.equal(result.reindexed, 1);
   assert.deepEqual(deleted, ["orphan"]);
   assert.equal(upserted, 1);
+});
+
+test("embedText throttles calls when INGEST_EMBED_DELAY_MS is set", async () => {
+  let callCount = 0;
+  const env = makeEnv({
+    AI: {
+      run: async () => {
+        callCount += 1;
+        return { data: [[0.1, 0.2]] };
+      },
+    },
+    INGEST_EMBED_DELAY_MS: "50",
+  });
+
+  const start = Date.now();
+  await embedText(env, "first");
+  await embedText(env, "second");
+  const elapsed = Date.now() - start;
+
+  assert.equal(callCount, 2);
+  // Two calls with a 50ms minimum gap means the second call must wait ~50ms
+  assert.ok(elapsed >= 40, `Expected elapsed >= 40ms, got ${elapsed}ms`);
 });
 
 test("appendDailyLearned appends entries and uploads to R2", async () => {

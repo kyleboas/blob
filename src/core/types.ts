@@ -52,6 +52,7 @@ export interface Env {
   RATE_LIMIT_WINDOW_MS?: string;
   RATE_LIMIT_MAX_MESSAGES?: string;
   CONTENT_SCAN_TIMEOUT_MS?: string;
+  INGEST_EMBED_DELAY_MS?: string;
   MAX_CONSECUTIVE_TOOL_FAILURES?: string;
   LLM_MODEL?: string;
   VERIFY_COMMAND?: string;
