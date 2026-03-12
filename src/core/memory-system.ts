@@ -40,8 +40,21 @@ function parseMemoryItem(value: unknown): MemoryItem {
   return value as MemoryItem;
 }
 
+// Per-execution rate limiter: tracks the last embed call time so bulk ingest
+// loops can throttle themselves and avoid 429 Too Many Requests errors.
+let _lastEmbedAt = 0;
+
 export async function embedText(env: Env, text: string): Promise<number[] | null> {
   if (!env.AI) return null;
+  const delayMs = Number.parseInt(env.INGEST_EMBED_DELAY_MS ?? "0", 10);
+  if (delayMs > 0) {
+    const now = Date.now();
+    const wait = delayMs - (now - _lastEmbedAt);
+    if (_lastEmbedAt > 0 && wait > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, wait));
+    }
+    _lastEmbedAt = Date.now();
+  }
   try {
     const response = await env.AI.run("@cf/baai/bge-small-en-v1.5", { text }) as { data?: number[][] };
     return response.data?.[0] ?? null;
