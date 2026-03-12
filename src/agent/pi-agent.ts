@@ -201,6 +201,14 @@ function chunkString(input: string, chunkSize: number): string[] {
   return chunks;
 }
 
+function buildCurrentDateTimeMessage(): PiMessage {
+  const nowIso = new Date().toISOString();
+  return {
+    role: "system",
+    content: `Current date/time (UTC): ${nowIso}. Treat this as the authoritative current timestamp for time-sensitive requests.`,
+  };
+}
+
 function buildBootstrapScript(repoDir: string, repo: string): string {
   const workspaceRoot = `/workspace/${repoDir}`;
   const hasRepoSlug = repo.includes("/");
@@ -502,6 +510,7 @@ fi
   }
 
   private async callLLM(): Promise<LLMResponse> {
+    const messagesWithCurrentDateTime = [...this.messages, buildCurrentDateTimeMessage()];
     if (this.env.AI_GATEWAY_BASE_URL && this.env.AI_GATEWAY_TOKEN) {
       const baseUrl = this.env.AI_GATEWAY_BASE_URL.replace(/\/$/, "");
       const url = baseUrl.endsWith("/chat/completions") ? baseUrl : `${baseUrl}/chat/completions`;
@@ -516,7 +525,12 @@ fi
               "content-type": "application/json",
               Authorization: `Bearer ${this.env.AI_GATEWAY_TOKEN}`,
             },
-            body: JSON.stringify({ model: this.env.LLM_MODEL ?? DEFAULT_MODEL, messages: this.messages, tools: TOOL_SCHEMAS, max_tokens: 4096 }),
+            body: JSON.stringify({
+              model: this.env.LLM_MODEL ?? DEFAULT_MODEL,
+              messages: messagesWithCurrentDateTime,
+              tools: TOOL_SCHEMAS,
+              max_tokens: 4096,
+            }),
           });
 
           if (!response.ok) {
@@ -559,7 +573,7 @@ fi
       throw new Error("Neither AI Gateway nor Workers AI available");
     }
     const result = await ai.run(WORKERS_AI_FALLBACK_MODEL, {
-      messages: this.messages,
+      messages: messagesWithCurrentDateTime,
       max_tokens: 4096,
     });
     return {

@@ -54,6 +54,36 @@ test("structured tool-call parser handles valid and invalid payloads", () => {
 });
 
 
+test("callLLM appends current UTC date/time to tool-enabled model calls", async () => {
+  const env = makeEnv({
+    AI_GATEWAY_BASE_URL: "https://gateway.example",
+    AI_GATEWAY_TOKEN: "x",
+  });
+  const agent = new PiAgent(env, "acme/repo");
+
+  const originalFetch = globalThis.fetch;
+  let capturedMessages: Array<{ role: string; content: string }> = [];
+
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ role: string; content: string }> };
+    capturedMessages = body.messages ?? [];
+    return new Response(JSON.stringify({ choices: [{ message: { content: "Done.", tool_calls: [] } }] }), { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const response = await (agent as any).callLLM();
+    assert.equal(response.content, "Done.");
+    const currentTimeMessage = capturedMessages[capturedMessages.length - 1];
+    assert.equal(currentTimeMessage?.role, "system");
+    assert.match(currentTimeMessage?.content ?? "", /^Current date\/time \(UTC\): [^\s]+\. Treat this as the authoritative current timestamp for time-sensitive requests\.$/);
+
+    const isoTimestamp = (currentTimeMessage?.content ?? "").replace(/^Current date\/time \(UTC\): /, "").replace(/\. Treat this as the authoritative current timestamp for time-sensitive requests\.$/, "");
+    assert.equal(Number.isNaN(Date.parse(isoTimestamp)), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 
 test("tool-avoidance claim detector catches no-access language", () => {
   assert.equal(__piAgentTestUtils.containsToolAvoidanceClaim("I don't have access to real-time weather data."), true);
