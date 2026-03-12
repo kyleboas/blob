@@ -12,8 +12,6 @@ export interface IntentResult {
   search?: string;
 }
 
-
-
 export async function classifyIntent(text: string, env: Env): Promise<IntentResult> {
 
 
@@ -41,7 +39,9 @@ For "delete_cron", extract:
 - search: Keywords to find the job to delete (e.g., "email", "test", "backup")
 
 Respond with ONLY a JSON object in this format:
-{"intent": "list_cron|add_cron|delete_cron|chat", "needsSandbox": true|false, "schedule": "...", "task": "...", "search": "..."}
+{"intent": "list_cron|add_cron|delete_cron|chat", "needsSandbox": true|false, "externalDataOnly": true|false, "schedule": "...", "task": "...", "search": "..."}
+
+Set externalDataOnly=true only when this is a chat request that needs sandbox access solely to fetch external/fresh data (typically via bash/curl/API) and does NOT require repository reads/writes/tests.
 
 Message: "${text}"`;
 
@@ -50,6 +50,10 @@ Message: "${text}"`;
     const jsonMatch = response.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const result = JSON.parse(jsonMatch[0]) as IntentResult;
+
+      if (result.intent === "chat" && result.needsSandbox === true && typeof result.externalDataOnly !== "boolean") {
+        result.externalDataOnly = false;
+      }
 
       return result;
     }
