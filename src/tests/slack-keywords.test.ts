@@ -218,6 +218,43 @@ test("status with extra text is treated as normal chat", async () => {
   }
 });
 
+test("repo connectivity question is answered directly without sandbox work", async () => {
+  const { env, posts } = makeEnv();
+  let sandboxStarted = false;
+  env.SANDBOX.start = async () => {
+    sandboxStarted = true;
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes("slack.com/api/chat.postMessage")) {
+      const body = JSON.parse(String(init?.body)) as { text: string };
+      posts.push(body.text);
+      return Response.json({ ok: true });
+    }
+    return new Response("unexpected", { status: 500 });
+  }) as typeof fetch;
+
+  try {
+    const req = new Request("https://example.com/slack/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "event_callback",
+        event_id: "E-repo",
+        team_id: "T1",
+        event: { type: "message", text: "What repo are you connected to right now?", channel: "C1", ts: "3" },
+      }),
+    });
+
+    await handleSlackEvent(req, env);
+    assert.equal(posts[0], "I’m currently connected to owner/blob.");
+    assert.equal(sandboxStarted, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("sandbox chat still posts a fallback Slack message when agent final text is empty", async () => {
   const { env, posts } = makeEnv();
   env.AI.run = async (_model: string, inputs: { messages?: Array<{ role: string; content: string }>; text?: string }) => {
