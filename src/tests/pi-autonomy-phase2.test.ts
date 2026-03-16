@@ -426,13 +426,11 @@ test("runSelfTest executes tool and memory sequence", async () => {
       upsert: async (rows: Array<{ id: string; metadata?: Record<string, unknown> }>) => {
         for (const row of rows) vectors.set(row.id, row);
       },
-      query: async (_vec: number[], opts?: { filter?: Record<string, unknown> }) => {
-        const scope = opts?.filter?.conversationKey;
-        return {
-          matches: [...vectors.values()]
-            .filter((row) => row.metadata?.conversationKey === scope)
-            .map((row) => ({ id: row.id, score: 0.9, metadata: row.metadata })),
-        };
+      getByIds: async (ids: string[]) => {
+        return ids.flatMap((id) => {
+          const row = vectors.get(id);
+          return row ? [row] : [];
+        });
       },
     },
     AI: {
@@ -516,13 +514,12 @@ test("runSelfTest skips vectorize when binding is not configured", async () => {
   assert.match(result, /vectorize: skipped \(PI_VECTORS binding missing/);
 });
 
-test("runSelfTest queries vectorize with the learned summary and retries until the selftest record appears", async () => {
+test("runSelfTest polls vectorize by id until the selftest record appears", async () => {
   __resetSandboxSessionsForTests();
   const files = new Map<string, string>();
   const r2 = new Map<string, string>();
   const vectors = new Map<string, { id: string; metadata?: Record<string, unknown>; values?: number[] }>();
-  const embeddedTexts: string[] = [];
-  let queryCount = 0;
+  let getByIdsCount = 0;
 
   const env = {
     SANDBOX: {
@@ -559,31 +556,17 @@ test("runSelfTest queries vectorize with the learned summary and retries until t
       upsert: async (rows: Array<{ id: string; metadata?: Record<string, unknown>; values?: number[] }>) => {
         for (const row of rows) vectors.set(row.id, row);
       },
-      query: async (vec: number[], opts?: { filter?: Record<string, unknown> }) => {
-        queryCount += 1;
-        if (queryCount < 3) return { matches: [] };
-        const isSemanticQuery = vec[0] === 0.9 && vec[1] === 0.8;
-        if (!isSemanticQuery) return { matches: [] };
-        const scope = opts?.filter?.conversationKey;
-        return {
-          matches: [...vectors.values()]
-            .filter((row) => row.metadata?.conversationKey === scope)
-            .map((row) => ({ id: row.id, score: 0.9, metadata: row.metadata })),
-        };
+      getByIds: async (ids: string[]) => {
+        getByIdsCount += 1;
+        if (getByIdsCount < 3) return [];
+        return ids.flatMap((id) => {
+          const row = vectors.get(id);
+          return row ? [row] : [];
+        });
       },
     },
     AI: {
-      run: async (_model: string, payload: { text?: string }) => {
-        const text = String(payload.text ?? "");
-        embeddedTexts.push(text);
-        if (text.includes("Selftest learned record") && text.includes("selftest healthcheck")) {
-          return { data: [[0.9, 0.8]] };
-        }
-        if (text.startsWith("selftest-")) {
-          return { data: [[0.1, 0.2]] };
-        }
-        return { data: [[0.5, 0.5]] };
-      },
+      run: async () => ({ data: [[0.9, 0.8]] }),
     },
     AGENT_DO: {
       idFromName: (name: string) => name,
@@ -602,6 +585,5 @@ test("runSelfTest queries vectorize with the learned summary and retries until t
   });
 
   assert.match(result, /Self-test passed/i);
-  assert.ok(queryCount >= 3);
-  assert.ok(embeddedTexts.filter((text) => text.includes("Selftest learned record") && text.includes("selftest healthcheck")).length >= 2);
+  assert.ok(getByIdsCount >= 3);
 });

@@ -776,6 +776,7 @@ fi
         });
         await recordStep("vectorize", "skipped (PI_VECTORS binding missing; configure Vectorize to enable semantic recall)");
       } else {
+        const vectorIndex = this.env.PI_VECTORS;
         const upsert = await upsertSemanticMemory(this.env, {
           conversationKey,
           record,
@@ -789,31 +790,61 @@ fi
         if (!upsert.ok || !upsert.id) {
           throw new Error(`Vectorize upsert failed: ${upsert.error ?? "unknown error"}`);
         }
+        const upsertId = upsert.id;
 
-        const deadline = Date.now() + vectorQueryTimeoutMs;
-        let matches = await querySemanticMemory(this.env, {
-          conversationKey,
-          query: vectorQueryText,
-          topK: 10,
-        });
-        let matched = matches.some((entry) => entry.id === upsert.id || entry.r2Key === flushed.key);
-        while (!matched && Date.now() < deadline) {
-          await sleep(vectorQueryRetryMs);
-          matches = await querySemanticMemory(this.env, {
+        const fetchVectors = async () => {
+          if (typeof vectorIndex.getByIds === "function") {
+            const result = await vectorIndex.getByIds([upsertId]) as unknown;
+            if (Array.isArray(result)) {
+              return result;
+            }
+            if (result && typeof result === "object" && Array.isArray((result as { vectors?: unknown[] }).vectors)) {
+              return (result as { vectors: Array<{ id: string; metadata?: Record<string, unknown> }> }).vectors;
+            }
+            return [];
+          }
+          const matches = await querySemanticMemory(this.env, {
             conversationKey,
             query: vectorQueryText,
             topK: 10,
           });
-          matched = matches.some((entry) => entry.id === upsert.id || entry.r2Key === flushed.key);
+          return matches.map((entry) => ({
+            id: entry.id,
+            metadata: {
+              conversationKey: entry.conversationKey,
+              r2Key: entry.r2Key,
+              timestamp: entry.timestamp,
+              snippet: entry.snippet,
+            },
+          }));
+        };
+
+        const deadline = Date.now() + vectorQueryTimeoutMs;
+        let vectors = await fetchVectors();
+        let matched = vectors.some((entry) => {
+          const metadata = (entry.metadata ?? {}) as Record<string, unknown>;
+          return String(entry.id) === upsertId
+            && metadata.r2Key === flushed.key
+            && metadata.conversationKey === conversationKey;
+        });
+        while (!matched && Date.now() < deadline) {
+          await sleep(vectorQueryRetryMs);
+          vectors = await fetchVectors();
+          matched = vectors.some((entry) => {
+            const metadata = (entry.metadata ?? {}) as Record<string, unknown>;
+            return String(entry.id) === upsertId
+              && metadata.r2Key === flushed.key
+              && metadata.conversationKey === conversationKey;
+          });
         }
         await updateVectorizeMemoryStatus(this.env, {
           lastQueryAt: new Date().toISOString(),
-          lastQueryCount: matches.length,
+          lastQueryCount: vectors.length,
         });
         if (!matched) {
-          throw new Error("Vectorize query did not return selftest record");
+          throw new Error("Vectorize getByIds did not return selftest record");
         }
-        await recordStep("vectorize", `upsert+query verified (${matches.length} match(es))`);
+        await recordStep("vectorize", `upsert+read verified (${vectors.length} record(s))`);
       }
 
       logEvent(this.env, "tool_call", "selftest_passed", {
