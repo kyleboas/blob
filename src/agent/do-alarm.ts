@@ -185,10 +185,11 @@ async function maybeEnqueueAutonomousJobs(
     const lastEnqueuedAt = repoState.lastEnqueuedAt ? Date.parse(repoState.lastEnqueuedAt) : 0;
     if (lastEnqueuedAt && now - lastEnqueuedAt < cooldownMs) continue;
 
-    const repoPending = state.storage.sql.exec(
+    const repoPendingRows = state.storage.sql.exec(
       "SELECT id FROM jobs WHERE kind='background' AND repo=? AND status IN ('queued', 'paused', 'running') LIMIT 1",
       repo,
-    ).one();
+    ).toArray();
+    const repoPending = repoPendingRows[0] ?? null;
     if (repoPending) continue;
 
     const goals = data.goals?.[repo] ?? ["improve codebase"];

@@ -791,11 +791,23 @@ fi
         await recordStep("vectorize", `upsert+query verified (${matches.length} match(es))`);
       }
 
+      logEvent(this.env, "tool_call", "selftest_passed", {
+        repo: this.repo,
+        sandboxId,
+        conversationKey,
+      });
+
       return verbosity === "verbose"
         ? `Self-test passed for /workspace/${this.repoDir}\n${stepLines.join("\n")}`
         : `Self-test passed: bootstrap, tools, and R2 are healthy for /workspace/${this.repoDir}.`;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      logEvent(this.env, "tool_call", "selftest_failed", {
+        repo: this.repo,
+        sandboxId,
+        conversationKey,
+        error: message,
+      });
       await recordStep("selftest", summarizeText(message, 180), false);
       return verbosity === "verbose"
         ? `Self-test failed for /workspace/${this.repoDir}\n${stepLines.join("\n")}`
