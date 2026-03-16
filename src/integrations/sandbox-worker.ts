@@ -6,7 +6,36 @@ import {
   type Sandbox as SandboxType,
 } from "@cloudflare/sandbox";
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { classifyCommandKind, estimateBytes, summarizePath } from "./sandbox-observability";
 import { ensureSandboxStarted, runSandboxOperation } from "./sandbox-retry";
+
+async function withOperationLog<T>(
+  operation: string,
+  details: Record<string, unknown>,
+  fn: () => Promise<T>,
+  onSuccess?: (value: T) => Record<string, unknown>,
+): Promise<T> {
+  const startedAt = Date.now();
+  console.log(`[sandbox] ${operation} start`, details);
+  try {
+    const value = await fn();
+    console.log(`[sandbox] ${operation} ok`, {
+      ...details,
+      durationMs: Date.now() - startedAt,
+      ...(onSuccess ? onSuccess(value) : {}),
+    });
+    return value;
+  } catch (err: unknown) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    console.error(`[sandbox] ${operation} failed`, {
+      ...details,
+      durationMs: Date.now() - startedAt,
+      error: error.message,
+      name: error.name,
+    });
+    throw error;
+  }
+}
 
 // Wrangler "class_name = Sandbox" will look for this exact export.
 export class Sandbox extends SandboxDO {
@@ -57,14 +86,23 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
 
   async start(): Promise<void> {
     const sandbox = getSandbox(this.env.Sandbox, "agent");
-    await ensureSandboxStarted(sandbox);
+    await withOperationLog("start", { sandbox: "agent" }, () => ensureSandboxStarted(sandbox));
   }
 
   // Initialize sandbox - run restore-auth on first use
   async init(): Promise<{ restored: boolean; message: string }> {
     const sandbox = getSandbox(this.env.Sandbox, "agent");
     try {
-      const result = await runSandboxOperation(sandbox, () => sandbox.exec("python3 /restore-auth.py"));
+      const result = await withOperationLog(
+        "init",
+        { sandbox: "agent", commandKind: "python", commandLength: "python3 /restore-auth.py".length },
+        () => runSandboxOperation(sandbox, () => sandbox.exec("python3 /restore-auth.py")),
+        (value) => ({
+          exitCode: value.exitCode ?? (value.success ? 0 : 1),
+          stdoutBytes: estimateBytes(value.stdout ?? ""),
+          stderrBytes: estimateBytes(value.stderr ?? ""),
+        }),
+      );
       const restored = result.success && !result.stderr?.includes("failed");
       return {
         restored,
@@ -78,7 +116,16 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
   // Run command in sandbox
   async exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const sandbox = getSandbox(this.env.Sandbox, "agent");
-    const result = await runSandboxOperation(sandbox, () => sandbox.exec(command));
+    const result = await withOperationLog(
+      "exec",
+      { sandbox: "agent", commandKind: classifyCommandKind(command), commandLength: command.length },
+      () => runSandboxOperation(sandbox, () => sandbox.exec(command)),
+      (value) => ({
+        exitCode: value.exitCode ?? (value.success ? 0 : 1),
+        stdoutBytes: estimateBytes(value.stdout ?? ""),
+        stderrBytes: estimateBytes(value.stderr ?? ""),
+      }),
+    );
     return {
       stdout: result.stdout ?? "",
       stderr: result.stderr ?? "",
@@ -88,12 +135,21 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
 
   async writeFile(path: string, content: string): Promise<void> {
     const sandbox = getSandbox(this.env.Sandbox, "agent");
-    await runSandboxOperation(sandbox, () => sandbox.writeFile(path, content));
+    await withOperationLog(
+      "writeFile",
+      { sandbox: "agent", path: summarizePath(path), contentBytes: estimateBytes(content) },
+      () => runSandboxOperation(sandbox, () => sandbox.writeFile(path, content)),
+    );
   }
 
   async readFile(path: string): Promise<string> {
     const sandbox = getSandbox(this.env.Sandbox, "agent");
-    const result = await runSandboxOperation(sandbox, () => sandbox.readFile(path));
+    const result = await withOperationLog(
+      "readFile",
+      { sandbox: "agent", path: summarizePath(path) },
+      () => runSandboxOperation(sandbox, () => sandbox.readFile(path)),
+      (value) => ({ contentBytes: estimateBytes(value.content ?? "") }),
+    );
     return result.content ?? "";
   }
 }
