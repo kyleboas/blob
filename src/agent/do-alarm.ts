@@ -1,7 +1,7 @@
 import { shouldForcePause } from "../jobs/job-model";
 import { buildCronAlert, detectCronAlerts, postCronAlertWithFallback } from "../jobs/cron-jobs";
 import { logEvent } from "../core/observability";
-import { callLLM, plan } from "../core/llm";
+import { plan } from "../core/llm";
 import type { Env } from "../core/types";
 import type { BlobState } from "./do";
 import { rollback } from "./deploy-rollback";
@@ -91,98 +91,53 @@ function getRepoAutonomyState(
   return merged;
 }
 
-function buildDiagnosisPrompt(diagnosis: RepoDiagnosis): string {
-  const lines = [
-    `- latest commit: ${diagnosis.latestCommit ?? "unknown"}`,
-    `- verification command: ${diagnosis.verificationCommand ?? "not found"}`,
-    `- verification status: ${diagnosis.verificationStatus}`,
-  ];
-  if (diagnosis.verificationOutput) {
-    lines.push(`- verification output: ${diagnosis.verificationOutput}`);
-  }
-  if (diagnosis.todoMatches.length > 0) {
-    lines.push(`- TODO/FIXME hits:\n${diagnosis.todoMatches.map((item) => `  - ${item}`).join("\n")}`);
-  } else {
-    lines.push("- TODO/FIXME hits: none");
-  }
-  if (diagnosis.openIssues.length > 0) {
-    lines.push(`- open GitHub issues:\n${diagnosis.openIssues.map((issue) => `  - #${issue.number}: ${issue.title}`).join("\n")}`);
-  } else {
-    lines.push("- open GitHub issues: none");
-  }
-  if (diagnosis.failedWorkflowRuns.length > 0) {
-    lines.push(`- failed workflow runs:\n${diagnosis.failedWorkflowRuns.map((run) => `  - ${run.name} on ${run.head_branch}`).join("\n")}`);
-  } else {
-    lines.push("- failed workflow runs: none");
-  }
-  if (diagnosis.cloudflareSignals.length > 0) {
-    lines.push(`- Cloudflare log signals:\n${diagnosis.cloudflareSignals.map((signal) => `  - ${signal.worker}: ${signal.message}`).join("\n")}`);
-  } else {
-    lines.push("- Cloudflare log signals: none");
-  }
-  return lines.join("\n");
+function addAutonomousTask(tasks: string[], task: string | undefined, backlogSize: number): void {
+  const normalized = task?.trim();
+  if (!normalized) return;
+  const duplicate = tasks.some((existing) => existing.toLowerCase() === normalized.toLowerCase());
+  if (duplicate) return;
+  if (tasks.length < backlogSize) tasks.push(normalized);
 }
 
-async function generateTaskBacklog(
+function generateTaskBacklog(
   goals: string[],
   diagnosis: RepoDiagnosis,
-  env: Env,
   backlogSize: number,
-): Promise<string[]> {
-  const prompt = `You are planning autonomous coding work for a repository.
-
-Repository goals:
-${goals.map((goal) => `- ${goal}`).join("\n")}
-
-Autonomous diagnosis:
-${buildDiagnosisPrompt(diagnosis)}
-
-Return a JSON array of ${backlogSize} short, specific, high-leverage engineering tasks.
-Rules:
-- each task must be concrete and actionable
-- ground each task in the diagnosis above
-- if verification is failing, the first task must directly address the failure
-- prefer tests, bug fixes, docs drift, small refactors, and reliability work
-- no duplicates
-- no markdown
-- no explanations
-- each task should fit in one sentence`;
-
-  try {
-    const response = await callLLM([{ role: "user", content: prompt }], env, { maxTokens: 400 });
-    const match = response.match(/\[[\s\S]*\]/);
-    if (match) {
-      const parsed = JSON.parse(match[0]) as unknown;
-      if (Array.isArray(parsed)) {
-        const tasks = parsed
-          .map((item) => (typeof item === "string" ? item.trim() : ""))
-          .filter((item): item is string => item.length > 0);
-        if (tasks.length > 0) return tasks.slice(0, backlogSize);
-      }
-    }
-  } catch (_err) {
-    void _err;
-  }
-
+): string[] {
+  const tasks: string[] = [];
   if (diagnosis.verificationStatus === "failed" || diagnosis.verificationStatus === "error") {
-    return [
+    addAutonomousTask(
+      tasks,
       `Fix the failing verification in ${diagnosis.repo}: ${diagnosis.verificationOutput ?? diagnosis.summary}`,
-    ];
+      backlogSize,
+    );
   }
-  if (diagnosis.failedWorkflowRuns.length > 0) {
-    return [`Investigate the failing workflow "${diagnosis.failedWorkflowRuns[0].name}" on ${diagnosis.failedWorkflowRuns[0].head_branch}`];
+
+  for (const run of diagnosis.failedWorkflowRuns.slice(0, 2)) {
+    addAutonomousTask(tasks, `Investigate the failing workflow "${run.name}" on ${run.head_branch}`, backlogSize);
   }
-  if (diagnosis.cloudflareSignals.length > 0) {
-    return [`Investigate Cloudflare worker signal in ${diagnosis.cloudflareSignals[0].worker}: ${diagnosis.cloudflareSignals[0].message}`];
+
+  for (const signal of diagnosis.cloudflareSignals.slice(0, 2)) {
+    addAutonomousTask(tasks, `Investigate Cloudflare worker signal in ${signal.worker}: ${signal.message}`, backlogSize);
   }
-  if (diagnosis.openIssues.length > 0) {
-    return [`Work on GitHub issue #${diagnosis.openIssues[0].number}: ${diagnosis.openIssues[0].title}`];
+
+  for (const issue of diagnosis.openIssues.slice(0, 2)) {
+    addAutonomousTask(tasks, `Work on GitHub issue #${issue.number}: ${issue.title}`, backlogSize);
   }
-  if (diagnosis.todoMatches.length > 0) {
-    return [`Investigate and address ${diagnosis.todoMatches[0]}`];
+
+  for (const match of diagnosis.todoMatches.slice(0, 2)) {
+    addAutonomousTask(tasks, `Investigate and address ${match}`, backlogSize);
   }
-  const fallback = await plan(goals, env).catch(() => goals[0] ?? "improve codebase");
-  return fallback ? [fallback] : ["improve codebase"];
+
+  for (const goal of goals) {
+    addAutonomousTask(tasks, `Make progress on this repo goal: ${goal}`, backlogSize);
+  }
+
+  if (tasks.length === 0) {
+    addAutonomousTask(tasks, `Review ${diagnosis.repo} for the next small reliability or maintenance improvement`, backlogSize);
+  }
+
+  return tasks;
 }
 
 async function maybeEnqueueAutonomousJobs(
@@ -243,7 +198,7 @@ async function maybeEnqueueAutonomousJobs(
       repoState.lastDiagnosisSummary = diagnosis.summary;
       repoState.lastTestCommand = diagnosis.verificationCommand;
       repoState.lastTestStatus = diagnosis.verificationStatus;
-      repoState.nextTasks = await generateTaskBacklog(goals, diagnosis, env, backlogSize);
+      repoState.nextTasks = generateTaskBacklog(goals, diagnosis, backlogSize);
       repoState.lastTaskGeneratedAt = diagnosis.generatedAt;
       logEvent(env, "job_lifecycle", "autonomous_repo_diagnosed", {
         repo,

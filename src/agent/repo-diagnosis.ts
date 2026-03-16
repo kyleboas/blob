@@ -38,6 +38,10 @@ export function repoDirFromSlug(repo: string): string {
   return repo.includes("/") ? repo.split("/").pop()! : repo;
 }
 
+function shouldFetchExternalSignals(verificationStatus: RepoDiagnosis["verificationStatus"]): boolean {
+  return verificationStatus === "passed" || verificationStatus === "missing";
+}
+
 function getCloudflareAccountId(env: Env): string | undefined {
   return env.CLOUDFLARE_ACCOUNT_ID ?? env.ACCOUNT_ID;
 }
@@ -307,7 +311,7 @@ export async function diagnoseRepo(
     throw new Error(`repo bootstrap failed (${repoDir}): ${message}`);
   }
 
-  const [verificationCommand, latestCommitResult, todoResult, githubSignals, cloudflareSignals] = await Promise.all([
+  const [verificationCommand, latestCommitResult, todoResult] = await Promise.all([
     detectVerificationCommand(env, repo, sandboxId),
     executeInSandbox("git log -1 --pretty=format:'%h %s'", env, {
       sandboxId,
@@ -323,8 +327,6 @@ export async function diagnoseRepo(
         timeout: 30000,
       },
     ),
-    fetchGitHubSignals(env, repo),
-    fetchCloudflareSignals(env),
   ]);
 
   let verificationStatus: RepoDiagnosis["verificationStatus"] = "missing";
@@ -350,6 +352,10 @@ export async function diagnoseRepo(
     .map((line) => line.trim())
     .filter(Boolean)
     .slice(0, 10);
+
+  const [githubSignals, cloudflareSignals] = shouldFetchExternalSignals(verificationStatus)
+    ? await Promise.all([fetchGitHubSignals(env, repo), fetchCloudflareSignals(env)])
+    : [{ openIssues: [], failedWorkflowRuns: [] }, []];
 
   const latestCommit = latestCommitResult.stdout.trim() || undefined;
   const summaryParts = [
