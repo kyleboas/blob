@@ -516,11 +516,12 @@ test("runSelfTest skips vectorize when binding is not configured", async () => {
   assert.match(result, /vectorize: skipped \(PI_VECTORS binding missing/);
 });
 
-test("runSelfTest retries vectorize query until the selftest record appears", async () => {
+test("runSelfTest queries vectorize with the learned summary and retries until the selftest record appears", async () => {
   __resetSandboxSessionsForTests();
   const files = new Map<string, string>();
   const r2 = new Map<string, string>();
-  const vectors = new Map<string, { id: string; metadata?: Record<string, unknown> }>();
+  const vectors = new Map<string, { id: string; metadata?: Record<string, unknown>; values?: number[] }>();
+  const embeddedTexts: string[] = [];
   let queryCount = 0;
 
   const env = {
@@ -555,12 +556,14 @@ test("runSelfTest retries vectorize query until the selftest record appears", as
       },
     },
     PI_VECTORS: {
-      upsert: async (rows: Array<{ id: string; metadata?: Record<string, unknown> }>) => {
+      upsert: async (rows: Array<{ id: string; metadata?: Record<string, unknown>; values?: number[] }>) => {
         for (const row of rows) vectors.set(row.id, row);
       },
-      query: async (_vec: number[], opts?: { filter?: Record<string, unknown> }) => {
+      query: async (vec: number[], opts?: { filter?: Record<string, unknown> }) => {
         queryCount += 1;
         if (queryCount < 3) return { matches: [] };
+        const isSemanticQuery = vec[0] === 0.9 && vec[1] === 0.8;
+        if (!isSemanticQuery) return { matches: [] };
         const scope = opts?.filter?.conversationKey;
         return {
           matches: [...vectors.values()]
@@ -570,7 +573,17 @@ test("runSelfTest retries vectorize query until the selftest record appears", as
       },
     },
     AI: {
-      run: async () => ({ data: [[0.1, 0.2]] }),
+      run: async (_model: string, payload: { text?: string }) => {
+        const text = String(payload.text ?? "");
+        embeddedTexts.push(text);
+        if (text.includes("Selftest learned record") && text.includes("selftest healthcheck")) {
+          return { data: [[0.9, 0.8]] };
+        }
+        if (text.startsWith("selftest-")) {
+          return { data: [[0.1, 0.2]] };
+        }
+        return { data: [[0.5, 0.5]] };
+      },
     },
     AGENT_DO: {
       idFromName: (name: string) => name,
@@ -590,4 +603,5 @@ test("runSelfTest retries vectorize query until the selftest record appears", as
 
   assert.match(result, /Self-test passed/i);
   assert.ok(queryCount >= 3);
+  assert.ok(embeddedTexts.filter((text) => text.includes("Selftest learned record") && text.includes("selftest healthcheck")).length >= 2);
 });

@@ -747,6 +747,7 @@ fi
         tags: ["selftest", "healthcheck"],
         sourceRefs: [this.repo],
       };
+      const vectorQueryText = `${record.summary}\n${record.tags.join(" ")}`;
       await appendLearnedRecord(this.env, record);
       const flushed = await flushLearnedRecordsToR2(this.env, conversationKey);
       if (!flushed.key || flushed.count < 1) {
@@ -792,16 +793,16 @@ fi
         const deadline = Date.now() + vectorQueryTimeoutMs;
         let matches = await querySemanticMemory(this.env, {
           conversationKey,
-          query: uniqueToken,
-          topK: 5,
+          query: vectorQueryText,
+          topK: 10,
         });
         let matched = matches.some((entry) => entry.id === upsert.id || entry.r2Key === flushed.key);
         while (!matched && Date.now() < deadline) {
           await sleep(vectorQueryRetryMs);
           matches = await querySemanticMemory(this.env, {
             conversationKey,
-            query: uniqueToken,
-            topK: 5,
+            query: vectorQueryText,
+            topK: 10,
           });
           matched = matches.some((entry) => entry.id === upsert.id || entry.r2Key === flushed.key);
         }
