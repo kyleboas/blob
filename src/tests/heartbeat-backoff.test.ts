@@ -29,6 +29,27 @@ function makeState(shouldThrow = false) {
   };
 }
 
+function makeStateWithExec(exec: (query: string, ...args: unknown[]) => Array<Record<string, unknown>>) {
+  let lastAlarm: number | null = null;
+  const state = {
+    storage: {
+      sql: {
+        exec,
+      },
+      setAlarm: async (at: number) => {
+        lastAlarm = at;
+      },
+      getAlarm: async () => lastAlarm,
+    },
+    waitUntil: (_promise: Promise<unknown>) => undefined,
+  } as unknown as DurableObjectState;
+
+  return {
+    state,
+    getLastAlarm: () => lastAlarm,
+  };
+}
+
 function makeEnv(): Env {
   return {
     AGENT_DO: {} as DurableObjectNamespace,
@@ -78,4 +99,22 @@ test("heartbeat success resets failure count and interval", async () => {
 
   assert.equal(data.heartbeat?.consecutiveHeartbeatFailures, 0);
   assert.equal(data.heartbeat?.currentIntervalMs, 1000);
+});
+
+test("heartbeat recovers when a read query reports no results via cursor error", async () => {
+  const env = makeEnv();
+  const { state, getLastAlarm } = makeStateWithExec((query: string) => {
+    if (query.includes("SELECT kind, status, COUNT(*) AS count FROM jobs GROUP BY kind, status")) {
+      throw new Error("Expected exactly one result from SQL query, but got no results.");
+    }
+    return [];
+  });
+  const data: BlobState = { repos: [], goals: {}, messages: [], userPreferences: {} };
+
+  await runHeartbeatAlarm(state, env, data, async () => undefined);
+
+  assert.equal(data.heartbeat?.consecutiveHeartbeatFailures, 0);
+  assert.equal(data.heartbeat?.currentIntervalMs, 1000);
+  assert.equal(data.heartbeat?.lastError, undefined);
+  assert.ok((getLastAlarm() ?? 0) > Date.now());
 });

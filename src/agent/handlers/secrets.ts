@@ -1,4 +1,5 @@
 import type { BlobState } from "../do";
+import { readSqlRows } from "../sql";
 
 export type SecretsHandlerCtx = {
   state: DurableObjectState;
@@ -10,12 +11,12 @@ function json(data: unknown, status = 200): Response {
 }
 
 export function handleListSecrets(ctx: SecretsHandlerCtx): Response {
-  const rows = ctx.state.storage.sql.exec("SELECT name FROM service_secrets ORDER BY name ASC");
+  const rows = readSqlRows(ctx.state.storage.sql, "SELECT name FROM service_secrets ORDER BY name ASC");
   return json({ secrets: [...rows].map((r) => String(r.name)) });
 }
 
 export function getSecretsForInjection(storage: DurableObjectStorage): Record<string, string> {
-  const rows = storage.sql.exec("SELECT name, value FROM service_secrets ORDER BY name ASC");
+  const rows = readSqlRows(storage.sql, "SELECT name, value FROM service_secrets ORDER BY name ASC");
   const secrets: Record<string, string> = {};
   for (const row of rows) {
     secrets[String(row.name)] = String(row.value);

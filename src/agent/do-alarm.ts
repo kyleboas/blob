@@ -10,6 +10,7 @@ import { getSecretsForInjection } from "./handlers/secrets";
 import { getRuntimeControls } from "../core/runtime-controls";
 import { diagnoseRepo, type RepoDiagnosis } from "./repo-diagnosis";
 import { maybeOpenAutonomousPullRequest } from "./autonomous-pr";
+import { readSqlRows } from "./sql";
 
 export function getEffectiveHeartbeatConfig(data: BlobState, env: Env): { intervalMs: number; modelCallLimit: number } {
   return {
@@ -39,8 +40,17 @@ function getAutonomousHeartbeatConfig(env: Env, heartbeatIntervalMs: number): {
   };
 }
 
-function getJobCounts(state: DurableObjectState): { queued: number; paused: number; running: number } {
-  const rows = state.storage.sql.exec("SELECT status, COUNT(*) AS count FROM jobs GROUP BY status");
+function logRecoveredSqlRead(env: Env, query: string): void {
+  logEvent(env, "heartbeat", "sql_empty_result_recovered", {
+    query: query.replace(/\s+/g, " ").trim().slice(0, 120),
+  });
+}
+
+function getJobCounts(state: DurableObjectState, env: Env): { queued: number; paused: number; running: number } {
+  const query = "SELECT status, COUNT(*) AS count FROM jobs GROUP BY status";
+  const rows = readSqlRows(state.storage.sql, query, [], {
+    onRecovered: () => logRecoveredSqlRead(env, query),
+  });
   const counts = { queued: 0, paused: 0, running: 0 };
   for (const row of rows) {
     const status = String(row.status) as keyof typeof counts;
@@ -51,8 +61,11 @@ function getJobCounts(state: DurableObjectState): { queued: number; paused: numb
 
 type BackgroundJobCounts = { queued: number; paused: number; running: number };
 
-function getBackgroundJobCounts(state: DurableObjectState): BackgroundJobCounts {
-  const rows = state.storage.sql.exec("SELECT kind, status, COUNT(*) AS count FROM jobs GROUP BY kind, status");
+function getBackgroundJobCounts(state: DurableObjectState, env: Env): BackgroundJobCounts {
+  const query = "SELECT kind, status, COUNT(*) AS count FROM jobs GROUP BY kind, status";
+  const rows = readSqlRows(state.storage.sql, query, [], {
+    onRecovered: () => logRecoveredSqlRead(env, query),
+  });
   const counts: BackgroundJobCounts = { queued: 0, paused: 0, running: 0 };
   for (const row of rows) {
     if (String(row.kind ?? "interactive") !== "background") continue;
@@ -158,7 +171,7 @@ async function maybeEnqueueAutonomousJobs(
   const { enabled, estimatedCalls, backlogSize, maxBackgroundJobs } = getAutonomousHeartbeatConfig(env, intervalMs);
   if (!enabled) return 0;
 
-  let availableSlots = maxBackgroundJobs - (getBackgroundJobCounts(state).queued + getBackgroundJobCounts(state).running);
+  let availableSlots = maxBackgroundJobs - (getBackgroundJobCounts(state, env).queued + getBackgroundJobCounts(state, env).running);
   if (availableSlots <= 0) return 0;
 
   const repos = [...(data.repos ?? [])];
@@ -185,10 +198,10 @@ async function maybeEnqueueAutonomousJobs(
     const lastEnqueuedAt = repoState.lastEnqueuedAt ? Date.parse(repoState.lastEnqueuedAt) : 0;
     if (lastEnqueuedAt && now - lastEnqueuedAt < cooldownMs) continue;
 
-    const repoPendingRows = state.storage.sql.exec(
-      "SELECT id FROM jobs WHERE kind='background' AND repo=? AND status IN ('queued', 'paused', 'running') LIMIT 1",
-      repo,
-    ).toArray();
+    const repoPendingQuery = "SELECT id FROM jobs WHERE kind='background' AND repo=? AND status IN ('queued', 'paused', 'running') LIMIT 1";
+    const repoPendingRows = readSqlRows(state.storage.sql, repoPendingQuery, [repo], {
+      onRecovered: () => logRecoveredSqlRead(env, repoPendingQuery),
+    });
     const repoPending = repoPendingRows[0] ?? null;
     if (repoPending) continue;
 
@@ -308,12 +321,13 @@ export async function runHeartbeatAlarm(state: DurableObjectState, env: Env, dat
     }
 
     // Fetch queued/paused jobs with all fields needed for dispatch in a single query.
-    const pendingJobs = state.storage.sql.exec(
-      "SELECT id, status, kind, repo, created_at, estimated_calls, current_step, tool_history, partial_outputs, sandbox_id FROM jobs WHERE status IN ('queued', 'paused') ORDER BY created_at ASC",
-    );
+    const pendingJobsQuery = "SELECT id, status, kind, repo, created_at, estimated_calls, current_step, tool_history, partial_outputs, sandbox_id FROM jobs WHERE status IN ('queued', 'paused') ORDER BY created_at ASC";
+    const pendingJobs = readSqlRows(state.storage.sql, pendingJobsQuery, [], {
+      onRecovered: () => logRecoveredSqlRead(env, pendingJobsQuery),
+    });
     let remainingBackgroundSlots = Math.max(
       0,
-      getAutonomousHeartbeatConfig(env, defaultIntervalMs).maxBackgroundJobs - getBackgroundJobCounts(state).running,
+      getAutonomousHeartbeatConfig(env, defaultIntervalMs).maxBackgroundJobs - getBackgroundJobCounts(state, env).running,
     );
 
     // Collect jobs to dispatch (materialise before mutating rows).
