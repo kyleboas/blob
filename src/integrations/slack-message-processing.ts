@@ -29,7 +29,7 @@ export type SlackEventPayload = {
 
 type Intent = Awaited<ReturnType<typeof classifyIntent>>;
 
-function isRepoConnectivityQuestion(text: string): boolean {
+export function isRepoConnectivityQuestion(text: string): boolean {
   const normalized = text.toLowerCase().replace(/\s+/g, " ").trim();
   return [
     /what repo are you connected to/,
@@ -41,7 +41,7 @@ function isRepoConnectivityQuestion(text: string): boolean {
   ].some((pattern) => pattern.test(normalized));
 }
 
-async function answerRepoConnectivityQuestion(env: Env): Promise<string> {
+export async function answerRepoConnectivityQuestion(env: Env): Promise<string> {
   const repos = await getRepos(env);
   if (repos.length === 0) {
     return "I don’t have a repo configured right now.";
@@ -133,11 +133,6 @@ export async function processIntentOrChat(params: {
   if (/\bdeploy\b/i.test(text) && /\b(approve|approval|ship|release)\b/i.test(text)) {
     const requestId = await requestApproval(`Requested by Slack message: ${text}`, channel, env);
     await postToSlack(channel, `🚦 Deploy request queued for approval: ${requestId}`, env);
-    return;
-  }
-
-  if (isRepoConnectivityQuestion(text)) {
-    await postToSlack(channel, await answerRepoConnectivityQuestion(env), env);
     return;
   }
 

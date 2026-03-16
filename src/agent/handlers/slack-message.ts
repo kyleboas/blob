@@ -3,7 +3,12 @@ import { deriveRoutingKey } from "../../integrations/slack-routing";
 import { createLogRef, logEvent } from "../../core/observability";
 import { redactSecrets } from "../../core/safety";
 import { classifyIntent, getExactKeywordCommand, handleCommand } from "../../integrations/slack-commands";
-import { processIntentOrChat, type SlackEventPayload } from "../../integrations/slack-message-processing";
+import {
+  answerRepoConnectivityQuestion,
+  isRepoConnectivityQuestion,
+  processIntentOrChat,
+  type SlackEventPayload,
+} from "../../integrations/slack-message-processing";
 import { checkRateLimit, configureRateLimit } from "../../integrations/slack-rate-limit";
 import type { Env } from "../../core/types";
 
@@ -100,6 +105,11 @@ async function runDeferredMessageProcessing(
     if (commandResult.handled) {
       await postHandledCommandResponse(body, commandResult.response, env, { selftestLeadAlreadyPosted: getExactKeywordCommand(text) === "selftest" });
     }
+    return;
+  }
+
+  if (isRepoConnectivityQuestion(text)) {
+    await postToSlack(channel, await answerRepoConnectivityQuestion(env), env);
     return;
   }
 
