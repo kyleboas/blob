@@ -24,7 +24,7 @@ const SANDBOX_STARTUP_RETRYABLE_MESSAGES = [
 ];
 const SANDBOX_STATE_PREFIX = "sandbox-state/";
 const WORKSPACE_STATE_DIR = "/workspace/blob_state";
-const DEFAULT_SANDBOX_IO_TIMEOUT_MS = 30000;
+const DEFAULT_SANDBOX_IO_TIMEOUT_MS = 60000;
 
 const sessions = new Map<string, SandboxSession>();
 
@@ -48,11 +48,11 @@ function estimateBytes(text: string): number {
 }
 
 function getSandboxIoTimeoutMs(env: Partial<Env>): number {
-  const configured = Number.parseInt(env.BASH_TIMEOUT_MS ?? `${DEFAULT_SANDBOX_IO_TIMEOUT_MS}`, 10);
+  const configured = Number.parseInt(env.SANDBOX_IO_TIMEOUT_MS ?? env.BASH_TIMEOUT_MS ?? `${DEFAULT_SANDBOX_IO_TIMEOUT_MS}`, 10);
   if (!Number.isFinite(configured) || configured <= 0) {
     return DEFAULT_SANDBOX_IO_TIMEOUT_MS;
   }
-  return Math.min(configured, DEFAULT_SANDBOX_IO_TIMEOUT_MS);
+  return Math.min(configured, 120000);
 }
 
 function normalizeToolPath(path: string, workspaceRoot: string): string {

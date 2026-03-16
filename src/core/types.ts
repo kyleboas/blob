@@ -44,6 +44,7 @@ export interface Env {
   SECRET_PATTERNS?: string;
   SANDBOX_IDLE_TIMEOUT_MS?: string;
   SANDBOX_KEEP_ON_FAILURE?: string;
+  SANDBOX_IO_TIMEOUT_MS?: string;
   TOOL_MAX_FILE_BYTES?: string;
   BASH_TIMEOUT_MS?: string;
   BASH_MAX_OUTPUT_BYTES?: string;

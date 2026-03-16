@@ -218,6 +218,48 @@ test("status with extra text is treated as normal chat", async () => {
   }
 });
 
+test("plain chat bypasses intent classification failures", async () => {
+  const { env, posts } = makeEnv();
+  env.AI.run = async (_model: string, inputs: { messages?: Array<{ role: string; content: string }>; text?: string }) => {
+    const allContent = (inputs.messages ?? []).map((message) => message.content).join("\n");
+    if (allContent.includes("You are an intent classifier for a Slack bot")) {
+      throw new Error("intent classifier unavailable");
+    }
+    if (inputs.messages) {
+      return { response: "normal chat response" };
+    }
+    return { data: [[0.1, 0.2, 0.3]] };
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes("slack.com/api/chat.postMessage")) {
+      const body = JSON.parse(String(init?.body)) as { text: string };
+      posts.push(body.text);
+      return Response.json({ ok: true });
+    }
+    return new Response("unexpected", { status: 500 });
+  }) as typeof fetch;
+
+  try {
+    const req = new Request("https://example.com/slack/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "event_callback",
+        event_id: "E-chat-bypass",
+        team_id: "T1",
+        event: { type: "message", text: "summarize what you can do in one short paragraph", channel: "C1", ts: "2.5" },
+      }),
+    });
+
+    await handleSlackEvent(req, env);
+    assert.equal(posts[0], "normal chat response");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("repo connectivity question is answered directly without sandbox work", async () => {
   const { env, posts } = makeEnv();
   let sandboxStarted = false;
@@ -329,8 +371,7 @@ test("sandbox chat still posts a fallback Slack message when agent final text is
     });
 
     await handleSlackEvent(req, env);
-    assert.equal(posts[0], "Working…");
-    assert.equal(posts[1], "(No textual response generated. Please check logs/tool output.)");
+    assert.equal(posts[0], "(No textual response generated. Please check logs/tool output.)");
   } finally {
     globalThis.fetch = originalFetch;
   }
