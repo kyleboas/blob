@@ -29,13 +29,15 @@ function createSqlStore() {
 
   const exec = (query: string, ...args: unknown[]) => {
     if (query.startsWith("INSERT INTO jobs")) {
-      const [id, _status, createdAt, updatedAt, _currentStep, _toolHistory, _partialOutputs, sandboxId, _tokenUsage, _modelCallCount, estimatedCalls] = args;
+      const [id, kind, repo, createdAt, updatedAt, currentStep, sandboxId, estimatedCalls] = args;
       jobs.set(String(id), {
         id: String(id),
         status: "queued",
+        kind: String(kind ?? "interactive"),
+        repo: repo ?? null,
         created_at: Number(createdAt),
         updated_at: Number(updatedAt),
-        current_step: "",
+        current_step: String(currentStep ?? ""),
         tool_history: "[]",
         partial_outputs: "[]",
         sandbox_id: sandboxId ?? null,
@@ -48,6 +50,17 @@ function createSqlStore() {
 
     if (query.startsWith("SELECT id, status") && query.includes("FROM jobs ORDER BY")) {
       return new FakeRows([...jobs.values()]);
+    }
+
+    if (query.startsWith("SELECT id FROM jobs WHERE kind='background' AND repo=?")) {
+      const repo = String(args[0]);
+      const match = [...jobs.values()].find(
+        (job) =>
+          String(job.kind ?? "interactive") === "background"
+          && String(job.repo ?? "") === repo
+          && ["queued", "paused", "running"].includes(String(job.status)),
+      );
+      return new FakeRows(match ? [{ id: match.id }] : []);
     }
 
     if (query.startsWith("SELECT status FROM jobs WHERE id=?")) {
@@ -86,6 +99,19 @@ function createSqlStore() {
         counts.set(status, (counts.get(status) ?? 0) + 1);
       }
       return new FakeRows([...counts.entries()].map(([status, count]) => ({ status, count })));
+    }
+
+    if (query.startsWith("SELECT kind, status, COUNT(*) AS count FROM jobs GROUP BY kind, status")) {
+      const counts = new Map<string, { kind: string; status: string; count: number }>();
+      for (const job of jobs.values()) {
+        const kind = String(job.kind ?? "interactive");
+        const status = String(job.status);
+        const key = `${kind}:${status}`;
+        const existing = counts.get(key) ?? { kind, status, count: 0 };
+        existing.count += 1;
+        counts.set(key, existing);
+      }
+      return new FakeRows([...counts.values()]);
     }
 
     if (query.startsWith("SELECT total_tokens FROM daily_token_usage WHERE date=?")) {

@@ -25,6 +25,8 @@ import type { Env } from "../core/types";
 type JobRow = {
   id: string;
   status: string;
+  kind?: string;
+  repo?: string | null;
   created_at: number;
   updated_at: number;
   current_step: string;
@@ -52,7 +54,7 @@ class FakeRows {
 function createJobStore(initialJobs: JobRow[] = []) {
   const jobs = new Map<string, JobRow>();
   for (const job of initialJobs) {
-    jobs.set(job.id, { ...job });
+    jobs.set(job.id, { kind: "interactive", repo: null, ...job });
   }
 
   const exec = (query: string, ...args: unknown[]): FakeRows => {
@@ -62,6 +64,74 @@ function createJobStore(initialJobs: JobRow[] = []) {
         (j) => j.status === "queued" || j.status === "paused",
       );
       return new FakeRows(rows as unknown as Record<string, unknown>[]);
+    }
+    if (query.includes("SELECT kind, status, COUNT(*) AS count FROM jobs GROUP BY kind, status")) {
+      const counts = new Map<string, { kind: string; status: string; count: number }>();
+      for (const job of jobs.values()) {
+        const kind = job.kind ?? "interactive";
+        const key = `${kind}:${job.status}`;
+        const existing = counts.get(key) ?? { kind, status: job.status, count: 0 };
+        existing.count += 1;
+        counts.set(key, existing);
+      }
+      return new FakeRows([...counts.values()] as unknown as Record<string, unknown>[]);
+    }
+    if (query.includes("SELECT status, COUNT(*) AS count FROM jobs GROUP BY status")) {
+      const counts = new Map<string, number>();
+      for (const job of jobs.values()) {
+        counts.set(job.status, (counts.get(job.status) ?? 0) + 1);
+      }
+      return new FakeRows(
+        [...counts.entries()].map(([status, count]) => ({ status, count })),
+      );
+    }
+    if (query.startsWith("SELECT id FROM jobs WHERE kind='background' AND repo=?")) {
+      const repo = String(args[0]);
+      const match = [...jobs.values()].find(
+        (job) =>
+          (job.kind ?? "interactive") === "background"
+          && job.repo === repo
+          && (job.status === "queued" || job.status === "paused" || job.status === "running"),
+      );
+      return new FakeRows(match ? [{ id: match.id }] : []);
+    }
+    if (query.startsWith("INSERT INTO jobs")) {
+      if (args.length === 8) {
+        const [id, kind, repo, createdAt, updatedAt, currentStep, sandboxId, estimatedCalls] = args as [string, string, string | null, number, number, string, string | null, number];
+        jobs.set(String(id), {
+          id: String(id),
+          status: "queued",
+          kind: String(kind),
+          repo: repo ?? null,
+          created_at: createdAt,
+          updated_at: updatedAt,
+          current_step: currentStep,
+          tool_history: "[]",
+          partial_outputs: "[]",
+          sandbox_id: sandboxId,
+          token_usage: 0,
+          model_call_count: 0,
+          estimated_calls: estimatedCalls,
+        });
+        return new FakeRows([]);
+      }
+      const [id, repo, createdAt, updatedAt, currentStep, sandboxId, estimatedCalls] = args as [string, string | null, number, number, string, string | null, number];
+      jobs.set(String(id), {
+        id: String(id),
+        status: "queued",
+        kind: "background",
+        repo: repo ?? null,
+        created_at: createdAt,
+        updated_at: updatedAt,
+        current_step: currentStep,
+        tool_history: "[]",
+        partial_outputs: "[]",
+        sandbox_id: sandboxId,
+        token_usage: 0,
+        model_call_count: 0,
+        estimated_calls: estimatedCalls,
+      });
+      return new FakeRows([]);
     }
     // UPDATE status='running'
     if (query.startsWith("UPDATE jobs SET status='running'")) {
@@ -146,11 +216,15 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
     AGENT_DO: {} as DurableObjectNamespace,
     SANDBOX: {
+      start: async () => undefined,
       exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
       writeFile: async () => undefined,
       readFile: async () => "",
     } as unknown as Env["SANDBOX"],
-    REPO_STORE: {} as R2Bucket,
+    REPO_STORE: {
+      get: async () => null,
+    } as R2Bucket,
+    AUTONOMOUS_JOB_ENABLED: "false",
     HEARTBEAT_INTERVAL_MS: "1000",
     HEARTBEAT_BACKOFF_THRESHOLD: "3",
     AI_GATEWAY_BASE_URL: "https://gateway.example",
@@ -421,6 +495,196 @@ test("bridge falls back to repo goals for fresh queued jobs with empty current_s
     // plan() should have been called (at least one fetch to the LLM).
     assert.ok(callCount >= 1, "plan() should have triggered at least one LLM call");
     assert.equal(store.jobs.get("fresh-job")?.status, "completed", "fresh job should complete");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("heartbeat enqueues and runs an autonomous job when idle", async () => {
+  const store = createJobStore([]);
+  const { state, waitUntilPromises } = createState(store);
+  const data: BlobState = {
+    repos: ["kyleboas/blob"],
+    goals: { "kyleboas/blob": ["improve documentation"] },
+    messages: [],
+    userPreferences: {},
+  };
+
+  let llmCalls = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    llmCalls += 1;
+    return new Response(
+      JSON.stringify({ choices: [{ message: { content: "improve documentation", tool_calls: [] } }] }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  try {
+    await runHeartbeatAlarm(state, makeEnv({ AUTONOMOUS_JOB_ENABLED: "true", AUTONOMOUS_JOB_COOLDOWN_MS: "1000" }), data, async () => undefined);
+
+    const autonomousJob = [...store.jobs.values()].find((job) => job.id.startsWith("autonomy-"));
+    assert.ok(autonomousJob, "expected heartbeat to enqueue an autonomous job when idle");
+    assert.equal(autonomousJob?.status, "running", "autonomous job should be dispatched in the same heartbeat");
+    assert.equal(waitUntilPromises.length, 1, "autonomous job should be executed via waitUntil");
+
+    await flushWaitUntil(waitUntilPromises);
+
+    const completedJob = [...store.jobs.values()].find((job) => job.id.startsWith("autonomy-"));
+    assert.equal(completedJob?.status, "completed", "autonomous job should complete after async execution");
+    assert.ok(data.repoAutonomy?.["kyleboas/blob"]?.lastEnqueuedAt, "repo autonomy metadata should be recorded");
+    assert.ok(llmCalls >= 1, "planner/agent should make at least one LLM call for autonomous work");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("heartbeat diagnosis runs repo tests and feeds failures into autonomous task generation", async () => {
+  const store = createJobStore([]);
+  const { state, waitUntilPromises } = createState(store);
+  const data: BlobState = {
+    repos: ["kyleboas/blob"],
+    goals: { "kyleboas/blob": ["keep blob reliable"] },
+    messages: [],
+    userPreferences: {},
+  };
+
+  let verifyExecuted = false;
+  let githubFetches = 0;
+  let cloudflareFetches = 0;
+  const env = makeEnv({
+    AUTONOMOUS_JOB_ENABLED: "true",
+    SANDBOX: {
+      start: async () => undefined,
+      exec: async (command: string) => {
+        if (command.includes("# blob-detect-verify-command")) {
+          return { stdout: "npm run typecheck && npm run test\n", stderr: "", exitCode: 0 };
+        }
+        if (command.includes("npm run typecheck && npm run test")) {
+          verifyExecuted = true;
+          return {
+            stdout: "",
+            stderr: "FAIL src/tests/auth.test.ts\nExpected 200 but received 500",
+            exitCode: 1,
+          };
+        }
+        if (command.includes("git log -1 --pretty=format")) {
+          return { stdout: "abc123 fix auth retries", stderr: "", exitCode: 0 };
+        }
+        if (command.includes("rg -n --hidden")) {
+          return { stdout: "src/auth.ts:42:TODO tighten retry handling", stderr: "", exitCode: 0 };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+      writeFile: async () => undefined,
+      readFile: async () => "",
+    },
+  });
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("api.github.com") && url.includes("/issues")) {
+      githubFetches += 1;
+      return new Response(
+        JSON.stringify([{ number: 17, title: "Fix auth retries", html_url: "https://github.com/kyleboas/blob/issues/17", updated_at: "2026-03-16T00:00:00Z" }]),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("api.github.com") && url.includes("/actions/runs")) {
+      githubFetches += 1;
+      return new Response(
+        JSON.stringify({ workflow_runs: [{ id: 1, name: "CI", html_url: "https://github.com/kyleboas/blob/actions/runs/1", status: "completed", conclusion: "failure", head_branch: "main", created_at: "2026-03-16T00:00:00Z" }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("api.cloudflare.com/client/v4/accounts/")) {
+      cloudflareFetches += 1;
+      return new Response(
+        JSON.stringify({ result: { events: [{ Message: "TypeError: boom", Timestamp: "2026-03-16T00:00:00Z" }] } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response(
+      JSON.stringify({ choices: [{ message: { content: "Done.", tool_calls: [] } }] }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  try {
+    await runHeartbeatAlarm(state, { ...env, GITHUB_TOKEN: "github-token", CLOUDFLARE_API_TOKEN: "cf-token", CLOUDFLARE_ACCOUNT_ID: "acct", WORKER_NAME: "blob-agent" }, data, async () => undefined);
+    await flushWaitUntil(waitUntilPromises);
+
+    assert.equal(verifyExecuted, true, "expected diagnosis to execute the repo verification command");
+    assert.equal(githubFetches, 0, "lightweight diagnosis should skip GitHub fetches when local verification already failed");
+    assert.equal(cloudflareFetches, 0, "lightweight diagnosis should skip Cloudflare fetches when local verification already failed");
+    const autonomousJob = [...store.jobs.values()].find((job) => job.id.startsWith("autonomy-"));
+    assert.ok(autonomousJob, "expected an autonomous job to be enqueued");
+    assert.match(autonomousJob?.current_step ?? "", /Fix the failing verification in kyleboas\/blob/);
+    assert.match(autonomousJob?.current_step ?? "", /FAIL src\/tests\/auth\.test\.ts/);
+    assert.match(data.repoAutonomy?.["kyleboas/blob"]?.lastDiagnosisSummary ?? "", /Verification failed via npm run typecheck && npm run test/);
+    assert.equal(data.repoAutonomy?.["kyleboas/blob"]?.lastTestStatus, "failed");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("heartbeat does not enqueue a new autonomous job before cooldown expires", async () => {
+  const nowIso = new Date().toISOString();
+  const store = createJobStore([]);
+  const { state, waitUntilPromises } = createState(store);
+  const data: BlobState = {
+    repos: ["kyleboas/blob"],
+    goals: { "kyleboas/blob": ["improve documentation"] },
+    messages: [],
+    userPreferences: {},
+    repoAutonomy: {
+      "kyleboas/blob": { lastEnqueuedAt: nowIso, lastEnqueuedJobId: "autonomy-prev" },
+    },
+  };
+
+  await runHeartbeatAlarm(state, makeEnv({ AUTONOMOUS_JOB_ENABLED: "true", AUTONOMOUS_JOB_COOLDOWN_MS: "3600000" }), data, async () => undefined);
+  await flushWaitUntil(waitUntilPromises);
+
+  assert.equal(store.jobs.size, 0, "no autonomous job should be enqueued during cooldown");
+  assert.equal(waitUntilPromises.length, 0, "no autonomous job should be dispatched during cooldown");
+});
+
+test("heartbeat can queue autonomy work for multiple repos while respecting the background cap", async () => {
+  const store = createJobStore([]);
+  const { state, waitUntilPromises } = createState(store);
+  const data: BlobState = {
+    repos: ["kyleboas/blob", "kyleboas/other"],
+    goals: {
+      "kyleboas/blob": ["improve blob reliability"],
+      "kyleboas/other": ["improve other repo docs"],
+    },
+    messages: [],
+    userPreferences: {},
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = init?.body ? JSON.parse(String(init.body)) : {};
+    const userMessage = body?.messages?.find((m: { role: string }) => m.role === "user")?.content ?? "";
+    if (userMessage.includes("Return a JSON array")) {
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: '["task one","task two","task three"]', tool_calls: [] } }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response(
+      JSON.stringify({ choices: [{ message: { content: "Done.", tool_calls: [] } }] }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  try {
+    await runHeartbeatAlarm(state, makeEnv({ AUTONOMOUS_JOB_ENABLED: "true", MAX_BACKGROUND_JOBS: "1" }), data, async () => undefined);
+    const backgroundJobs = [...store.jobs.values()].filter((job) => job.kind === "background");
+    assert.equal(backgroundJobs.length, 1, "only one background job should exist when cap=1");
+    assert.equal(waitUntilPromises.length, 1, "only one background job should be dispatched when cap=1");
+    assert.ok(backgroundJobs[0]?.repo, "background job should target a specific repo");
   } finally {
     globalThis.fetch = originalFetch;
   }

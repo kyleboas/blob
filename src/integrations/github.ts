@@ -112,6 +112,24 @@ export interface GitHubPullRequest {
   state: string;
 }
 
+export interface GitHubIssue {
+  number: number;
+  title: string;
+  html_url: string;
+  updated_at: string;
+  pull_request?: unknown;
+}
+
+export interface GitHubWorkflowRun {
+  id: number;
+  name: string;
+  html_url: string;
+  status: string;
+  conclusion: string | null;
+  head_branch: string;
+  created_at: string;
+}
+
 export class GitHubApi {
   constructor(
     private token: string,
@@ -174,6 +192,45 @@ export class GitHubApi {
       params.idempotencyKey,
     );
     return (await response.json()) as GitHubPullRequest;
+  }
+
+  async findOpenPullRequestByHead(params: {
+    owner: string;
+    repo: string;
+    head: string;
+  }): Promise<GitHubPullRequest | null> {
+    const response = await this.request(
+      `/repos/${params.owner}/${params.repo}/pulls?state=open&head=${encodeURIComponent(params.head)}`,
+      { method: "GET" },
+    );
+    const pulls = (await response.json()) as GitHubPullRequest[];
+    return pulls[0] ?? null;
+  }
+
+  async listOpenIssues(params: {
+    owner: string;
+    repo: string;
+    perPage?: number;
+  }): Promise<GitHubIssue[]> {
+    const response = await this.request(
+      `/repos/${params.owner}/${params.repo}/issues?state=open&sort=updated&direction=desc&per_page=${params.perPage ?? 5}`,
+      { method: "GET" },
+    );
+    const issues = (await response.json()) as GitHubIssue[];
+    return issues.filter((issue) => !issue.pull_request);
+  }
+
+  async listFailedWorkflowRuns(params: {
+    owner: string;
+    repo: string;
+    perPage?: number;
+  }): Promise<GitHubWorkflowRun[]> {
+    const response = await this.request(
+      `/repos/${params.owner}/${params.repo}/actions/runs?status=failure&per_page=${params.perPage ?? 5}`,
+      { method: "GET" },
+    );
+    const payload = (await response.json()) as { workflow_runs?: GitHubWorkflowRun[] };
+    return payload.workflow_runs ?? [];
   }
 
   async mergePullRequest(params: {

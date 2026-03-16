@@ -16,24 +16,35 @@ function json(data: unknown, status = 200): Response {
 
 export async function handleCreateJob(request: Request, ctx: JobHandlerCtx): Promise<Response> {
   const now = Date.now();
-  const { id, sandboxId, estimatedCalls } = (await request.json()) as { id?: string; sandboxId?: string; estimatedCalls?: number };
+  const { id, sandboxId, estimatedCalls, kind, repo, currentStep } = (await request.json()) as {
+    id?: string;
+    sandboxId?: string;
+    estimatedCalls?: number;
+    kind?: "interactive" | "background";
+    repo?: string;
+    currentStep?: string;
+  };
   const jobId = id ?? crypto.randomUUID();
+  const jobKind = kind === "background" ? "background" : "interactive";
 
   ctx.state.storage.sql.exec(
-    "INSERT INTO jobs (id, status, created_at, updated_at, current_step, tool_history, partial_outputs, sandbox_id, token_usage, model_call_count, estimated_calls) VALUES (?, 'queued', ?, ?, '', '[]', '[]', ?, 0, 0, ?)",
+    "INSERT INTO jobs (id, status, kind, repo, created_at, updated_at, current_step, tool_history, partial_outputs, sandbox_id, token_usage, model_call_count, estimated_calls) VALUES (?, 'queued', ?, ?, ?, ?, ?, '[]', '[]', ?, 0, 0, ?)",
     jobId,
+    jobKind,
+    repo ?? null,
     now,
     now,
+    currentStep ?? "",
     sandboxId ?? null,
     estimatedCalls ?? 1,
   );
 
-  return json({ id: jobId, status: "queued" });
+  return json({ id: jobId, status: "queued", kind: jobKind, repo: repo ?? null });
 }
 
 export async function handleListJobs(_request: Request, ctx: JobHandlerCtx): Promise<Response> {
   const rows = ctx.state.storage.sql.exec(
-    "SELECT id, status, created_at, updated_at, current_step, tool_history, partial_outputs, sandbox_id, token_usage, model_call_count, estimated_calls FROM jobs ORDER BY created_at ASC",
+    "SELECT id, status, kind, repo, created_at, updated_at, current_step, tool_history, partial_outputs, sandbox_id, token_usage, model_call_count, estimated_calls FROM jobs ORDER BY created_at ASC",
   );
   return json({ jobs: [...rows] });
 }

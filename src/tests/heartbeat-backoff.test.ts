@@ -37,7 +37,9 @@ function makeEnv(): Env {
       writeFile: async () => undefined,
       readFile: async () => "",
     },
-    REPO_STORE: {} as R2Bucket,
+    REPO_STORE: {
+      get: async () => null,
+    } as R2Bucket,
     HEARTBEAT_INTERVAL_MS: "1000",
     HEARTBEAT_BACKOFF_THRESHOLD: "3",
   } as Env;
