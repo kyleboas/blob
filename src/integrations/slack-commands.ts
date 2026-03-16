@@ -14,8 +14,12 @@ function globalDO(env: Env): DurableObjectStub | null {
   return env.AGENT_DO ? env.AGENT_DO.get(env.AGENT_DO.idFromName("blob")) : null;
 }
 
+export function normalizeCommandText(text: string): string {
+  return text.replace(/^(?:\s*<@[^>]+>\s*)+/, "").trim().replace(/\s+/g, " ");
+}
+
 export function getExactKeywordCommand(text: string): "settings" | "status" | "selftest" | "set minimal" | "set verbose" | "secrets" | "heartbeat config" | "self-improve" | "jobs" | null {
-  const normalized = text.trim().toLowerCase();
+  const normalized = normalizeCommandText(text).toLowerCase();
   if (["settings", "status", "selftest", "set minimal", "set verbose", "secrets", "heartbeat config", "self-improve", "jobs"].includes(normalized)) {
     return normalized as ReturnType<typeof getExactKeywordCommand>;
   }

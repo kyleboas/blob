@@ -354,6 +354,38 @@ test("selftest command runs full workflow and posts result", async () => {
   }
 });
 
+test("mention-prefixed selftest is treated as the selftest command", async () => {
+  const { env, posts } = makeEnv();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes("slack.com/api/chat.postMessage")) {
+      const body = JSON.parse(String(init?.body)) as { text: string };
+      posts.push(body.text);
+      return Response.json({ ok: true });
+    }
+    return new Response("unexpected", { status: 500 });
+  }) as typeof fetch;
+
+  try {
+    const req = new Request("https://example.com/slack/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "event_callback",
+        event_id: "E-selftest-mention",
+        team_id: "T1",
+        event: { type: "message", text: "<@U123> selftest", channel: "C1", ts: "3" },
+      }),
+    });
+
+    await handleSlackEvent(req, env);
+    assert.equal(posts[0], "Running self-test…");
+    assert.match(posts[1], /Self-test passed/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 
 test("chat requests are paused when runtime controls file sets paused", async () => {
   const { env, posts } = makeEnv();
