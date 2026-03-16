@@ -17,6 +17,10 @@ export interface BlobState {
     cooldownMs?: number;
     nextTasks?: string[];
     lastTaskGeneratedAt?: string;
+    lastDiagnosedAt?: string;
+    lastDiagnosisSummary?: string;
+    lastTestCommand?: string;
+    lastTestStatus?: "passed" | "failed" | "missing" | "error";
     lastEnqueuedAt?: string;
     lastEnqueuedJobId?: string;
     lastRunAt?: string;

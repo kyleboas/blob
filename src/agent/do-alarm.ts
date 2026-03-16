@@ -8,6 +8,7 @@ import { rollback } from "./deploy-rollback";
 import { PiAgent } from "./pi-agent";
 import { getSecretsForInjection } from "./handlers/secrets";
 import { getRuntimeControls } from "../core/runtime-controls";
+import { diagnoseRepo, type RepoDiagnosis } from "./repo-diagnosis";
 
 export function getEffectiveHeartbeatConfig(data: BlobState, env: Env): { intervalMs: number; modelCallLimit: number } {
   return {
@@ -74,6 +75,10 @@ function getRepoAutonomyState(
     cooldownMs: existing.cooldownMs ?? config.cooldownMs,
     nextTasks: existing.nextTasks ?? [],
     lastTaskGeneratedAt: existing.lastTaskGeneratedAt,
+    lastDiagnosedAt: existing.lastDiagnosedAt,
+    lastDiagnosisSummary: existing.lastDiagnosisSummary,
+    lastTestCommand: existing.lastTestCommand,
+    lastTestStatus: existing.lastTestStatus,
     lastEnqueuedAt: existing.lastEnqueuedAt,
     lastEnqueuedJobId: existing.lastEnqueuedJobId,
     lastRunAt: existing.lastRunAt,
@@ -82,15 +87,42 @@ function getRepoAutonomyState(
   return merged;
 }
 
-async function generateTaskBacklog(goals: string[], env: Env, backlogSize: number): Promise<string[]> {
+function buildDiagnosisPrompt(diagnosis: RepoDiagnosis): string {
+  const lines = [
+    `- latest commit: ${diagnosis.latestCommit ?? "unknown"}`,
+    `- verification command: ${diagnosis.verificationCommand ?? "not found"}`,
+    `- verification status: ${diagnosis.verificationStatus}`,
+  ];
+  if (diagnosis.verificationOutput) {
+    lines.push(`- verification output: ${diagnosis.verificationOutput}`);
+  }
+  if (diagnosis.todoMatches.length > 0) {
+    lines.push(`- TODO/FIXME hits:\n${diagnosis.todoMatches.map((item) => `  - ${item}`).join("\n")}`);
+  } else {
+    lines.push("- TODO/FIXME hits: none");
+  }
+  return lines.join("\n");
+}
+
+async function generateTaskBacklog(
+  goals: string[],
+  diagnosis: RepoDiagnosis,
+  env: Env,
+  backlogSize: number,
+): Promise<string[]> {
   const prompt = `You are planning autonomous coding work for a repository.
 
 Repository goals:
 ${goals.map((goal) => `- ${goal}`).join("\n")}
 
+Autonomous diagnosis:
+${buildDiagnosisPrompt(diagnosis)}
+
 Return a JSON array of ${backlogSize} short, specific, high-leverage engineering tasks.
 Rules:
 - each task must be concrete and actionable
+- ground each task in the diagnosis above
+- if verification is failing, the first task must directly address the failure
 - prefer tests, bug fixes, docs drift, small refactors, and reliability work
 - no duplicates
 - no markdown
@@ -113,6 +145,14 @@ Rules:
     void _err;
   }
 
+  if (diagnosis.verificationStatus === "failed" || diagnosis.verificationStatus === "error") {
+    return [
+      `Fix the failing verification in ${diagnosis.repo}: ${diagnosis.verificationOutput ?? diagnosis.summary}`,
+    ];
+  }
+  if (diagnosis.todoMatches.length > 0) {
+    return [`Investigate and address ${diagnosis.todoMatches[0]}`];
+  }
   const fallback = await plan(goals, env).catch(() => goals[0] ?? "improve codebase");
   return fallback ? [fallback] : ["improve codebase"];
 }
@@ -170,8 +210,18 @@ async function maybeEnqueueAutonomousJobs(
 
     const goals = data.goals?.[repo] ?? ["improve codebase"];
     if (!repoState.nextTasks || repoState.nextTasks.length === 0) {
-      repoState.nextTasks = await generateTaskBacklog(goals, env, backlogSize);
-      repoState.lastTaskGeneratedAt = new Date(now).toISOString();
+      const diagnosis = await diagnoseRepo(env, repo, `autonomy-diagnose-${repo.replace(/[^a-zA-Z0-9_-]/g, "-")}`);
+      repoState.lastDiagnosedAt = diagnosis.generatedAt;
+      repoState.lastDiagnosisSummary = diagnosis.summary;
+      repoState.lastTestCommand = diagnosis.verificationCommand;
+      repoState.lastTestStatus = diagnosis.verificationStatus;
+      repoState.nextTasks = await generateTaskBacklog(goals, diagnosis, env, backlogSize);
+      repoState.lastTaskGeneratedAt = diagnosis.generatedAt;
+      logEvent(env, "job_lifecycle", "autonomous_repo_diagnosed", {
+        repo,
+        verificationStatus: diagnosis.verificationStatus,
+        verificationCommand: diagnosis.verificationCommand,
+      });
     }
 
     const task = repoState.nextTasks.shift()?.trim();

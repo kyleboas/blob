@@ -280,6 +280,56 @@ test("verification skipped when VERIFY_COMMAND is not set", async () => {
   assert.equal(callCount, 1);
 });
 
+test("verification auto-detects repo test command when VERIFY_COMMAND is not set", async () => {
+  __resetSandboxSessionsForTests();
+  const originalFetch = globalThis.fetch;
+  let verifyCallCount = 0;
+  let llmCallCount = 0;
+
+  const env = makeEnv({
+    AI_GATEWAY_BASE_URL: "https://gateway.example",
+    AI_GATEWAY_TOKEN: "x",
+    SANDBOX: {
+      start: async () => undefined,
+      exec: async (command: string) => {
+        if (command.includes("# blob-detect-verify-command")) {
+          return { stdout: "npm run test\n", stderr: "", exitCode: 0 };
+        }
+        if (command.includes("npm run test")) {
+          verifyCallCount += 1;
+          return { stdout: "All tests passed", stderr: "", exitCode: 0 };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+      readFile: async () => "",
+      writeFile: async () => undefined,
+    },
+  });
+
+  globalThis.fetch = (async () => {
+    llmCallCount += 1;
+    if (llmCallCount === 1) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: "", tool_calls: [{ function: { name: "bash", arguments: '{"command":"echo fix"}' } }] } }],
+      }), { status: 200 });
+    }
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: "Fixed and verified." } }],
+    }), { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const agent = new PiAgent(env, "blob");
+    (agent as any).shouldForceExternalToolForMessage = async () => false;
+    const result = await agent.run("fix it", { sandboxId: "auto-detect-verify" });
+
+    assert.equal(verifyCallCount, 1);
+    assert.equal(result, "Fixed and verified.");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("verification stops retrying after max attempts", async () => {
   __resetSandboxSessionsForTests();
   const originalFetch = globalThis.fetch;

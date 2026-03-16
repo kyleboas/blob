@@ -6,6 +6,7 @@ import { estimateTokens } from "../core/tokens";
 import { classifyIntent } from "../core/intent-classifier";
 import { withDOAuth } from "../core/do-auth";
 import { expireUnusedTools } from "./tool-lifecycle";
+import { buildRepoBootstrapScript, detectVerificationCommand, repoDirFromSlug } from "./repo-diagnosis";
 import {
   appendLearnedRecord,
   buildSemanticMemoryContext,
@@ -209,48 +210,6 @@ function buildCurrentDateTimeMessage(): PiMessage {
   };
 }
 
-function buildBootstrapScript(repoDir: string, repo: string): string {
-  const workspaceRoot = `/workspace/${repoDir}`;
-  const hasRepoSlug = repo.includes("/");
-  const cloneUrl = hasRepoSlug ? `https://github.com/${repo}.git` : "";
-  const cloneStep = hasRepoSlug
-    ? `    git clone --depth=1 ${shellQuote(cloneUrl)} ${shellQuote(workspaceRoot)}\n`
-    : `    mkdir -p ${shellQuote(workspaceRoot)}\n`;
-
-  return `set -eu
-if [ -n "${"${GITHUB_TOKEN:-}"}" ]; then
-  cat > /usr/local/bin/blob-git-askpass << 'EOF'
-#!/bin/sh
-case "$1" in
-  *Username*) echo "x-access-token" ;;
-  *) echo "$GITHUB_TOKEN" ;;
-esac
-EOF
-  chmod +x /usr/local/bin/blob-git-askpass
-fi
-mkdir -p /workspace
-if [ -d ${shellQuote(`${workspaceRoot}/.git`)} ]; then
-  cd ${shellQuote(workspaceRoot)}
-  git fetch --depth=1 --prune origin
-  if git show-ref --verify --quiet refs/remotes/origin/main; then
-    git reset --hard origin/main
-  elif git show-ref --verify --quiet refs/remotes/origin/master; then
-    git reset --hard origin/master
-  else
-    git pull --ff-only
-  fi
-else
-${cloneStep}  if [ -d ${shellQuote(`${workspaceRoot}/.git`)} ]; then
-    cd ${shellQuote(workspaceRoot)}
-    if git show-ref --verify --quiet refs/remotes/origin/main; then
-      git checkout -B main origin/main
-    elif git show-ref --verify --quiet refs/remotes/origin/master; then
-      git checkout -B master origin/master
-    fi
-  fi
-fi`;
-}
-
 export class PiAgent {
   private messages: PiMessage[];
   private repoDir: string;
@@ -262,7 +221,7 @@ export class PiAgent {
     private repo: string,
   ) {
     // repo may be "owner/name" but the sandbox clones into /workspace/<name>
-    this.repoDir = repo.includes("/") ? repo.split("/").pop()! : repo;
+    this.repoDir = repoDirFromSlug(repo);
     this.messages = [{ role: "system", content: this.buildSystemPrompt() }];
   }
 
@@ -348,7 +307,7 @@ Stop when done and provide a concise summary.`;
       }
     }
 
-    let result = await executeInSandbox(buildBootstrapScript(this.repoDir, this.repo), this.env, {
+    let result = await executeInSandbox(buildRepoBootstrapScript(this.repoDir, this.repo), this.env, {
       sandboxId,
       timeout: 180000,
       envVars: this.env.GITHUB_TOKEN
@@ -363,7 +322,7 @@ Stop when done and provide a concise summary.`;
     if (result.exitCode !== 0 && restoredFromCache) {
       logEvent(this.env, "tool_call", "repo_cache_restore_bootstrap_fallback", { repoDir: this.repoDir, stderr: summarizeText(result.stderr, 400) });
       await this.clearWorkspaceRepo(sandboxId);
-      result = await executeInSandbox(buildBootstrapScript(this.repoDir, this.repo), this.env, {
+      result = await executeInSandbox(buildRepoBootstrapScript(this.repoDir, this.repo), this.env, {
         sandboxId,
         timeout: 180000,
         envVars: this.env.GITHUB_TOKEN
@@ -851,7 +810,7 @@ fi
     maxAttempts: number,
     opts: RunOptions,
   ): Promise<{ passed: boolean; skipped: boolean; output: string }> {
-    const verifyCommand = this.env.VERIFY_COMMAND;
+    const verifyCommand = await detectVerificationCommand(this.env, this.repo, sandboxId);
     if (!verifyCommand || currentAttempt >= maxAttempts) {
       return { passed: true, skipped: !verifyCommand, output: "" };
     }
@@ -1082,6 +1041,6 @@ export const __piAgentTestUtils = {
   summarizeArgs,
   TOOL_SCHEMAS,
   isTransientError,
-  buildBootstrapScript,
+  buildBootstrapScript: buildRepoBootstrapScript,
   containsToolAvoidanceClaim,
 };

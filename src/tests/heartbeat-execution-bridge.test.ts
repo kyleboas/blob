@@ -216,6 +216,7 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
     AGENT_DO: {} as DurableObjectNamespace,
     SANDBOX: {
+      start: async () => undefined,
       exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
       writeFile: async () => undefined,
       readFile: async () => "",
@@ -533,6 +534,79 @@ test("heartbeat enqueues and runs an autonomous job when idle", async () => {
     assert.equal(completedJob?.status, "completed", "autonomous job should complete after async execution");
     assert.ok(data.repoAutonomy?.["kyleboas/blob"]?.lastEnqueuedAt, "repo autonomy metadata should be recorded");
     assert.ok(llmCalls >= 1, "planner/agent should make at least one LLM call for autonomous work");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("heartbeat diagnosis runs repo tests and feeds failures into autonomous task generation", async () => {
+  const store = createJobStore([]);
+  const { state, waitUntilPromises } = createState(store);
+  const data: BlobState = {
+    repos: ["kyleboas/blob"],
+    goals: { "kyleboas/blob": ["keep blob reliable"] },
+    messages: [],
+    userPreferences: {},
+  };
+
+  let verifyExecuted = false;
+  let capturedBacklogPrompt = "";
+  const env = makeEnv({
+    AUTONOMOUS_JOB_ENABLED: "true",
+    SANDBOX: {
+      start: async () => undefined,
+      exec: async (command: string) => {
+        if (command.includes("# blob-detect-verify-command")) {
+          return { stdout: "npm run typecheck && npm run test\n", stderr: "", exitCode: 0 };
+        }
+        if (command.includes("npm run typecheck && npm run test")) {
+          verifyExecuted = true;
+          return {
+            stdout: "",
+            stderr: "FAIL src/tests/auth.test.ts\nExpected 200 but received 500",
+            exitCode: 1,
+          };
+        }
+        if (command.includes("git log -1 --pretty=format")) {
+          return { stdout: "abc123 fix auth retries", stderr: "", exitCode: 0 };
+        }
+        if (command.includes("rg -n --hidden")) {
+          return { stdout: "src/auth.ts:42:TODO tighten retry handling", stderr: "", exitCode: 0 };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+      writeFile: async () => undefined,
+      readFile: async () => "",
+    },
+  });
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = init?.body ? JSON.parse(String(init.body)) : {};
+    const userMessage = body?.messages?.find((m: { role: string }) => m.role === "user")?.content ?? "";
+    if (userMessage.includes("Autonomous diagnosis:")) {
+      capturedBacklogPrompt = userMessage;
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: '["Fix the auth test failure","Harden auth retry handling"]', tool_calls: [] } }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response(
+      JSON.stringify({ choices: [{ message: { content: "Done.", tool_calls: [] } }] }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  try {
+    await runHeartbeatAlarm(state, env, data, async () => undefined);
+    await flushWaitUntil(waitUntilPromises);
+
+    assert.equal(verifyExecuted, true, "expected diagnosis to execute the repo verification command");
+    assert.match(capturedBacklogPrompt, /verification status: failed/);
+    assert.match(capturedBacklogPrompt, /npm run typecheck && npm run test/);
+    assert.match(capturedBacklogPrompt, /FAIL src\/tests\/auth\.test\.ts/);
+    assert.match(capturedBacklogPrompt, /TODO tighten retry handling/);
+    assert.equal(data.repoAutonomy?.["kyleboas/blob"]?.lastTestStatus, "failed");
   } finally {
     globalThis.fetch = originalFetch;
   }
