@@ -24,16 +24,10 @@ export async function handleSlackEvent(request: Request, env: Env, executionCtx?
     if (body.type === "event_callback" && env.AGENT_DO) {
       const key = deriveRoutingKey(body);
       const do_ = env.AGENT_DO.get(env.AGENT_DO.idFromName(key));
-      const fetchPromise = do_.fetch("http://do/process-message", withDOAuth(env, {
+      await do_.fetch("http://do/process-message", withDOAuth(env, {
         method: "POST",
         body: JSON.stringify(body),
       }));
-      
-      if (executionCtx) {
-        executionCtx.waitUntil(fetchPromise);
-      } else {
-        await fetchPromise;
-      }
       return new Response("OK");
     }
 
