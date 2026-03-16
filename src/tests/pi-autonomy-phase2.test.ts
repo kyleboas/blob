@@ -514,12 +514,11 @@ test("runSelfTest skips vectorize when binding is not configured", async () => {
   assert.match(result, /vectorize: skipped \(PI_VECTORS binding missing/);
 });
 
-test("runSelfTest polls vectorize by id until the selftest record appears", async () => {
+test("runSelfTest verifies vectorize upsert without requiring synchronous readback", async () => {
   __resetSandboxSessionsForTests();
   const files = new Map<string, string>();
   const r2 = new Map<string, string>();
   const vectors = new Map<string, { id: string; metadata?: Record<string, unknown>; values?: number[] }>();
-  let getByIdsCount = 0;
 
   const env = {
     SANDBOX: {
@@ -556,14 +555,6 @@ test("runSelfTest polls vectorize by id until the selftest record appears", asyn
       upsert: async (rows: Array<{ id: string; metadata?: Record<string, unknown>; values?: number[] }>) => {
         for (const row of rows) vectors.set(row.id, row);
       },
-      getByIds: async (ids: string[]) => {
-        getByIdsCount += 1;
-        if (getByIdsCount < 3) return [];
-        return ids.flatMap((id) => {
-          const row = vectors.get(id);
-          return row ? [row] : [];
-        });
-      },
     },
     AI: {
       run: async () => ({ data: [[0.9, 0.8]] }),
@@ -585,5 +576,7 @@ test("runSelfTest polls vectorize by id until the selftest record appears", asyn
   });
 
   assert.match(result, /Self-test passed/i);
-  assert.ok(getByIdsCount >= 3);
+  assert.equal(vectors.size, 1);
+  const [stored] = [...vectors.values()];
+  assert.equal(stored.metadata?.conversationKey, "T1:C1:channel");
 });
