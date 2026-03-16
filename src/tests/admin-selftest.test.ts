@@ -131,3 +131,32 @@ test("health degrades when vectorize is unavailable", async () => {
     },
   });
 });
+
+test("health retries transient sandbox startup failures", async () => {
+  let startCalls = 0;
+  const res = await worker.fetch(new Request("https://example.com/health"), makeEnv({
+    SANDBOX: {
+      start: async () => {
+        startCalls += 1;
+        if (startCalls < 3) {
+          throw new Error("Container service disconnected.");
+        }
+      },
+      exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+      writeFile: async () => {},
+      readFile: async () => "",
+    },
+  }), {} as any);
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), {
+    status: "healthy",
+    checks: {
+      r2: true,
+      sandbox: true,
+      vectorize: true,
+      do: true,
+    },
+  });
+  assert.equal(startCalls, 3);
+});
