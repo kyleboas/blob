@@ -27,9 +27,14 @@ test("handleSlackEvent acknowledges event_callback immediately when execution co
 
   let waitUntilCalled = false;
   let doFetchCalled = false;
+  let releaseDoFetch: (() => void) | undefined;
+  let doFetchCompleted = false;
   const ctx = {
-    waitUntil: () => {
+    waitUntil: (promise: Promise<unknown>) => {
       waitUntilCalled = true;
+      void promise.then(() => {
+        doFetchCompleted = true;
+      });
     },
   } as any;
 
@@ -39,6 +44,9 @@ test("handleSlackEvent acknowledges event_callback immediately when execution co
       get: () => ({
         fetch: async () => {
           doFetchCalled = true;
+          await new Promise<void>((resolve) => {
+            releaseDoFetch = resolve;
+          });
           return new Response(JSON.stringify({ processed: false, messages: [] }), { headers: { "content-type": "application/json" } });
         },
       }),
@@ -48,5 +56,9 @@ test("handleSlackEvent acknowledges event_callback immediately when execution co
   const res = await handleSlackEvent(request, env, ctx);
   assert.equal(res.status, 200);
   assert.equal(doFetchCalled, true);
-  assert.equal(waitUntilCalled, false);
+  assert.equal(waitUntilCalled, true);
+  assert.equal(doFetchCompleted, false);
+  releaseDoFetch?.();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(doFetchCompleted, true);
 });
