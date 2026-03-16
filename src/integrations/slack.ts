@@ -1,8 +1,6 @@
 import type { Env } from "../core/types";
 import { deriveRoutingKey, verifySlackSignature } from "./slack-routing";
 import { createLogRef, logEvent } from "../core/observability";
-import { redactSecrets } from "../core/safety";
-import { classifyIntent, handleCommand } from "./slack-commands";
 import { withDOAuth } from "../core/do-auth";
 import type { SlackEventPayload } from "./slack-message-processing";
 

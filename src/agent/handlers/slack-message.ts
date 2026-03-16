@@ -12,6 +12,14 @@ import {
 import { checkRateLimit, configureRateLimit } from "../../integrations/slack-rate-limit";
 import type { Env } from "../../core/types";
 
+type BackgroundCommand = "selftest" | "self-improve";
+
+type MessageRoute =
+  | { kind: "background-command"; command: BackgroundCommand }
+  | { kind: "direct-command" }
+  | { kind: "repo-question" }
+  | { kind: "chat" };
+
 function formatSlackError(message: string, logRef: string): string {
   return `A system error occurred. Please retry. (ref: ${logRef})\n${message}`;
 }
@@ -83,9 +91,18 @@ async function postHandledCommandResponse(
   await postToSlack(channel, commandResponse, env);
 }
 
-function shouldRunCommandInBackground(text: string): boolean {
+function classifyMessageRoute(text: string): MessageRoute {
   const keywordCommand = getExactKeywordCommand(text);
-  return keywordCommand === "selftest" || keywordCommand === "self-improve";
+  if (keywordCommand === "selftest" || keywordCommand === "self-improve") {
+    return { kind: "background-command", command: keywordCommand };
+  }
+  if (keywordCommand) {
+    return { kind: "direct-command" };
+  }
+  if (isRepoConnectivityQuestion(text)) {
+    return { kind: "repo-question" };
+  }
+  return { kind: "chat" };
 }
 
 async function runDeferredMessageProcessing(
@@ -93,6 +110,7 @@ async function runDeferredMessageProcessing(
   ctx: RouterCtx,
   conversationDO: DurableObjectStub | null,
   conversationKey: string,
+  route: Extract<MessageRoute, { kind: "background-command" | "chat" }>,
 ): Promise<void> {
   const env = ctx.env;
   const channel = body.event?.channel;
@@ -100,16 +118,11 @@ async function runDeferredMessageProcessing(
 
   const text = body.event.text;
 
-  if (shouldRunCommandInBackground(text)) {
+  if (route.kind === "background-command") {
     const commandResult = await handleCommand(text, channel, env, conversationDO);
     if (commandResult.handled) {
-      await postHandledCommandResponse(body, commandResult.response, env, { selftestLeadAlreadyPosted: getExactKeywordCommand(text) === "selftest" });
+      await postHandledCommandResponse(body, commandResult.response, env, { selftestLeadAlreadyPosted: route.command === "selftest" });
     }
-    return;
-  }
-
-  if (isRepoConnectivityQuestion(text)) {
-    await postToSlack(channel, await answerRepoConnectivityQuestion(env), env);
     return;
   }
 
@@ -197,21 +210,32 @@ export async function handleProcessMessage(request: Request, ctx: RouterCtx): Pr
   const key = deriveRoutingKey(body);
   const conversationDO = env.AGENT_DO ? env.AGENT_DO.get(env.AGENT_DO.idFromName(key)) : null;
   const text = body.event.text;
+  const route = classifyMessageRoute(text);
 
-  if (shouldRunCommandInBackground(text)) {
-    if (getExactKeywordCommand(text) === "selftest") {
+  if (route.kind === "background-command") {
+    if (route.command === "selftest") {
       await postToSlack(body.event.channel, "Running self-test…", env);
     }
-    ctx.state.waitUntil(runDeferredMessageProcessing(body, ctx, conversationDO, key));
+    ctx.state.waitUntil(runDeferredMessageProcessing(body, ctx, conversationDO, key, route));
     return new Response("OK");
   }
 
-  const commandResult = await handleCommand(body.event.text, body.event.channel, env, conversationDO);
-  if (commandResult.handled) {
-    await postHandledCommandResponse(body, commandResult.response, env);
+  if (route.kind === "direct-command") {
+    const commandResult = await handleCommand(text, body.event.channel, env, conversationDO);
+    if (commandResult.handled) {
+      await postHandledCommandResponse(body, commandResult.response, env);
+      return new Response("OK");
+    }
+    logEvent(env, "slack_ingest", "direct_command_unhandled", { text, channel: body.event.channel });
+    ctx.state.waitUntil(runDeferredMessageProcessing(body, ctx, conversationDO, key, { kind: "chat" }));
     return new Response("OK");
   }
 
-  ctx.state.waitUntil(runDeferredMessageProcessing(body, ctx, conversationDO, key));
+  if (route.kind === "repo-question") {
+    await postToSlack(body.event.channel, await answerRepoConnectivityQuestion(env), env);
+    return new Response("OK");
+  }
+
+  ctx.state.waitUntil(runDeferredMessageProcessing(body, ctx, conversationDO, key, route));
   return new Response("OK");
 }
