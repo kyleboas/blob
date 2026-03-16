@@ -159,6 +159,37 @@ async function withTimeout<T>(factory: () => Promise<T>, timeoutMs: number): Pro
   });
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function probeSandbox(env: Env): Promise<boolean> {
+  if (typeof env.SANDBOX.start !== "function") {
+    return false;
+  }
+
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await env.SANDBOX.start();
+      if (typeof env.SANDBOX.exec === "function") {
+        const result = await env.SANDBOX.exec("true");
+        if (result.exitCode !== 0) {
+          throw new Error(result.stderr || result.stdout || "sandbox exec failed");
+        }
+      }
+      return true;
+    } catch (err) {
+      if (attempt === maxAttempts) {
+        return false;
+      }
+      await delay(250 * attempt);
+    }
+  }
+
+  return false;
+}
+
 async function runHealthChecks(env: Env): Promise<Response> {
   const timeoutMs = 5000;
 
@@ -167,13 +198,7 @@ async function runHealthChecks(env: Env): Promise<Response> {
     return true;
   }, timeoutMs).catch(() => false);
 
-  const sandboxCheck = withTimeout(async () => {
-    if (typeof env.SANDBOX.start !== "function") {
-      return false;
-    }
-    await env.SANDBOX.start();
-    return true;
-  }, timeoutMs).catch(() => false);
+  const sandboxCheck = withTimeout(() => probeSandbox(env), timeoutMs).catch(() => false);
 
   const vectorizeCheck = withTimeout(async () => {
     if (!env.PI_VECTORS || !env.AI) {
