@@ -13,12 +13,13 @@ import { checkRateLimit, configureRateLimit } from "../../integrations/slack-rat
 import type { Env } from "../../core/types";
 
 type BackgroundCommand = "selftest" | "self-improve";
+type SlackIntent = Awaited<ReturnType<typeof classifyIntent>>;
 
 type MessageRoute =
   | { kind: "background-command"; command: BackgroundCommand }
   | { kind: "direct-command" }
   | { kind: "repo-question" }
-  | { kind: "chat" };
+  | { kind: "chat"; intentHint?: SlackIntent };
 
 function formatSlackError(message: string, logRef: string): string {
   return `A system error occurred. Please retry. (ref: ${logRef})\n${message}`;
@@ -102,7 +103,33 @@ function classifyMessageRoute(text: string): MessageRoute {
   if (isRepoConnectivityQuestion(text)) {
     return { kind: "repo-question" };
   }
-  return { kind: "chat" };
+
+  if (looksLikeCronRequest(text)) {
+    return { kind: "chat" };
+  }
+
+  if (looksLikeRepoTask(text)) {
+    return { kind: "chat", intentHint: { intent: "chat", needsSandbox: true, externalDataOnly: false } };
+  }
+
+  if (looksLikeExternalDataTask(text)) {
+    return { kind: "chat", intentHint: { intent: "chat", needsSandbox: true, externalDataOnly: true } };
+  }
+
+  return { kind: "chat", intentHint: { intent: "chat", needsSandbox: false, externalDataOnly: false } };
+}
+
+function looksLikeCronRequest(text: string): boolean {
+  return /\b(remind me|cron|schedule|every \d+|hourly|daily|weekly|monthly|delete .*job|list .*job)\b/i.test(text);
+}
+
+function looksLikeRepoTask(text: string): boolean {
+  return /\b(read|open|show|inspect|summarize|explain|edit|write|create|update|delete|run|test|fix|debug|grep|search)\b/i.test(text)
+    && /(^|\s)(src\/|docs\/|package\.json|README\.md|wrangler\.|\.ts\b|\.tsx\b|\.js\b|\.md\b|file\b|repo\b|repository\b|health\b|selftest\b)/i.test(text);
+}
+
+function looksLikeExternalDataTask(text: string): boolean {
+  return /\b(weather|forecast|temperature|stock|price|score|news|latest|current|today|now|website|status of|who is|search the web|look up|browse)\b/i.test(text);
 }
 
 async function runDeferredMessageProcessing(
@@ -126,7 +153,7 @@ async function runDeferredMessageProcessing(
     return;
   }
 
-  const intent = await classifyIntent(text, env);
+  const intent = route.intentHint ?? await classifyIntent(text, env);
 
   // Wrap processIntentOrChat in a timeout so the DO posts a fallback before being killed.
   // Cloudflare DOs have a wall-clock limit; if we exceed it silently the user gets no response.
