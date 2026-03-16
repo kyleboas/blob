@@ -170,6 +170,13 @@ function createCtx(): RouterCtx {
     messages: [],
     userPreferences: {},
     processedEvents: [],
+    modelCatalog: {
+      "workers-ai/@cf/nvidia/nemotron-3-120b-a12b": {
+        name: "NVIDIA Nemotron 3 120B",
+        description: "Primary model for coding and tool-calling via AI Gateway.",
+        maxTokens: 8192,
+      },
+    },
   };
 
   return {
@@ -210,6 +217,15 @@ test("do router maps endpoints to handlers and unknown routes 404", async () => 
 
   const listJobs = await routeRequest(new URL("https://example.com/jobs"), "GET", new Request("https://example.com/jobs"), ctx);
   assert.equal((await bodyJson(listJobs)).jobs.length, 1);
+
+  const catalog = await routeRequest(
+    new URL("https://example.com/catalog"),
+    "GET",
+    new Request("https://example.com/catalog"),
+    ctx,
+  );
+  assert.equal(catalog.status, 200);
+  assert.equal((await bodyJson(catalog)).catalog["workers-ai/@cf/nvidia/nemotron-3-120b-a12b"].maxTokens, 8192);
 
   const checks: Array<{ method: string; path: string; body?: Record<string, unknown>; expectStatus?: number }> = [
     { method: "POST", path: "/state/migrate", body: { channelMessages: [{ role: "user", content: "old", timestamp: 1 }] } },

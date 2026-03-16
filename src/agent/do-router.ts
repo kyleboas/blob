@@ -91,6 +91,10 @@ export async function routeRequest(
     return json({ saved: repo, goals });
   }
 
+  if (pathname === "/catalog" && method === "GET") {
+    return json({ catalog: data.modelCatalog ?? {} });
+  }
+
   if (pathname === "/messages" && method === "POST") {
     return handleStoreMessage(request, ctx);
   }
