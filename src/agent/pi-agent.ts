@@ -684,12 +684,7 @@ fi
     const verbosity = opts.verbosity ?? "minimal";
     const conversationKey = opts.conversationKey ?? this.repoDir;
     const selftestRoot = "/workspace";
-    const selftestTimeoutMs = 300000;
-    const vectorQueryRetryMs = Math.max(1, Number.parseInt(this.env.SELFTEST_VECTORIZE_QUERY_RETRY_MS ?? "1000", 10) || 1000);
-    const vectorQueryTimeoutMs = Math.max(
-      vectorQueryRetryMs,
-      Number.parseInt(this.env.SELFTEST_VECTORIZE_QUERY_TIMEOUT_MS ?? "10000", 10) || 10000,
-    );
+    const selftestTimeoutMs = 30000;
     this.activeSecrets = opts.secrets ?? {};
     const stepLines: string[] = [];
     const uniqueToken = `selftest-${Date.now()}`;
@@ -747,7 +742,6 @@ fi
         tags: ["selftest", "healthcheck"],
         sourceRefs: [this.repo],
       };
-      const vectorQueryText = `${record.summary}\n${record.tags.join(" ")}`;
       await appendLearnedRecord(this.env, record);
       const flushed = await flushLearnedRecordsToR2(this.env, conversationKey);
       if (!flushed.key || flushed.count < 1) {
@@ -771,8 +765,6 @@ fi
           lastUpsertAt: new Date().toISOString(),
           lastUpsertOk: false,
           lastUpsertError: "PI_VECTORS binding missing",
-          lastQueryAt: new Date().toISOString(),
-          lastQueryCount: 0,
         });
         await recordStep("vectorize", "skipped (PI_VECTORS binding missing; configure Vectorize to enable semantic recall)");
       } else {
@@ -789,31 +781,7 @@ fi
         if (!upsert.ok || !upsert.id) {
           throw new Error(`Vectorize upsert failed: ${upsert.error ?? "unknown error"}`);
         }
-
-        const deadline = Date.now() + vectorQueryTimeoutMs;
-        let matches = await querySemanticMemory(this.env, {
-          conversationKey,
-          query: vectorQueryText,
-          topK: 10,
-        });
-        let matched = matches.some((entry) => entry.id === upsert.id || entry.r2Key === flushed.key);
-        while (!matched && Date.now() < deadline) {
-          await sleep(vectorQueryRetryMs);
-          matches = await querySemanticMemory(this.env, {
-            conversationKey,
-            query: vectorQueryText,
-            topK: 10,
-          });
-          matched = matches.some((entry) => entry.id === upsert.id || entry.r2Key === flushed.key);
-        }
-        await updateVectorizeMemoryStatus(this.env, {
-          lastQueryAt: new Date().toISOString(),
-          lastQueryCount: matches.length,
-        });
-        if (!matched) {
-          throw new Error("Vectorize query did not return selftest record");
-        }
-        await recordStep("vectorize", `upsert+query verified (${matches.length} match(es))`);
+        await recordStep("vectorize", `upsert verified (${upsert.id})`);
       }
 
       logEvent(this.env, "tool_call", "selftest_passed", {

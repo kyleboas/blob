@@ -60,7 +60,10 @@ function makeEnv(overrides: Record<string, unknown> = {}) {
       },
       deleteByIds: async () => undefined,
       insert: async () => undefined,
-      getByIds: async () => ({ vectors: [] }),
+      getByIds: async (ids: string[]) => ids.flatMap((id) => {
+        const row = vectors.get(id);
+        return row ? [row] : [];
+      }),
       describe: async () => ({ dimensions: 3, count: 0, metric: "cosine" }),
     },
     REPO_STORE: {
