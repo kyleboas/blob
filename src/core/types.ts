@@ -36,6 +36,8 @@ export interface Env {
   WORKER_NAME?: string;
   DO_AUTH_SECRET?: string;
   SELFTEST_ADMIN_TOKEN?: string;
+  SELFTEST_VECTORIZE_QUERY_RETRY_MS?: string;
+  SELFTEST_VECTORIZE_QUERY_TIMEOUT_MS?: string;
 
   CRON_FAIL_THRESHOLD?: string;
   CRON_STALL_MULTIPLIER?: string;
