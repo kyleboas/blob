@@ -164,6 +164,10 @@ function summarizeText(text: string, maxChars = 300): string {
   return `${normalized.slice(0, maxChars)}…`;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function encodeBase64(bytes: Uint8Array): string {
   let binary = "";
   const chunkSize = 0x8000;
@@ -681,6 +685,11 @@ fi
     const conversationKey = opts.conversationKey ?? this.repoDir;
     const selftestRoot = "/workspace";
     const selftestTimeoutMs = 300000;
+    const vectorQueryRetryMs = Math.max(1, Number.parseInt(this.env.SELFTEST_VECTORIZE_QUERY_RETRY_MS ?? "1000", 10) || 1000);
+    const vectorQueryTimeoutMs = Math.max(
+      vectorQueryRetryMs,
+      Number.parseInt(this.env.SELFTEST_VECTORIZE_QUERY_TIMEOUT_MS ?? "10000", 10) || 10000,
+    );
     this.activeSecrets = opts.secrets ?? {};
     const stepLines: string[] = [];
     const uniqueToken = `selftest-${Date.now()}`;
@@ -780,16 +789,26 @@ fi
           throw new Error(`Vectorize upsert failed: ${upsert.error ?? "unknown error"}`);
         }
 
-        const matches = await querySemanticMemory(this.env, {
+        const deadline = Date.now() + vectorQueryTimeoutMs;
+        let matches = await querySemanticMemory(this.env, {
           conversationKey,
           query: uniqueToken,
           topK: 5,
         });
+        let matched = matches.some((entry) => entry.id === upsert.id || entry.r2Key === flushed.key);
+        while (!matched && Date.now() < deadline) {
+          await sleep(vectorQueryRetryMs);
+          matches = await querySemanticMemory(this.env, {
+            conversationKey,
+            query: uniqueToken,
+            topK: 5,
+          });
+          matched = matches.some((entry) => entry.id === upsert.id || entry.r2Key === flushed.key);
+        }
         await updateVectorizeMemoryStatus(this.env, {
           lastQueryAt: new Date().toISOString(),
           lastQueryCount: matches.length,
         });
-        const matched = matches.some((entry) => entry.id === upsert.id || entry.r2Key === flushed.key);
         if (!matched) {
           throw new Error("Vectorize query did not return selftest record");
         }
