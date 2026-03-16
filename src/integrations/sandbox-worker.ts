@@ -152,4 +152,35 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
     );
     return result.content ?? "";
   }
+
+  async gitCheckout(
+    repoUrl: string,
+    options?: { branch?: string; targetDir?: string; depth?: number },
+  ): Promise<{ success: boolean; targetDir?: string; branch?: string }> {
+    const sandbox = getSandbox(this.env.Sandbox, "agent");
+    await withOperationLog(
+      "gitCheckout",
+      {
+        sandbox: "agent",
+        targetDir: options?.targetDir ?? "/workspace",
+        branch: options?.branch ?? "default",
+        depth: options?.depth ?? "full",
+      },
+      () => runSandboxOperation(sandbox, () => sandbox.gitCheckout(repoUrl, options)),
+    );
+    return {
+      success: true,
+      targetDir: options?.targetDir,
+      branch: options?.branch,
+    };
+  }
+
+  async setEnvVars(envVars: Record<string, string | undefined>): Promise<void> {
+    const sandbox = getSandbox(this.env.Sandbox, "agent");
+    await withOperationLog(
+      "setEnvVars",
+      { sandbox: "agent", envVarCount: Object.keys(envVars).length },
+      () => runSandboxOperation(sandbox, () => sandbox.setEnvVars(envVars)),
+    );
+  }
 }

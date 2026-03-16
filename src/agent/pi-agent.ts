@@ -6,7 +6,7 @@ import { estimateTokens } from "../core/tokens";
 import { classifyIntent } from "../core/intent-classifier";
 import { withDOAuth } from "../core/do-auth";
 import { expireUnusedTools } from "./tool-lifecycle";
-import { buildRepoBootstrapScript, detectVerificationCommand, repoDirFromSlug } from "./repo-diagnosis";
+import { detectVerificationCommand, ensureRepoWorkspaceReady, getGitEnvVars, repoDirFromSlug } from "./repo-diagnosis";
 import {
   appendLearnedRecord,
   buildSemanticMemoryContext,
@@ -152,10 +152,6 @@ function containsToolAvoidanceClaim(message: string): boolean {
   return TOOL_AVOIDANCE_CLAIMS.test(message);
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'"'"'`)}'`;
-}
-
 function summarizeText(text: string, maxChars = 300): string {
   const normalized = text.trim().replace(/\s+/g, " ");
   if (normalized.length <= maxChars) {
@@ -166,44 +162,6 @@ function summarizeText(text: string, maxChars = 300): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function encodeBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const chunk = bytes.subarray(i, i + chunkSize);
-    binary += String.fromCharCode(...chunk);
-  }
-  return btoa(binary);
-}
-
-function decodeBase64(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-function concatBytes(parts: Uint8Array[]): Uint8Array {
-  const total = parts.reduce((sum, part) => sum + part.length, 0);
-  const merged = new Uint8Array(total);
-  let offset = 0;
-  for (const part of parts) {
-    merged.set(part, offset);
-    offset += part.length;
-  }
-  return merged;
-}
-
-function chunkString(input: string, chunkSize: number): string[] {
-  const chunks: string[] = [];
-  for (let i = 0; i < input.length; i += chunkSize) {
-    chunks.push(input.slice(i, i + chunkSize));
-  }
-  return chunks;
 }
 
 function buildCurrentDateTimeMessage(): PiMessage {
@@ -294,63 +252,7 @@ Stop when done and provide a concise summary.`;
     verbosity: RunOptions["verbosity"] = "minimal",
   ): Promise<void> {
     await ensureSandboxSession(sandboxId, this.env);
-
-    const cacheKey = `repo-cache/${this.repoDir}.tar.gz`;
-    let restoredFromCache = false;
-
-    if (this.env.REPO_STORE) {
-      try {
-        const cacheObject = await this.env.REPO_STORE.get(cacheKey);
-        if (cacheObject) {
-          await this.restoreRepoFromCache(sandboxId, cacheObject);
-          restoredFromCache = true;
-        }
-      } catch (err) {
-        logEvent(this.env, "tool_call", "repo_cache_restore_failed", { repoDir: this.repoDir, error: String(err) });
-        await this.clearWorkspaceRepo(sandboxId);
-      }
-    }
-
-    let result = await executeInSandbox(buildRepoBootstrapScript(this.repoDir, this.repo), this.env, {
-      sandboxId,
-      timeout: 180000,
-      envVars: this.env.GITHUB_TOKEN
-        ? {
-            GITHUB_TOKEN: this.env.GITHUB_TOKEN,
-            GIT_ASKPASS: "/usr/local/bin/blob-git-askpass",
-            GIT_TERMINAL_PROMPT: "0",
-          }
-        : undefined,
-    });
-
-    if (result.exitCode !== 0 && restoredFromCache) {
-      logEvent(this.env, "tool_call", "repo_cache_restore_bootstrap_fallback", { repoDir: this.repoDir, stderr: summarizeText(result.stderr, 400) });
-      await this.clearWorkspaceRepo(sandboxId);
-      result = await executeInSandbox(buildRepoBootstrapScript(this.repoDir, this.repo), this.env, {
-        sandboxId,
-        timeout: 180000,
-        envVars: this.env.GITHUB_TOKEN
-          ? {
-              GITHUB_TOKEN: this.env.GITHUB_TOKEN,
-              GIT_ASKPASS: "/usr/local/bin/blob-git-askpass",
-              GIT_TERMINAL_PROMPT: "0",
-            }
-          : undefined,
-      });
-    }
-
-    if (result.exitCode !== 0) {
-      const excerpt = summarizeText(result.stderr || result.stdout || "unknown bootstrap error");
-      throw new Error(`repo bootstrap failed (${this.repoDir}): ${excerpt}`);
-    }
-
-    if (this.env.REPO_STORE) {
-      try {
-        await this.uploadRepoCache(sandboxId, cacheKey);
-      } catch (err) {
-        logEvent(this.env, "tool_call", "repo_cache_upload_failed", { repoDir: this.repoDir, error: String(err) });
-      }
-    }
+    await ensureRepoWorkspaceReady(this.env, this.repo, sandboxId, 180000);
 
     await this.ensureToolFramework(sandboxId);
 
@@ -359,109 +261,30 @@ Stop when done and provide a concise summary.`;
     }
   }
 
-  private async clearWorkspaceRepo(sandboxId: string): Promise<void> {
-    await executeInSandbox(`rm -rf ${shellQuote(`/workspace/${this.repoDir}`)}`, this.env, { sandboxId, timeout: 60000 });
-  }
-
-  private async restoreRepoFromCache(sandboxId: string, cacheObject: R2ObjectBody): Promise<void> {
-    const tarPath = `/tmp/${this.repoDir}.tar.gz`;
-    const base64Path = `${tarPath}.b64`;
-    const bytes = new Uint8Array(await cacheObject.arrayBuffer());
-    const base64 = encodeBase64(bytes);
-    const chunks = chunkString(base64, 700_000);
-
-    await executeInSandbox(`rm -f ${shellQuote(base64Path)} ${shellQuote(tarPath)} && mkdir -p /workspace`, this.env, { sandboxId, timeout: 60000 });
-
-    for (let index = 0; index < chunks.length; index += 1) {
-      const chunk = chunks[index] ?? "";
-      const chunkPath = `${base64Path}.part.${index.toString().padStart(4, "0")}`;
-      await this.env.SANDBOX.writeFile(chunkPath, chunk);
-    }
-
-    const restoreResult = await executeInSandbox(
-      `set -eu
-cat ${shellQuote(`${base64Path}.part.`)}* > ${shellQuote(base64Path)}
-base64 -d ${shellQuote(base64Path)} > ${shellQuote(tarPath)}
-tar -xzf ${shellQuote(tarPath)} -C /
-rm -f ${shellQuote(base64Path)} ${shellQuote(tarPath)} ${shellQuote(`${base64Path}.part.`)}*`,
-      this.env,
-      { sandboxId, timeout: 180000 },
-    );
-
-    if (restoreResult.exitCode !== 0) {
-      throw new Error(`cache restore command failed: ${restoreResult.stderr || restoreResult.stdout || "unknown"}`);
-    }
-  }
-
-  private async uploadRepoCache(sandboxId: string, cacheKey: string): Promise<void> {
-    const partsPrefix = `/tmp/${this.repoDir}.repo-cache.part.`;
-    const chunkCountResult = await executeInSandbox(
-      `set -eu
-rm -f ${shellQuote(partsPrefix)}*
-tar -czf - ${shellQuote(`/workspace/${this.repoDir}`)} | base64 -w0 | split -b 700k -d -a 4 - ${shellQuote(partsPrefix)}
-ls ${shellQuote(partsPrefix)}* | wc -l`,
-      this.env,
-      { sandboxId, timeout: 180000 },
-    );
-
-    if (chunkCountResult.exitCode !== 0) {
-      throw new Error(`cache archive failed: ${chunkCountResult.stderr || chunkCountResult.stdout || "unknown"}`);
-    }
-
-    const chunkCount = Number.parseInt(chunkCountResult.stdout.trim(), 10);
-    if (!Number.isFinite(chunkCount) || chunkCount <= 0) {
-      throw new Error(`invalid cache chunk count: ${chunkCountResult.stdout}`);
-    }
-
-    const decodedChunks: Uint8Array[] = [];
-    for (let index = 0; index < chunkCount; index += 1) {
-      const chunkPath = `${partsPrefix}${index.toString().padStart(4, "0")}`;
-      const encodedChunk = await this.env.SANDBOX.readFile(chunkPath);
-      decodedChunks.push(decodeBase64(encodedChunk.trim()));
-    }
-
-    const archiveBytes = concatBytes(decodedChunks);
-    await this.env.REPO_STORE.put(cacheKey, archiveBytes, {
-      httpMetadata: { contentType: "application/gzip" },
-    });
-
-    await executeInSandbox(`rm -f ${shellQuote(partsPrefix)}*`, this.env, { sandboxId, timeout: 30000 });
-  }
-
   private async ensureToolFramework(sandboxId: string): Promise<void> {
     const blobDir = `/workspace/${this.repoDir}/.blob`;
-    const initScript = `set -eu
-mkdir -p ${blobDir}/tools ${blobDir}/config ${blobDir}/memory ${blobDir}/scratch
+    await executeInSandbox(`mkdir -p ${blobDir}/tools ${blobDir}/config ${blobDir}/memory ${blobDir}/scratch`, this.env, { sandboxId });
 
-# Seed manifest.json if missing
-if [ ! -f ${blobDir}/tools/manifest.json ]; then
-  cat > ${blobDir}/tools/manifest.json << 'SEED'
-{"tools":[]}
-SEED
-fi
+    const seedFileIfMissing = async (path: string, content: string): Promise<void> => {
+      const existsCheck = await executeInSandbox(`test -f '${path.replace(/'/g, `'\\''`)}'`, this.env, {
+        sandboxId,
+        timeout: 10000,
+      });
+      if (existsCheck.exitCode === 0) {
+        const existing = await this.env.SANDBOX.readFile(path);
+        if (existing.trim().length > 0) {
+          return;
+        }
+      }
+      await this.env.SANDBOX.writeFile(path, content);
+    };
 
-# Seed services.json if missing
-if [ ! -f ${blobDir}/config/services.json ]; then
-  cat > ${blobDir}/config/services.json << 'SEED'
-{"services":{}}
-SEED
-fi
-
-# Seed context.md if missing
-if [ ! -f ${blobDir}/memory/context.md ]; then
-  cat > ${blobDir}/memory/context.md << 'SEED'
-# User Context
-SEED
-fi
-
-# Seed journal.md if missing
-if [ ! -f ${blobDir}/memory/journal.md ]; then
-  cat > ${blobDir}/memory/journal.md << 'SEED'
-# Journal
-SEED
-fi
-`;
-    await executeInSandbox(initScript, this.env, { sandboxId });
+    await Promise.all([
+      seedFileIfMissing(`${blobDir}/tools/manifest.json`, JSON.stringify({ tools: [] }, null, 2)),
+      seedFileIfMissing(`${blobDir}/config/services.json`, JSON.stringify({ services: {} }, null, 2)),
+      seedFileIfMissing(`${blobDir}/memory/context.md`, "# User Context\n"),
+      seedFileIfMissing(`${blobDir}/memory/journal.md`, "# Journal\n"),
+    ]);
 
     const days = Number.parseInt(this.env.TOOL_EXPIRY_DAYS ?? "30", 10);
     try {
@@ -570,7 +393,8 @@ fi
             // When skipRepoBootstrap is set, don't force a cd to the workspace dir
             // (it doesn't exist). Run the command in the sandbox root instead.
             const workspaceRoot = this.skipRepoBootstrap ? undefined : `/workspace/${this.repoDir}`;
-            const result = await executeInSandbox(String(call.args.command ?? ""), this.env, { sandboxId, workspaceRoot, envVars: this.activeSecrets });
+            const envVars = this.skipRepoBootstrap ? this.activeSecrets : { ...getGitEnvVars(this.env), ...this.activeSecrets };
+            const result = await executeInSandbox(String(call.args.command ?? ""), this.env, { sandboxId, workspaceRoot, envVars });
             return { output: result.stdout, error: result.stderr || undefined };
           }
         }
@@ -683,13 +507,12 @@ fi
     const sandboxId = opts.sandboxId ?? "default";
     const verbosity = opts.verbosity ?? "minimal";
     const conversationKey = opts.conversationKey ?? this.repoDir;
-    const selftestRoot = "/workspace";
+    const selftestRoot = `/workspace/${this.repoDir}`;
     const selftestTimeoutMs = 30000;
     this.activeSecrets = opts.secrets ?? {};
     const stepLines: string[] = [];
     const uniqueToken = `selftest-${Date.now()}`;
-    const readmePath = `.blob-selftest-${this.repoDir}-README.md`;
-    const statePath = `.blob-selftest-${this.repoDir}.txt`;
+    const statePath = ".blob/selftest.txt";
 
     const recordStep = async (label: string, detail: string, ok = true): Promise<void> => {
       const icon = ok ? "✅" : "❌";
@@ -701,24 +524,18 @@ fi
     };
 
     try {
-      await ensureSandboxSession(sandboxId, this.env);
-      await recordStep("workspace", `using scratch workspace at ${selftestRoot}`);
-
-      await writeTool(readmePath, `# Blob Self-Test\n\n${uniqueToken}\n`, this.env, {
-        sandboxId,
-        workspaceRoot: selftestRoot,
-      });
-
-      const readme = await readTool(readmePath, this.env, {
-        sandboxId,
-        workspaceRoot: selftestRoot,
-      });
-      await recordStep("read", `${readmePath} (${readme.length} bytes)`);
+      await this.ensureRepoBootstrapped(sandboxId, opts.onProgress, verbosity);
+      await recordStep("workspace", `using repo workspace at ${selftestRoot}`);
 
       await writeTool(statePath, `${uniqueToken} initial`, this.env, {
         sandboxId,
         workspaceRoot: selftestRoot,
       });
+      const readback = await readTool(statePath, this.env, {
+        sandboxId,
+        workspaceRoot: selftestRoot,
+      });
+      await recordStep("read", `${statePath} (${readback.length} bytes)`);
       await editTool(statePath, "initial", "edited", this.env, {
         sandboxId,
         workspaceRoot: selftestRoot,
@@ -1046,6 +863,5 @@ export const __piAgentTestUtils = {
   summarizeArgs,
   TOOL_SCHEMAS,
   isTransientError,
-  buildBootstrapScript: buildRepoBootstrapScript,
   containsToolAvoidanceClaim,
 };

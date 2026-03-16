@@ -22,11 +22,11 @@ const SANDBOX_STARTUP_RETRYABLE_MESSAGES = [
   "createSession",
   "there is no container instance that can be provided",
 ];
-const SANDBOX_STATE_PREFIX = "sandbox-state/";
 const WORKSPACE_STATE_DIR = "/workspace/blob_state";
 const DEFAULT_SANDBOX_IO_TIMEOUT_MS = 60000;
 
 const sessions = new Map<string, SandboxSession>();
+const sandboxEnvKeys = new Set<string>();
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -145,36 +145,54 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   });
 }
 
-async function persistWorkspaceState(sandboxId: string, env: Env): Promise<void> {
-  if (!env.REPO_STORE) return;
-  const timeoutMs = getSandboxIoTimeoutMs(env);
-  const [log, context] = await Promise.all([
-    withTimeout(env.SANDBOX.readFile(`${WORKSPACE_STATE_DIR}/log.jsonl`), timeoutMs).catch(() => ""),
-    withTimeout(env.SANDBOX.readFile(`${WORKSPACE_STATE_DIR}/context.jsonl`), timeoutMs).catch(() => ""),
-  ]);
+async function syncSandboxEnvVars(env: Env, envVars?: Record<string, string>): Promise<void> {
+  if (typeof env.SANDBOX.setEnvVars !== "function") {
+    return;
+  }
 
-  await env.REPO_STORE.put(`${SANDBOX_STATE_PREFIX}${sandboxId}.json`, JSON.stringify({ log, context }));
+  const nextKeys = new Set(Object.keys(envVars ?? {}));
+  const payload: Record<string, string | undefined> = {};
+
+  for (const key of sandboxEnvKeys) {
+    if (!nextKeys.has(key)) {
+      payload[key] = undefined;
+    }
+  }
+
+  for (const [key, value] of Object.entries(envVars ?? {})) {
+    payload[key] = value;
+  }
+
+  if (Object.keys(payload).length === 0) {
+    return;
+  }
+
+  await withTimeout(env.SANDBOX.setEnvVars(payload), getSandboxIoTimeoutMs(env));
+
+  sandboxEnvKeys.clear();
+  for (const key of nextKeys) {
+    sandboxEnvKeys.add(key);
+  }
 }
 
-async function restoreWorkspaceState(sandboxId: string, env: Env): Promise<void> {
-  if (!env.REPO_STORE) return;
-  const timeoutMs = getSandboxIoTimeoutMs(env);
-  const saved = await env.REPO_STORE.get(`${SANDBOX_STATE_PREFIX}${sandboxId}.json`);
-  if (!saved) return;
-  const payload = await saved.json<{ log?: string; context?: string }>();
-  if (payload.log) {
-    await withTimeout(env.SANDBOX.writeFile(`${WORKSPACE_STATE_DIR}/log.jsonl`, payload.log), timeoutMs);
+export async function configureSandboxEnvVars(
+  env: Env,
+  envVars?: Record<string, string>,
+  sandboxId?: string,
+): Promise<void> {
+  if (sandboxId) {
+    await ensureSandboxSession(sandboxId, env);
+  } else {
+    await ensureSandboxStarted(env);
   }
-  if (payload.context) {
-    await withTimeout(env.SANDBOX.writeFile(`${WORKSPACE_STATE_DIR}/context.jsonl`, payload.context), timeoutMs);
-  }
+
+  await syncSandboxEnvVars(env, envVars);
 }
 
 export async function ensureSandboxSession(sandboxId: string, env: Env): Promise<void> {
   await ensureSandboxStarted(env);
 
   if (!sessions.has(sandboxId)) {
-    await restoreWorkspaceState(sandboxId, env);
     sessions.set(sandboxId, { lastUsedAt: Date.now() });
   } else {
     sessions.get(sandboxId)!.lastUsedAt = Date.now();
@@ -187,7 +205,6 @@ export async function teardownIdleSandboxes(env: Env, now = Date.now()): Promise
 
   for (const [sandboxId, session] of sessions.entries()) {
     if (now - session.lastUsedAt >= idleMs) {
-      await persistWorkspaceState(sandboxId, env);
       sessions.delete(sandboxId);
       removed.push(sandboxId);
     }
@@ -207,7 +224,6 @@ export async function cleanupSandboxForJob(
   }
 
   if (sessions.has(sandboxId)) {
-    await persistWorkspaceState(sandboxId, env);
     sessions.delete(sandboxId);
   }
 }
@@ -228,10 +244,8 @@ export async function executeInSandbox(
   const timeout = opts.timeout ?? Number.parseInt(env.BASH_TIMEOUT_MS ?? "120000", 10);
   const maxOutputBytes = Number.parseInt(env.BASH_MAX_OUTPUT_BYTES ?? "1000000", 10);
   const workspaceRoot = opts.workspaceRoot ? resolveWorkspaceRoot(opts.workspaceRoot) : undefined;
-  const envExports = Object.entries(opts.envVars ?? {})
-    .map(([key, value]) => `export ${key}=${JSON.stringify(value)};`)
-    .join(" ");
-  const commandToRun = workspaceRoot ? `cd ${workspaceRoot} && ${envExports} ${command}`.trim() : `${envExports} ${command}`.trim();
+  await syncSandboxEnvVars(env, opts.envVars);
+  const commandToRun = workspaceRoot ? `cd ${workspaceRoot} && ${command}`.trim() : command.trim();
   const result = await withTimeout(env.SANDBOX.exec(commandToRun), timeout);
   if (estimateBytes(result.stdout) > maxOutputBytes) {
     result.stdout = result.stdout.slice(0, maxOutputBytes) + "\n[output truncated]";
@@ -310,6 +324,7 @@ export async function readWorkspaceState(kind: "log" | "context", env: Env, sand
 
 export function __resetSandboxSessionsForTests(): void {
   sessions.clear();
+  sandboxEnvKeys.clear();
 }
 
 export const __sandboxTestUtils = { normalizeToolPath, resolveWorkspaceRoot };

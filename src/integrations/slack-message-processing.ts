@@ -7,6 +7,7 @@ import type { Env } from "../core/types";
 import { withDOAuth } from "../core/do-auth";
 import { classifyIntent, getConversationVerbosity } from "./slack-commands";
 import { deriveRoutingKey } from "./slack-routing";
+import { parseDirectSandboxTask, runDirectSandboxTask } from "./slack-simple-sandbox";
 import { addCronJob, deleteCronJob, getCronJobs } from "../jobs/cron";
 import { processApprovalMessage, requestApproval } from "../agent/deploy-approval";
 
@@ -181,6 +182,16 @@ export async function processIntentOrChat(params: {
   try {
     const conversationHistory = await getConversationHistory(conversationDO, env);
     if (intent.needsSandbox) {
+      const directTask = parseDirectSandboxTask(text);
+      if (directTask) {
+        const directResponse = await runDirectSandboxTask(directTask, env, conversationKey);
+        await postToSlack(channel, directResponse, env);
+        storeExchange(conversationDO, text, directResponse, env).catch((err) =>
+          logEvent(env, "slack_ingest", "store_exchange_failed", { error: String(err) }),
+        );
+        return;
+      }
+
       const repos = await getRepos(env);
       const repo = repos[0] ?? "default";
       const agent = new PiAgent(env, repo);

@@ -1,5 +1,5 @@
 import type { Env } from "../core/types";
-import { executeInSandbox } from "../integrations/sandbox";
+import { configureSandboxEnvVars, executeInSandbox } from "../integrations/sandbox";
 import { GitHubApi, type GitHubIssue, type GitHubWorkflowRun } from "../integrations/github";
 
 export type CloudflareLogSignal = {
@@ -55,46 +55,81 @@ function getCloudflareWorkers(env: Env): string[] {
   return env.WORKER_NAME ? [env.WORKER_NAME] : [];
 }
 
-export function buildRepoBootstrapScript(repoDir: string, repo: string): string {
-  const workspaceRoot = `/workspace/${repoDir}`;
-  const hasRepoSlug = repo.includes("/");
-  const cloneUrl = hasRepoSlug ? `https://github.com/${repo}.git` : "";
-  const cloneStep = hasRepoSlug
-    ? `    git clone --depth=1 ${shellQuote(cloneUrl)} ${shellQuote(workspaceRoot)}\n`
-    : `    mkdir -p ${shellQuote(workspaceRoot)}\n`;
+export function getGitEnvVars(env: Env): Record<string, string> | undefined {
+  if (!env.GITHUB_TOKEN) return undefined;
+  return {
+    GITHUB_TOKEN: env.GITHUB_TOKEN,
+    GIT_ASKPASS: "/usr/local/bin/blob-git-askpass",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+}
 
-  return `set -eu
-if [ -n "${"${GITHUB_TOKEN:-}"}" ]; then
-  cat > /usr/local/bin/blob-git-askpass << 'EOF'
-#!/bin/sh
-case "$1" in
-  *Username*) echo "x-access-token" ;;
-  *) echo "$GITHUB_TOKEN" ;;
-esac
-EOF
-  chmod +x /usr/local/bin/blob-git-askpass
-fi
-mkdir -p /workspace
-if [ -d ${shellQuote(`${workspaceRoot}/.git`)} ]; then
-  cd ${shellQuote(workspaceRoot)}
-  git fetch --depth=1 --prune origin
-  if git show-ref --verify --quiet refs/remotes/origin/main; then
-    git reset --hard origin/main
-  elif git show-ref --verify --quiet refs/remotes/origin/master; then
-    git reset --hard origin/master
-  else
-    git pull --ff-only
-  fi
-else
-${cloneStep}  if [ -d ${shellQuote(`${workspaceRoot}/.git`)} ]; then
-    cd ${shellQuote(workspaceRoot)}
-    if git show-ref --verify --quiet refs/remotes/origin/main; then
-      git checkout -B main origin/main
-    elif git show-ref --verify --quiet refs/remotes/origin/master; then
-      git checkout -B master origin/master
-    fi
-  fi
-fi`;
+export async function ensureRepoWorkspaceReady(
+  env: Env,
+  repo: string,
+  sandboxId: string,
+  timeout = 180000,
+): Promise<{ repoDir: string; workspaceRoot: string }> {
+  const repoDir = repoDirFromSlug(repo);
+  const workspaceRoot = `/workspace/${repoDir}`;
+  const gitEnvVars = getGitEnvVars(env);
+
+  await configureSandboxEnvVars(env, gitEnvVars, sandboxId);
+
+  const hasGit = await executeInSandbox(`test -d ${shellQuote(`${workspaceRoot}/.git`)}`, env, {
+    sandboxId,
+    timeout: 30000,
+    envVars: gitEnvVars,
+  });
+
+  if (hasGit.exitCode !== 0) {
+    if (!repo.includes("/")) {
+      const mkdir = await executeInSandbox(`mkdir -p ${shellQuote(workspaceRoot)}`, env, {
+        sandboxId,
+        timeout: 30000,
+        envVars: gitEnvVars,
+      });
+      if (mkdir.exitCode !== 0) {
+        throw new Error(`repo bootstrap failed (${repoDir}): ${summarizeText(mkdir.stderr || mkdir.stdout || "mkdir failed", 400)}`);
+      }
+      return { repoDir, workspaceRoot };
+    }
+
+    const repoUrl = `https://github.com/${repo}.git`;
+    if (typeof env.SANDBOX.gitCheckout === "function") {
+      try {
+        await configureSandboxEnvVars(env, gitEnvVars, sandboxId);
+        await env.SANDBOX.gitCheckout(repoUrl, { targetDir: workspaceRoot, depth: 1 });
+      } catch (err) {
+        throw new Error(`repo bootstrap failed (${repoDir}): ${summarizeText(String(err), 400)}`);
+      }
+    } else {
+      const clone = await executeInSandbox(
+        `mkdir -p /workspace && git clone --depth=1 ${shellQuote(repoUrl)} ${shellQuote(workspaceRoot)}`,
+        env,
+        { sandboxId, timeout, envVars: gitEnvVars },
+      );
+      if (clone.exitCode !== 0) {
+        throw new Error(`repo bootstrap failed (${repoDir}): ${summarizeText(clone.stderr || clone.stdout || "clone failed", 400)}`);
+      }
+    }
+  }
+
+  const refresh = await executeInSandbox(
+    `set -eu
+git fetch --depth=1 --prune origin
+default_branch="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')"
+if [ -n "$default_branch" ] && git show-ref --verify --quiet "refs/remotes/origin/$default_branch"; then
+  git checkout -B "$default_branch" "origin/$default_branch"
+fi`,
+    env,
+    { sandboxId, workspaceRoot, timeout, envVars: gitEnvVars },
+  );
+  if (refresh.exitCode !== 0) {
+    throw new Error(`repo bootstrap failed (${repoDir}): ${summarizeText(refresh.stderr || refresh.stdout || "refresh failed", 400)}`);
+  }
+
+  return { repoDir, workspaceRoot };
 }
 
 export async function detectVerificationCommand(
@@ -105,7 +140,7 @@ export async function detectVerificationCommand(
   const configured = env.VERIFY_COMMAND?.trim();
   if (configured) return configured;
 
-  const repoDir = repoDirFromSlug(repo);
+  const { workspaceRoot } = await ensureRepoWorkspaceReady(env, repo, sandboxId, 180000);
   const result = await executeInSandbox(
     `set +e
 # blob-detect-verify-command
@@ -175,7 +210,7 @@ PY`,
     env,
     {
       sandboxId,
-      workspaceRoot: `/workspace/${repoDir}`,
+      workspaceRoot,
       timeout: 30000,
     },
   );
@@ -291,25 +326,7 @@ export async function diagnoseRepo(
   repo: string,
   sandboxId: string,
 ): Promise<RepoDiagnosis> {
-  const repoDir = repoDirFromSlug(repo);
-  const workspaceRoot = `/workspace/${repoDir}`;
-  const envVars = env.GITHUB_TOKEN
-    ? {
-        GITHUB_TOKEN: env.GITHUB_TOKEN,
-        GIT_ASKPASS: "/usr/local/bin/blob-git-askpass",
-        GIT_TERMINAL_PROMPT: "0",
-      }
-    : undefined;
-
-  const bootstrap = await executeInSandbox(buildRepoBootstrapScript(repoDir, repo), env, {
-    sandboxId,
-    timeout: 180000,
-    envVars,
-  });
-  if (bootstrap.exitCode !== 0) {
-    const message = summarizeText(bootstrap.stderr || bootstrap.stdout || "unknown bootstrap error", 400);
-    throw new Error(`repo bootstrap failed (${repoDir}): ${message}`);
-  }
+  const { repoDir, workspaceRoot } = await ensureRepoWorkspaceReady(env, repo, sandboxId, 180000);
 
   const [verificationCommand, latestCommitResult, todoResult] = await Promise.all([
     detectVerificationCommand(env, repo, sandboxId),

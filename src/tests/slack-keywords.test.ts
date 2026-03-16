@@ -24,6 +24,17 @@ function makeEnv() {
     SANDBOX: {
       start: async () => {},
       exec: async (command: string) => {
+        if (command.startsWith("test -d ")) {
+          const match = command.match(/test -d '([^']+)'/);
+          const dir = match?.[1];
+          const exists = dir ? [...files.keys()].some((path) => path === dir || path.startsWith(`${dir}/`)) : false;
+          return { stdout: "", stderr: "", exitCode: exists ? 0 : 1 };
+        }
+        if (command.startsWith("test -f ")) {
+          const match = command.match(/test -f '([^']+)'/);
+          const file = match?.[1];
+          return { stdout: "", stderr: "", exitCode: file && files.has(file) ? 0 : 1 };
+        }
         if (command.startsWith("mv ")) {
           const [, from, to] = command.split(" ");
           files.set(to, files.get(from) ?? "");
@@ -35,6 +46,12 @@ function makeEnv() {
         }
         return { stdout: "ok", stderr: "", exitCode: 0 };
       },
+      gitCheckout: async (_repoUrl: string, options?: { targetDir?: string }) => {
+        const targetDir = options?.targetDir ?? "/workspace/blob";
+        files.set(`${targetDir}/.git/HEAD`, "ref: refs/heads/main\n");
+        return { success: true, targetDir };
+      },
+      setEnvVars: async (_envVars: Record<string, string | undefined>) => {},
       writeFile: async (path: string, content: string) => {
         files.set(path, content);
       },
@@ -330,6 +347,121 @@ test("repo connectivity question bypasses intent classification failures", async
 
     await handleSlackEvent(req, env);
     assert.equal(posts[0], "I’m currently connected to owner/blob.");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("simple read request bypasses planner and answers from sandbox file content", async () => {
+  const { env, posts } = makeEnv();
+  await env.SANDBOX.writeFile("/workspace/blob/src/index.ts", "export function health() { return { r2: true, sandbox: true, vectorize: true, do: true }; }\n");
+  env.AI.run = async (_model: string, inputs: { messages?: Array<{ role: string; content: string }>; text?: string }) => {
+    const allContent = (inputs.messages ?? []).map((message) => message.content).join("\n");
+    if (allContent.includes("You are an intent classifier for a Slack bot")) {
+      throw new Error("intent classifier unavailable");
+    }
+    if (allContent.includes("File path: src/index.ts")) {
+      return { response: "The /health route checks R2, sandbox, Vectorize, and the durable object." };
+    }
+    throw new Error("planner should not run for simple read requests");
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes("slack.com/api/chat.postMessage")) {
+      const body = JSON.parse(String(init?.body)) as { text: string };
+      posts.push(body.text);
+      return Response.json({ ok: true });
+    }
+    return new Response("unexpected", { status: 500 });
+  }) as typeof fetch;
+
+  try {
+    const req = new Request("https://example.com/slack/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "event_callback",
+        event_id: "E-direct-read",
+        team_id: "T1",
+        event: { type: "message", text: "read src/index.ts and tell me what the /health route checks", channel: "C1", ts: "5" },
+      }),
+    });
+
+    await handleSlackEvent(req, env);
+    assert.equal(posts[0], "The /health route checks R2, sandbox, Vectorize, and the durable object.");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("simple command request runs directly in the sandbox", async () => {
+  const { env, posts } = makeEnv();
+  env.AI.run = async () => {
+    throw new Error("planner should not run for simple command requests");
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes("slack.com/api/chat.postMessage")) {
+      const body = JSON.parse(String(init?.body)) as { text: string };
+      posts.push(body.text);
+      return Response.json({ ok: true });
+    }
+    return new Response("unexpected", { status: 500 });
+  }) as typeof fetch;
+
+  try {
+    const req = new Request("https://example.com/slack/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "event_callback",
+        event_id: "E-direct-bash",
+        team_id: "T1",
+        event: { type: "message", text: "run node -v and tell me the result", channel: "C1", ts: "6" },
+      }),
+    });
+
+    await handleSlackEvent(req, env);
+    assert.match(posts[0], /Command: node -v/);
+    assert.match(posts[0], /stdout:\nv20\.11\.1/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("simple write and read-back request bypasses planner", async () => {
+  const { env, posts } = makeEnv();
+  env.AI.run = async () => {
+    throw new Error("planner should not run for simple write requests");
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes("slack.com/api/chat.postMessage")) {
+      const body = JSON.parse(String(init?.body)) as { text: string };
+      posts.push(body.text);
+      return Response.json({ ok: true });
+    }
+    return new Response("unexpected", { status: 500 });
+  }) as typeof fetch;
+
+  try {
+    const req = new Request("https://example.com/slack/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "event_callback",
+        event_id: "E-direct-write",
+        team_id: "T1",
+        event: { type: "message", text: "create a file called tmp-blob-test.md with the text hello from blob, then read it back", channel: "C1", ts: "7" },
+      }),
+    });
+
+    await handleSlackEvent(req, env);
+    assert.equal(posts[0], "Wrote tmp-blob-test.md.\n\nRead back:\nhello from blob");
+    assert.equal(await env.SANDBOX.readFile("/workspace/blob/tmp-blob-test.md"), "hello from blob");
   } finally {
     globalThis.fetch = originalFetch;
   }

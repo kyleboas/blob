@@ -5,6 +5,11 @@ export interface SandboxService {
   exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }>;
   writeFile(path: string, content: string): Promise<void>;
   readFile(path: string): Promise<string>;
+  gitCheckout?(
+    repoUrl: string,
+    options?: { branch?: string; targetDir?: string; depth?: number },
+  ): Promise<{ success?: boolean; targetDir?: string; branch?: string }>;
+  setEnvVars?(envVars: Record<string, string | undefined>): Promise<void>;
 }
 
 export interface Env {
