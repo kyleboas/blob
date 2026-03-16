@@ -10,6 +10,7 @@ import {
   type SlackEventPayload,
 } from "../../integrations/slack-message-processing";
 import { checkRateLimit, configureRateLimit } from "../../integrations/slack-rate-limit";
+import { parseDirectSandboxTask } from "../../integrations/slack-simple-sandbox";
 import type { Env } from "../../core/types";
 
 type BackgroundCommand = "selftest" | "self-improve";
@@ -102,6 +103,9 @@ function classifyMessageRoute(text: string): MessageRoute {
   }
   if (isRepoConnectivityQuestion(text)) {
     return { kind: "repo-question" };
+  }
+  if (parseDirectSandboxTask(text)) {
+    return { kind: "chat", intentHint: { intent: "chat", needsSandbox: true, externalDataOnly: false } };
   }
 
   if (looksLikeCronRequest(text)) {
