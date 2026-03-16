@@ -1,4 +1,4 @@
-import { buildRepoBootstrapScript, repoDirFromSlug } from "../agent/repo-diagnosis";
+import { ensureRepoWorkspaceReady } from "../agent/repo-diagnosis";
 import { callLLM } from "../core/llm";
 import { logEvent } from "../core/observability";
 import { getRepos } from "../core/storage";
@@ -76,15 +76,6 @@ export function parseDirectSandboxTask(text: string): DirectSandboxTask | null {
   return null;
 }
 
-function getGitEnv(env: Env): Record<string, string> | undefined {
-  if (!env.GITHUB_TOKEN) return undefined;
-  return {
-    GITHUB_TOKEN: env.GITHUB_TOKEN,
-    GIT_ASKPASS: "/usr/local/bin/blob-git-askpass",
-    GIT_TERMINAL_PROMPT: "0",
-  };
-}
-
 async function ensureRepoWorkspace(env: Env, sandboxId: string): Promise<{ repo: string; repoDir: string }> {
   const repos = await getRepos(env);
   const repo = repos[0];
@@ -92,15 +83,7 @@ async function ensureRepoWorkspace(env: Env, sandboxId: string): Promise<{ repo:
     throw new Error("No repo configured.");
   }
 
-  const repoDir = repoDirFromSlug(repo);
-  const bootstrap = await executeInSandbox(buildRepoBootstrapScript(repoDir, repo), env, {
-    sandboxId,
-    timeout: 180000,
-    envVars: getGitEnv(env),
-  });
-  if (bootstrap.exitCode !== 0) {
-    throw new Error(bootstrap.stderr || bootstrap.stdout || "repo bootstrap failed");
-  }
+  const { repoDir } = await ensureRepoWorkspaceReady(env, repo, sandboxId, 180000);
   return { repo, repoDir };
 }
 

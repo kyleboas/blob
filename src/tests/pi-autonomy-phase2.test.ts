@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { PiAgent, __piAgentTestUtils } from "../agent/pi-agent";
+import { PiAgent } from "../agent/pi-agent";
 import { __resetSandboxSessionsForTests, __sandboxTestUtils, cleanupSandboxForJob, readTool, teardownIdleSandboxes, writeTool } from "../integrations/sandbox";
 
 function makeEnv(overrides: Record<string, unknown> = {}) {
@@ -30,6 +30,17 @@ function makeEnv(overrides: Record<string, unknown> = {}) {
     SANDBOX: {
       start: async () => {},
       exec: async (command: string) => {
+        if (command.startsWith("test -d ")) {
+          const match = command.match(/test -d '([^']+)'/);
+          const dir = match?.[1];
+          const exists = dir ? [...files.keys()].some((path) => path === dir || path.startsWith(`${dir}/`)) : false;
+          return { stdout: "", stderr: "", exitCode: exists ? 0 : 1 };
+        }
+        if (command.startsWith("test -f ")) {
+          const match = command.match(/test -f '([^']+)'/);
+          const file = match?.[1];
+          return { stdout: "", stderr: "", exitCode: file && files.has(file) ? 0 : 1 };
+        }
         if (command.startsWith("mv ")) {
           const [, from, to] = command.split(" ");
           files.set(to, files.get(from) ?? "");
@@ -38,6 +49,12 @@ function makeEnv(overrides: Record<string, unknown> = {}) {
         }
         return { stdout: `ran:${command}`, stderr: "", exitCode: 0 };
       },
+      gitCheckout: async (_repoUrl: string, options?: { targetDir?: string }) => {
+        const targetDir = options?.targetDir ?? "/workspace/blob";
+        files.set(`${targetDir}/.git/HEAD`, "ref: refs/heads/main\n");
+        return { success: true, targetDir };
+      },
+      setEnvVars: async (_envVars: Record<string, string | undefined>) => {},
       writeFile: async (path: string, content: string) => {
         files.set(path, content);
       },
@@ -213,8 +230,16 @@ test("agent tools use repo-specific workspace root", async () => {
       start: async () => {},
       exec: async (command: string) => {
         commands.push(command);
+        if (command.startsWith("test -d ")) {
+          return { stdout: "", stderr: "", exitCode: 1 };
+        }
+        if (command.startsWith("test -f ")) {
+          return { stdout: "", stderr: "", exitCode: 1 };
+        }
         return { stdout: "", stderr: "", exitCode: 0 };
       },
+      gitCheckout: async () => ({ success: true, targetDir: "/workspace/project" }),
+      setEnvVars: async () => {},
       writeFile: async (_path: string, _content: string) => {},
       readFile: async (path: string) => path.includes("/workspace/project/src/a.txt") ? "ok" : Promise.reject(new Error("ENOENT")),
     },
@@ -239,54 +264,39 @@ test("agent tools use repo-specific workspace root", async () => {
   }
 });
 
-test("bootstrap script includes clone and update logic", () => {
-  const script = __piAgentTestUtils.buildBootstrapScript("project", "owner/project");
-  assert.match(script, /git clone --depth=1 'https:\/\/github.com\/owner\/project.git' '\/workspace\/project'/);
-  assert.match(script, /git fetch --depth=1 --prune origin/);
-  assert.match(script, /git reset --hard origin\/main/);
-  assert.match(script, /origin\/master/);
-});
-
-
-
-test("bootstrap restores and refreshes repo cache via R2", async () => {
+test("bootstrap uses native git checkout and skips repo cache shuffling", async () => {
   __resetSandboxSessionsForTests();
   const originalFetch = globalThis.fetch;
   const execCommands: string[] = [];
-  const writes: string[] = [];
-  const putCalls: Array<{ key: string; bytes: Uint8Array }> = [];
-
-  const cachedBytes = new TextEncoder().encode("cached-repo");
+  const gitCheckouts: string[] = [];
+  const envSets: Array<Record<string, string | undefined>> = [];
+  let hasRepo = false;
 
   const { env } = makeEnv({
     SANDBOX: {
       start: async () => {},
       exec: async (command: string) => {
         execCommands.push(command);
-        if (command.includes("ls '/tmp/project.repo-cache.part.'* | wc -l")) {
-          return { stdout: "1\n", stderr: "", exitCode: 0 };
+        if (command.startsWith("test -d ")) {
+          return { stdout: "", stderr: "", exitCode: hasRepo ? 0 : 1 };
+        }
+        if (command.startsWith("test -f ")) {
+          return { stdout: "", stderr: "", exitCode: 1 };
         }
         return { stdout: "ok", stderr: "", exitCode: 0 };
       },
-      writeFile: async (path: string, content: string) => {
-        writes.push(path);
+      gitCheckout: async (repoUrl: string, options?: { targetDir?: string }) => {
+        gitCheckouts.push(`${repoUrl}:${options?.targetDir ?? ""}`);
+        hasRepo = true;
+        return { success: true, targetDir: options?.targetDir };
       },
-      readFile: async (path: string) => {
-        if (path === "/tmp/project.repo-cache.part.0000") {
-          return "Y2FjaGVkLXJlcG8=";
-        }
-        return "ok";
+      setEnvVars: async (envVars: Record<string, string | undefined>) => {
+        envSets.push(envVars);
       },
+      writeFile: async (_path: string, _content: string) => {},
+      readFile: async (_path: string) => "ok",
     },
-    REPO_STORE: {
-      get: async (key: string) =>
-        key === "repo-cache/project.tar.gz"
-          ? ({ arrayBuffer: async () => cachedBytes.buffer } as R2ObjectBody)
-          : null,
-      put: async (key: string, value: ReadableStream | ArrayBuffer | ArrayBufferView | string | Blob) => {
-        putCalls.push({ key, bytes: new Uint8Array(value as Uint8Array) });
-      },
-    },
+    GITHUB_TOKEN: "ghs_test_token",
   });
 
   let calls = 0;
@@ -303,27 +313,41 @@ test("bootstrap restores and refreshes repo cache via R2", async () => {
     const agent = new PiAgent(env, "owner/project");
     const result = await agent.run("test", { sandboxId: "cache-hit" });
     assert.equal(result, "done");
-    assert.ok(execCommands.some((command) => command.includes("base64 -d '/tmp/project.tar.gz.b64' > '/tmp/project.tar.gz'")));
+    assert.deepEqual(gitCheckouts, ["https://github.com/owner/project.git:/workspace/project"]);
     assert.ok(execCommands.some((command) => command.includes("git fetch --depth=1 --prune origin")));
-    assert.ok(execCommands.some((command) => command.includes("tar -czf - '/workspace/project'")));
-    assert.ok(writes.some((path) => path.startsWith("/tmp/project.tar.gz.b64.part.")));
-    assert.ok(putCalls.some((call) => call.key === "repo-cache/project.tar.gz"));
+    assert.ok(envSets.some((envVars) => envVars.GITHUB_TOKEN === "ghs_test_token"));
+    assert.ok(execCommands.every((command) => !command.includes("/tmp/project.repo-cache.part.")));
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
+
 test("agent bootstraps once before first tool call", async () => {
   __resetSandboxSessionsForTests();
   const originalFetch = globalThis.fetch;
   const execCommands: string[] = [];
+  const gitCheckouts: string[] = [];
+  let hasRepo = false;
 
   const { env } = makeEnv({
     SANDBOX: {
       start: async () => {},
       exec: async (command: string) => {
         execCommands.push(command);
+        if (command.startsWith("test -d ")) {
+          return { stdout: "", stderr: "", exitCode: hasRepo ? 0 : 1 };
+        }
+        if (command.startsWith("test -f ")) {
+          return { stdout: "", stderr: "", exitCode: 1 };
+        }
         return { stdout: "ok", stderr: "", exitCode: 0 };
       },
+      gitCheckout: async (repoUrl: string, options?: { targetDir?: string }) => {
+        gitCheckouts.push(`${repoUrl}:${options?.targetDir ?? ""}`);
+        hasRepo = true;
+        return { success: true, targetDir: options?.targetDir };
+      },
+      setEnvVars: async () => {},
       writeFile: async (_path: string, _content: string) => {},
       readFile: async (_path: string) => "ok",
     },
@@ -346,10 +370,8 @@ test("agent bootstraps once before first tool call", async () => {
     const agent = new PiAgent(env, "owner/project");
     const result = await agent.run("test", { sandboxId: "bootstrap-1" });
     assert.equal(result, "done");
-    const bootstrapCalls = execCommands.filter((command) => command.includes("git fetch --prune origin") || command.includes("git clone"));
-    assert.equal(bootstrapCalls.length, 1);
-    assert.match(bootstrapCalls[0], /GIT_ASKPASS="\/usr\/local\/bin\/blob-git-askpass"/);
-    assert.match(bootstrapCalls[0], /GITHUB_TOKEN="ghs_test_token"/);
+    assert.deepEqual(gitCheckouts, ["https://github.com/owner/project.git:/workspace/project"]);
+    assert.ok(execCommands.some((command) => command.includes("git fetch --depth=1 --prune origin")));
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -361,7 +383,19 @@ test("agent reports bootstrap failures with error text", async () => {
   const { env } = makeEnv({
     SANDBOX: {
       start: async () => {},
-      exec: async () => ({ stdout: "", stderr: "fatal: repo not found", exitCode: 1 }),
+      exec: async (command: string) => {
+        if (command.startsWith("test -d ")) {
+          return { stdout: "", stderr: "", exitCode: 1 };
+        }
+        if (command.startsWith("test -f ")) {
+          return { stdout: "", stderr: "", exitCode: 1 };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+      gitCheckout: async () => {
+        throw new Error("fatal: repo not found");
+      },
+      setEnvVars: async () => {},
       writeFile: async (_path: string, _content: string) => {},
       readFile: async (_path: string) => "ok",
     },
@@ -395,6 +429,14 @@ test("runSelfTest executes tool and memory sequence", async () => {
       start: async () => {},
       exec: async (command: string) => {
         commands.push(command);
+        if (command.startsWith("test -d ")) {
+          return { stdout: "", stderr: "", exitCode: 1 };
+        }
+        if (command.startsWith("test -f ")) {
+          const match = command.match(/test -f '([^']+)'/);
+          const file = match?.[1];
+          return { stdout: "", stderr: "", exitCode: file && files.has(file) ? 0 : 1 };
+        }
         if (command.startsWith("mv ")) {
           const [, from, to] = command.split(" ");
           files.set(to, files.get(from) ?? "");
@@ -405,6 +447,11 @@ test("runSelfTest executes tool and memory sequence", async () => {
         }
         return { stdout: "ok", stderr: "", exitCode: 0 };
       },
+      gitCheckout: async (_repoUrl: string, options?: { targetDir?: string }) => {
+        files.set(`${options?.targetDir ?? "/workspace/project"}/.git/HEAD`, "ref: refs/heads/main\n");
+        return { success: true, targetDir: options?.targetDir };
+      },
+      setEnvVars: async () => {},
       writeFile: async (path: string, content: string) => {
         files.set(path, content);
       },
@@ -449,11 +496,11 @@ test("runSelfTest executes tool and memory sequence", async () => {
   const result = await agent.runSelfTest({ sandboxId: "st-1", verbosity: "verbose", onProgress: (line) => progress.push(line), conversationKey: "T1:C1:channel" });
 
   assert.match(result, /Self-test passed/i);
-  assert.ok(progress.some((line) => line.includes("using scratch workspace at \/workspace")));
+  assert.ok(progress.some((line) => line.includes("using repo workspace at /workspace/project")));
   assert.ok(progress.some((line) => line.includes("read")));
   assert.ok(progress.some((line) => line.includes("vectorize")));
-  assert.ok(commands.some((command) => command.includes("cd /workspace &&") && command.includes("node -v")));
-  assert.equal(files.get("/workspace/.blob-selftest-project.txt")?.includes("edited"), true);
+  assert.ok(commands.some((command) => command.includes("cd /workspace/project &&") && command.includes("node -v")));
+  assert.equal(files.get("/workspace/project/.blob/selftest.txt")?.includes("edited"), true);
 });
 
 
@@ -466,6 +513,14 @@ test("runSelfTest skips vectorize when binding is not configured", async () => {
     SANDBOX: {
       start: async () => {},
       exec: async (command: string) => {
+        if (command.startsWith("test -d ")) {
+          return { stdout: "", stderr: "", exitCode: 1 };
+        }
+        if (command.startsWith("test -f ")) {
+          const match = command.match(/test -f '([^']+)'/);
+          const file = match?.[1];
+          return { stdout: "", stderr: "", exitCode: file && files.has(file) ? 0 : 1 };
+        }
         if (command.startsWith("mv ")) {
           const [, from, to] = command.split(" ");
           files.set(to, files.get(from) ?? "");
@@ -476,6 +531,11 @@ test("runSelfTest skips vectorize when binding is not configured", async () => {
         }
         return { stdout: "ok", stderr: "", exitCode: 0 };
       },
+      gitCheckout: async (_repoUrl: string, options?: { targetDir?: string }) => {
+        files.set(`${options?.targetDir ?? "/workspace/project"}/.git/HEAD`, "ref: refs/heads/main\n");
+        return { success: true, targetDir: options?.targetDir };
+      },
+      setEnvVars: async () => {},
       writeFile: async (path: string, content: string) => {
         files.set(path, content);
       },
@@ -524,6 +584,14 @@ test("runSelfTest verifies vectorize upsert without requiring synchronous readba
     SANDBOX: {
       start: async () => {},
       exec: async (command: string) => {
+        if (command.startsWith("test -d ")) {
+          return { stdout: "", stderr: "", exitCode: 1 };
+        }
+        if (command.startsWith("test -f ")) {
+          const match = command.match(/test -f '([^']+)'/);
+          const file = match?.[1];
+          return { stdout: "", stderr: "", exitCode: file && files.has(file) ? 0 : 1 };
+        }
         if (command.startsWith("mv ")) {
           const [, from, to] = command.split(" ");
           files.set(to, files.get(from) ?? "");
@@ -534,6 +602,11 @@ test("runSelfTest verifies vectorize upsert without requiring synchronous readba
         }
         return { stdout: "ok", stderr: "", exitCode: 0 };
       },
+      gitCheckout: async (_repoUrl: string, options?: { targetDir?: string }) => {
+        files.set(`${options?.targetDir ?? "/workspace/project"}/.git/HEAD`, "ref: refs/heads/main\n");
+        return { success: true, targetDir: options?.targetDir };
+      },
+      setEnvVars: async () => {},
       writeFile: async (path: string, content: string) => {
         files.set(path, content);
       },

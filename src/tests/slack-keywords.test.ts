@@ -24,6 +24,17 @@ function makeEnv() {
     SANDBOX: {
       start: async () => {},
       exec: async (command: string) => {
+        if (command.startsWith("test -d ")) {
+          const match = command.match(/test -d '([^']+)'/);
+          const dir = match?.[1];
+          const exists = dir ? [...files.keys()].some((path) => path === dir || path.startsWith(`${dir}/`)) : false;
+          return { stdout: "", stderr: "", exitCode: exists ? 0 : 1 };
+        }
+        if (command.startsWith("test -f ")) {
+          const match = command.match(/test -f '([^']+)'/);
+          const file = match?.[1];
+          return { stdout: "", stderr: "", exitCode: file && files.has(file) ? 0 : 1 };
+        }
         if (command.startsWith("mv ")) {
           const [, from, to] = command.split(" ");
           files.set(to, files.get(from) ?? "");
@@ -35,6 +46,12 @@ function makeEnv() {
         }
         return { stdout: "ok", stderr: "", exitCode: 0 };
       },
+      gitCheckout: async (_repoUrl: string, options?: { targetDir?: string }) => {
+        const targetDir = options?.targetDir ?? "/workspace/blob";
+        files.set(`${targetDir}/.git/HEAD`, "ref: refs/heads/main\n");
+        return { success: true, targetDir };
+      },
+      setEnvVars: async (_envVars: Record<string, string | undefined>) => {},
       writeFile: async (path: string, content: string) => {
         files.set(path, content);
       },
