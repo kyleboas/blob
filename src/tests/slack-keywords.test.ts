@@ -255,6 +255,44 @@ test("repo connectivity question is answered directly without sandbox work", asy
   }
 });
 
+test("repo connectivity question bypasses intent classification failures", async () => {
+  const { env, posts } = makeEnv();
+  env.AI.run = async (_model: string, inputs: { messages?: Array<{ role: string; content: string }>; text?: string }) => {
+    if (inputs.messages) {
+      throw new Error("intent classifier unavailable");
+    }
+    return { data: [[0.1, 0.2, 0.3]] };
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes("slack.com/api/chat.postMessage")) {
+      const body = JSON.parse(String(init?.body)) as { text: string };
+      posts.push(body.text);
+      return Response.json({ ok: true });
+    }
+    return new Response("unexpected", { status: 500 });
+  }) as typeof fetch;
+
+  try {
+    const req = new Request("https://example.com/slack/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "event_callback",
+        event_id: "E-repo-bypass",
+        team_id: "T1",
+        event: { type: "message", text: "what repo are you connected to right now?", channel: "C1", ts: "4" },
+      }),
+    });
+
+    await handleSlackEvent(req, env);
+    assert.equal(posts[0], "I’m currently connected to owner/blob.");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("sandbox chat still posts a fallback Slack message when agent final text is empty", async () => {
   const { env, posts } = makeEnv();
   env.AI.run = async (_model: string, inputs: { messages?: Array<{ role: string; content: string }>; text?: string }) => {
