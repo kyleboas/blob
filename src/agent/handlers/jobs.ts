@@ -58,7 +58,8 @@ export async function handleTransitionJob(request: Request, ctx: JobHandlerCtx):
     modelCallCount?: number;
   };
 
-  const existing = ctx.state.storage.sql.exec("SELECT status FROM jobs WHERE id=?", id).one();
+  const existingRows = ctx.state.storage.sql.exec("SELECT status FROM jobs WHERE id=?", id).toArray();
+  const existing = existingRows[0] ?? null;
   if (!existing) {
     return json({ error: "Job not found" }, 404);
   }
@@ -81,8 +82,8 @@ export async function handleTransitionJob(request: Request, ctx: JobHandlerCtx):
   );
 
   logEvent(ctx.env, "job_lifecycle", "job_transition", { id, from, to, tokenUsage: tokenUsage ?? 0, modelCallCount: modelCallCount ?? 0 });
-  const rows = ctx.state.storage.sql.exec("SELECT SUM(token_usage) AS total FROM jobs");
-  const total = Number(rows.one()?.total ?? 0);
+  const rows = ctx.state.storage.sql.exec("SELECT SUM(token_usage) AS total FROM jobs").toArray();
+  const total = Number(rows[0]?.total ?? 0);
   const day = new Date().toISOString().slice(0, 10);
   logEvent(ctx.env, "cost", "token_usage_aggregate", { day, totalTokens: total });
 

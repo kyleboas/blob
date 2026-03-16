@@ -65,7 +65,7 @@ async function postHandledCommandResponse(
   const channel = body.event?.channel;
   if (!channel || !commandResponse) return;
 
-  const isSelftest = body.event?.text?.trim().toLowerCase() === "selftest";
+  const isSelftest = getExactKeywordCommand(body.event?.text ?? "") === "selftest";
   if (isSelftest) {
     const lines = commandResponse.split("\n");
     const shouldDropLead = options?.selftestLeadAlreadyPosted && lines[0]?.trim().toLowerCase() === "running self-test…";
@@ -98,7 +98,7 @@ async function runDeferredMessageProcessing(
   if (shouldRunCommandInBackground(text)) {
     const commandResult = await handleCommand(text, channel, env, conversationDO);
     if (commandResult.handled) {
-      await postHandledCommandResponse(body, commandResult.response, env, { selftestLeadAlreadyPosted: text.trim().toLowerCase() === "selftest" });
+      await postHandledCommandResponse(body, commandResult.response, env, { selftestLeadAlreadyPosted: getExactKeywordCommand(text) === "selftest" });
     }
     return;
   }
@@ -189,7 +189,7 @@ export async function handleProcessMessage(request: Request, ctx: RouterCtx): Pr
   const text = body.event.text;
 
   if (shouldRunCommandInBackground(text)) {
-    if (text.trim().toLowerCase() === "selftest") {
+    if (getExactKeywordCommand(text) === "selftest") {
       await postToSlack(body.event.channel, "Running self-test…", env);
     }
     ctx.state.waitUntil(runDeferredMessageProcessing(body, ctx, conversationDO, key));

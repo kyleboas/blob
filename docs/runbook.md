@@ -27,9 +27,9 @@ Keyword commands only trigger on exact matches. Example: `status please` is trea
 
 `selftest` is designed to be safe and non-destructive:
 
-1. Bootstraps repo workspace.
+1. Uses a scratch workspace under `/workspace`.
 2. Exercises `read/write/edit/bash`.
-3. Writes only under `.blob/selftest.txt` (and optional `.blob/selftest.log`).
+3. Writes only scratch self-test files under `/workspace`.
 4. Creates a learned memory record and verifies R2 persistence.
 5. Generates embeddings via Workers AI, upserts into Vectorize, and queries for the inserted reference.
 6. Reports pass/fail with concise detail.
@@ -46,6 +46,33 @@ If any step fails, inspect logs and binding configuration first.
 - R2 bucket binding for durable memory artifacts
 - Workers AI binding (`AI`) for embeddings
 - Vectorize index binding (`PI_VECTORS`) for semantic memory
+- `DO_AUTH_SECRET` for internal Durable Object calls
+- `SELFTEST_ADMIN_TOKEN` recommended for authenticated production self-test access
+
+## Production smoke test
+
+Recommended order after each deploy:
+
+1. `GET /health`
+   - Expect `status: "healthy"` and `checks.r2`, `checks.sandbox`, `checks.vectorize`, and `checks.do` all `true`.
+2. `POST /admin/selftest`
+   - Send `Authorization: Bearer <SELFTEST_ADMIN_TOKEN>` (or `DO_AUTH_SECRET` if you intentionally reuse it).
+   - Expect HTTP 200 and a body with `"passed": true`.
+
+Example:
+
+```bash
+curl https://<worker-domain>/health
+```
+
+```bash
+curl -X POST https://<worker-domain>/admin/selftest \
+  -H "authorization: Bearer <SELFTEST_ADMIN_TOKEN>" \
+  -H "content-type: application/json" \
+  --data '{"verbosity":"verbose"}'
+```
+
+The admin self-test should not clone a repo or modify repo files. If it fails, the issue is likely in Sandbox, R2, Workers AI, Vectorize, or auth/bindings.
 
 ### Vectorize binding in Wrangler
 
@@ -64,7 +91,7 @@ Use an embeddings model compatible with your Vectorize index dimensions.
 ### Missing Vectorize binding/index
 
 Symptoms:
-- `status` shows Vectorize unavailable or repeated upsert failures.
+- `/health` shows `checks.vectorize: false`, `status` shows Vectorize unavailable, or repeated upsert failures.
 - `selftest` fails at upsert/query step.
 
 Checks:

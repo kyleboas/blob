@@ -389,7 +389,6 @@ test("runSelfTest executes tool and memory sequence", async () => {
   const files = new Map<string, string>();
   const r2 = new Map<string, string>();
   const vectors = new Map<string, { id: string; metadata?: Record<string, unknown> }>();
-  files.set("/workspace/project/README.md", "# Project\n");
 
   const env = {
     SANDBOX: {
@@ -452,12 +451,11 @@ test("runSelfTest executes tool and memory sequence", async () => {
   const result = await agent.runSelfTest({ sandboxId: "st-1", verbosity: "verbose", onProgress: (line) => progress.push(line), conversationKey: "T1:C1:channel" });
 
   assert.match(result, /Self-test passed/i);
-  assert.ok(progress.some((line) => line.includes("bootstrap")));
+  assert.ok(progress.some((line) => line.includes("using scratch workspace at \/workspace")));
   assert.ok(progress.some((line) => line.includes("read")));
   assert.ok(progress.some((line) => line.includes("vectorize")));
-  assert.ok(commands.some((command) => command.includes("git fetch --prune origin") || command.includes("git clone")));
-  assert.ok(commands.some((command) => command.includes("cd /workspace/project &&") && command.includes("node -v")));
-  assert.equal(files.get("/workspace/project/.blob/selftest.txt")?.includes("edited"), true);
+  assert.ok(commands.some((command) => command.includes("cd /workspace &&") && command.includes("node -v")));
+  assert.equal(files.get("/workspace/.blob-selftest-project.txt")?.includes("edited"), true);
 });
 
 
@@ -465,7 +463,6 @@ test("runSelfTest skips vectorize when binding is not configured", async () => {
   __resetSandboxSessionsForTests();
   const files = new Map<string, string>();
   const r2 = new Map<string, string>();
-  files.set("/workspace/project/README.md", "# Project\n");
 
   const env = {
     SANDBOX: {

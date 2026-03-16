@@ -51,7 +51,8 @@ function normalizeToolPath(path: string, workspaceRoot: string): string {
     throw new Error(`Path not allowed: ${path}`);
   }
 
-  if (!workspaceRoot.startsWith("/workspace/") || workspaceRoot.includes("..")) {
+  const workspaceAllowed = workspaceRoot === "/workspace" || workspaceRoot.startsWith("/workspace/");
+  if (!workspaceAllowed || workspaceRoot.includes("..")) {
     throw new Error(`Workspace root not allowed: ${workspaceRoot}`);
   }
 
