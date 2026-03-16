@@ -26,13 +26,27 @@ test("handleSlackEvent acknowledges event_callback immediately when execution co
   });
 
   let waitUntilCalled = false;
+  let doFetchCalled = false;
   const ctx = {
     waitUntil: () => {
       waitUntilCalled = true;
     },
   } as any;
 
-  const res = await handleSlackEvent(request, makeEnv(), ctx);
+  const env = {
+    AGENT_DO: {
+      idFromName: (name: string) => name,
+      get: () => ({
+        fetch: async () => {
+          doFetchCalled = true;
+          return new Response(JSON.stringify({ processed: false, messages: [] }), { headers: { "content-type": "application/json" } });
+        },
+      }),
+    },
+  } as any;
+
+  const res = await handleSlackEvent(request, env, ctx);
   assert.equal(res.status, 200);
-  assert.equal(waitUntilCalled, true);
+  assert.equal(doFetchCalled, true);
+  assert.equal(waitUntilCalled, false);
 });

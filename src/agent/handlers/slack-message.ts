@@ -2,7 +2,7 @@ import type { RouterCtx } from "../do-router";
 import { deriveRoutingKey } from "../../integrations/slack-routing";
 import { createLogRef, logEvent } from "../../core/observability";
 import { redactSecrets } from "../../core/safety";
-import { classifyIntent, handleCommand } from "../../integrations/slack-commands";
+import { classifyIntent, getExactKeywordCommand, handleCommand } from "../../integrations/slack-commands";
 import { processIntentOrChat, type SlackEventPayload } from "../../integrations/slack-message-processing";
 import { checkRateLimit, configureRateLimit } from "../../integrations/slack-rate-limit";
 import type { Env } from "../../core/types";
@@ -56,6 +56,97 @@ function stripFormatting(text: string): string {
     .replace(/```[\s\S]*?```/g, (match) => match.replace(/```/g, ""));
 }
 
+async function postHandledCommandResponse(
+  body: SlackEventPayload,
+  commandResponse: string | undefined,
+  env: Env,
+  options?: { selftestLeadAlreadyPosted?: boolean },
+): Promise<void> {
+  const channel = body.event?.channel;
+  if (!channel || !commandResponse) return;
+
+  const isSelftest = body.event?.text?.trim().toLowerCase() === "selftest";
+  if (isSelftest) {
+    const lines = commandResponse.split("\n");
+    const shouldDropLead = options?.selftestLeadAlreadyPosted && lines[0]?.trim().toLowerCase() === "running self-test…";
+    const payloadLines = shouldDropLead ? lines.slice(1) : lines;
+    const payload = payloadLines.join("\n").trim();
+    if (payload) await postToSlack(channel, payload, env);
+    return;
+  }
+
+  await postToSlack(channel, commandResponse, env);
+}
+
+function shouldRunCommandInBackground(text: string): boolean {
+  const keywordCommand = getExactKeywordCommand(text);
+  return keywordCommand === "selftest" || keywordCommand === "self-improve";
+}
+
+async function runDeferredMessageProcessing(
+  body: SlackEventPayload,
+  ctx: RouterCtx,
+  conversationDO: DurableObjectStub | null,
+  conversationKey: string,
+): Promise<void> {
+  const env = ctx.env;
+  const channel = body.event?.channel;
+  if (!body.event?.text || !channel) return;
+
+  const text = body.event.text;
+
+  if (shouldRunCommandInBackground(text)) {
+    const commandResult = await handleCommand(text, channel, env, conversationDO);
+    if (commandResult.handled) {
+      await postHandledCommandResponse(body, commandResult.response, env, { selftestLeadAlreadyPosted: text.trim().toLowerCase() === "selftest" });
+    }
+    return;
+  }
+
+  const intent = await classifyIntent(text, env);
+
+  // Wrap processIntentOrChat in a timeout so the DO posts a fallback before being killed.
+  // Cloudflare DOs have a wall-clock limit; if we exceed it silently the user gets no response.
+  // Default: 85s (safely under the ~100s observed limit, with headroom for the Slack post itself).
+  const timeoutMs = Number.parseInt(env.MESSAGE_TIMEOUT_MS ?? "85000", 10);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<void>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`message_timeout_${timeoutMs}ms`)), timeoutMs);
+  });
+
+  try {
+    await Promise.race([
+      processIntentOrChat({
+        body,
+        intent,
+        env,
+        conversationDO,
+        conversationKey,
+        postToSlack,
+        formatSlackError,
+      }),
+      timeoutPromise,
+    ]);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.startsWith("message_timeout_")) {
+      const logRef = createLogRef("slack");
+      logEvent(env, "slack_ingest", "message_timeout", { channel, timeoutMs }, logRef);
+      await postToSlack(
+        channel,
+        `⏱️ This request is taking longer than expected. I'm still working on it — please try again in a moment if you don't hear back. (ref: ${logRef})`,
+        env,
+      ).catch(() => {});
+    } else {
+      const logRef = createLogRef("slack");
+      logEvent(env, "slack_ingest", "process_message_failed", { error: msg, channel }, logRef);
+      await postToSlack(channel, `❌ ${formatSlackError("Unable to process message.", logRef)}`, env).catch(() => {});
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function handleProcessMessage(request: Request, ctx: RouterCtx): Promise<Response> {
   const body = await request.json() as SlackEventPayload;
   const env = ctx.env;
@@ -95,63 +186,22 @@ export async function handleProcessMessage(request: Request, ctx: RouterCtx): Pr
 
   const key = deriveRoutingKey(body);
   const conversationDO = env.AGENT_DO ? env.AGENT_DO.get(env.AGENT_DO.idFromName(key)) : null;
-  const commandResult = await handleCommand(body.event.text, body.event.channel, env, conversationDO);
-  if (commandResult.handled) {
-    if (commandResult.response) {
-      const isSelftest = body.event.text.trim().toLowerCase() === "selftest";
-      if (isSelftest && commandResult.response.includes("\n")) {
-        const [lead, ...rest] = commandResult.response.split("\n");
-        if (lead) await postToSlack(body.event.channel, lead, env);
-        const remainder = rest.join("\n").trim();
-        if (remainder) await postToSlack(body.event.channel, remainder, env);
-      } else {
-        await postToSlack(body.event.channel, commandResult.response, env);
-      }
+  const text = body.event.text;
+
+  if (shouldRunCommandInBackground(text)) {
+    if (text.trim().toLowerCase() === "selftest") {
+      await postToSlack(body.event.channel, "Running self-test…", env);
     }
+    ctx.state.waitUntil(runDeferredMessageProcessing(body, ctx, conversationDO, key));
     return new Response("OK");
   }
 
-  const intent = await classifyIntent(body.event.text, env);
-
-  // Wrap processIntentOrChat in a timeout so the DO posts a fallback before being killed.
-  // Cloudflare DOs have a wall-clock limit; if we exceed it silently the user gets no response.
-  // Default: 85s (safely under the ~100s observed limit, with headroom for the Slack post itself).
-  const timeoutMs = Number.parseInt(env.MESSAGE_TIMEOUT_MS ?? "85000", 10);
-  const channel = body.event?.channel;
-
-  const timeoutPromise = new Promise<void>((_, reject) =>
-    setTimeout(() => reject(new Error(`message_timeout_${timeoutMs}ms`)), timeoutMs),
-  );
-
-  try {
-    await Promise.race([
-      processIntentOrChat({
-        body,
-        intent,
-        env,
-        conversationDO,
-        conversationKey: key,
-        postToSlack,
-        formatSlackError,
-      }),
-      timeoutPromise,
-    ]);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.startsWith("message_timeout_") && channel) {
-      const logRef = createLogRef("slack");
-      logEvent(env, "slack_ingest", "message_timeout", { channel, timeoutMs }, logRef);
-      await postToSlack(
-        channel,
-        `⏱️ This request is taking longer than expected. I'm still working on it — please try again in a moment if you don't hear back. (ref: ${logRef})`,
-        env,
-      ).catch(() => {});
-    } else if (channel) {
-      const logRef = createLogRef("slack");
-      logEvent(env, "slack_ingest", "process_message_failed", { error: msg, channel }, logRef);
-      await postToSlack(channel, `❌ ${formatSlackError("Unable to process message.", logRef)}`, env).catch(() => {});
-    }
+  const commandResult = await handleCommand(body.event.text, body.event.channel, env, conversationDO);
+  if (commandResult.handled) {
+    await postHandledCommandResponse(body, commandResult.response, env);
+    return new Response("OK");
   }
 
+  ctx.state.waitUntil(runDeferredMessageProcessing(body, ctx, conversationDO, key));
   return new Response("OK");
 }
