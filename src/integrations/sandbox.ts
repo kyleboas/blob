@@ -24,6 +24,7 @@ const SANDBOX_STARTUP_RETRYABLE_MESSAGES = [
 ];
 const SANDBOX_STATE_PREFIX = "sandbox-state/";
 const WORKSPACE_STATE_DIR = "/workspace/blob_state";
+const DEFAULT_SANDBOX_IO_TIMEOUT_MS = 30000;
 
 const sessions = new Map<string, SandboxSession>();
 
@@ -44,6 +45,14 @@ function isRetryableSandboxStartupError(err: unknown): boolean {
 
 function estimateBytes(text: string): number {
   return new TextEncoder().encode(text).length;
+}
+
+function getSandboxIoTimeoutMs(env: Partial<Env>): number {
+  const configured = Number.parseInt(env.BASH_TIMEOUT_MS ?? `${DEFAULT_SANDBOX_IO_TIMEOUT_MS}`, 10);
+  if (!Number.isFinite(configured) || configured <= 0) {
+    return DEFAULT_SANDBOX_IO_TIMEOUT_MS;
+  }
+  return Math.min(configured, DEFAULT_SANDBOX_IO_TIMEOUT_MS);
 }
 
 function normalizeToolPath(path: string, workspaceRoot: string): string {
@@ -138,9 +147,10 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 
 async function persistWorkspaceState(sandboxId: string, env: Env): Promise<void> {
   if (!env.REPO_STORE) return;
+  const timeoutMs = getSandboxIoTimeoutMs(env);
   const [log, context] = await Promise.all([
-    env.SANDBOX.readFile(`${WORKSPACE_STATE_DIR}/log.jsonl`).catch(() => ""),
-    env.SANDBOX.readFile(`${WORKSPACE_STATE_DIR}/context.jsonl`).catch(() => ""),
+    withTimeout(env.SANDBOX.readFile(`${WORKSPACE_STATE_DIR}/log.jsonl`), timeoutMs).catch(() => ""),
+    withTimeout(env.SANDBOX.readFile(`${WORKSPACE_STATE_DIR}/context.jsonl`), timeoutMs).catch(() => ""),
   ]);
 
   await env.REPO_STORE.put(`${SANDBOX_STATE_PREFIX}${sandboxId}.json`, JSON.stringify({ log, context }));
@@ -148,14 +158,15 @@ async function persistWorkspaceState(sandboxId: string, env: Env): Promise<void>
 
 async function restoreWorkspaceState(sandboxId: string, env: Env): Promise<void> {
   if (!env.REPO_STORE) return;
+  const timeoutMs = getSandboxIoTimeoutMs(env);
   const saved = await env.REPO_STORE.get(`${SANDBOX_STATE_PREFIX}${sandboxId}.json`);
   if (!saved) return;
   const payload = await saved.json<{ log?: string; context?: string }>();
   if (payload.log) {
-    await env.SANDBOX.writeFile(`${WORKSPACE_STATE_DIR}/log.jsonl`, payload.log);
+    await withTimeout(env.SANDBOX.writeFile(`${WORKSPACE_STATE_DIR}/log.jsonl`, payload.log), timeoutMs);
   }
   if (payload.context) {
-    await env.SANDBOX.writeFile(`${WORKSPACE_STATE_DIR}/context.jsonl`, payload.context);
+    await withTimeout(env.SANDBOX.writeFile(`${WORKSPACE_STATE_DIR}/context.jsonl`, payload.context), timeoutMs);
   }
 }
 
@@ -240,7 +251,7 @@ export async function readTool(path: string, env: Env, opts: ToolOptions = {}): 
   const normalized = normalizeToolPath(path, workspaceRoot);
   if (opts.sandboxId) await ensureSandboxSession(opts.sandboxId, env);
 
-  const content = await env.SANDBOX.readFile(`${workspaceRoot}/${normalized}`);
+  const content = await withTimeout(env.SANDBOX.readFile(`${workspaceRoot}/${normalized}`), getSandboxIoTimeoutMs(env));
   const maxBytes = Number.parseInt(env.TOOL_MAX_FILE_BYTES ?? "200000", 10);
   if (estimateBytes(content) > maxBytes) {
     throw new Error(`File exceeds max size: ${path}`);
@@ -259,8 +270,9 @@ export async function writeTool(path: string, content: string, env: Env, opts: T
 
   const abs = `${workspaceRoot}/${normalized}`;
   const temp = `${abs}.tmp`;
-  await env.SANDBOX.writeFile(temp, content);
-  await env.SANDBOX.exec(`mv ${temp} ${abs}`);
+  const timeoutMs = getSandboxIoTimeoutMs(env);
+  await withTimeout(env.SANDBOX.writeFile(temp, content), timeoutMs);
+  await withTimeout(env.SANDBOX.exec(`mv ${temp} ${abs}`), timeoutMs);
 }
 
 export async function editTool(
@@ -285,14 +297,15 @@ export async function appendWorkspaceState(
 ): Promise<void> {
   const fileName = `${WORKSPACE_STATE_DIR}/${kind}.jsonl`;
   if (sandboxId) await ensureSandboxSession(sandboxId, env);
-  const current = await env.SANDBOX.readFile(fileName).catch(() => "");
-  await env.SANDBOX.writeFile(fileName, `${current}${line.endsWith("\n") ? line : `${line}\n`}`);
+  const timeoutMs = getSandboxIoTimeoutMs(env);
+  const current = await withTimeout(env.SANDBOX.readFile(fileName), timeoutMs).catch(() => "");
+  await withTimeout(env.SANDBOX.writeFile(fileName, `${current}${line.endsWith("\n") ? line : `${line}\n`}`), timeoutMs);
 }
 
 export async function readWorkspaceState(kind: "log" | "context", env: Env, sandboxId?: string): Promise<string> {
   const fileName = `${WORKSPACE_STATE_DIR}/${kind}.jsonl`;
   if (sandboxId) await ensureSandboxSession(sandboxId, env);
-  return env.SANDBOX.readFile(fileName).catch(() => "");
+  return withTimeout(env.SANDBOX.readFile(fileName), getSandboxIoTimeoutMs(env)).catch(() => "");
 }
 
 export function __resetSandboxSessionsForTests(): void {

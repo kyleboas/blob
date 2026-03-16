@@ -367,6 +367,7 @@ export async function compactScope(env: Env, store: R2MemoryStore, scope: string
 const BLOB_ID = "blob";
 const LEARNED_FILE_PATH = "/workspace/blob_state/learned.jsonl";
 const EMBEDDING_MODEL = "@cf/baai/bge-small-en-v1.5";
+const DEFAULT_SANDBOX_IO_TIMEOUT_MS = 30000;
 
 export interface SemanticMemoryMatch {
   id: string;
@@ -390,17 +391,43 @@ async function getAgentDO(env: Env): Promise<DurableObjectStub> {
   return env.AGENT_DO.get(env.AGENT_DO.idFromName(BLOB_ID));
 }
 
+function getSandboxIoTimeoutMs(env: Partial<Env>): number {
+  const configured = Number.parseInt(env.BASH_TIMEOUT_MS ?? `${DEFAULT_SANDBOX_IO_TIMEOUT_MS}`, 10);
+  if (!Number.isFinite(configured) || configured <= 0) {
+    return DEFAULT_SANDBOX_IO_TIMEOUT_MS;
+  }
+  return Math.min(configured, DEFAULT_SANDBOX_IO_TIMEOUT_MS);
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Sandbox timeout after ${timeoutMs}ms`)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 export async function appendLearnedRecord(env: Env, record: LearnedRecord): Promise<void> {
-  const current = await env.SANDBOX.readFile(LEARNED_FILE_PATH).catch((err: unknown) => {
+  const timeoutMs = getSandboxIoTimeoutMs(env);
+  const current = await withTimeout(env.SANDBOX.readFile(LEARNED_FILE_PATH), timeoutMs).catch((err: unknown) => {
     logEvent(env, "memory_ops", "learned_file_read_failed", { error: String(err) });
     return "";
   });
   const line = `${JSON.stringify(record)}\n`;
-  await env.SANDBOX.writeFile(LEARNED_FILE_PATH, `${current}${line}`);
+  await withTimeout(env.SANDBOX.writeFile(LEARNED_FILE_PATH, `${current}${line}`), timeoutMs);
 }
 
 export async function flushLearnedRecordsToR2(env: Env, conversationKey: string): Promise<{ key: string; count: number; lastRecord?: LearnedRecord }> {
-  const content = await env.SANDBOX.readFile(LEARNED_FILE_PATH).catch((err: unknown) => {
+  const timeoutMs = getSandboxIoTimeoutMs(env);
+  const content = await withTimeout(env.SANDBOX.readFile(LEARNED_FILE_PATH), timeoutMs).catch((err: unknown) => {
     logEvent(env, "memory_ops", "learned_file_flush_read_failed", { error: String(err) });
     return "";
   });
@@ -424,7 +451,7 @@ export async function flushLearnedRecordsToR2(env: Env, conversationKey: string)
   const existing = await env.REPO_STORE.get(key);
   const existingText = existing ? await existing.text() : "";
   await env.REPO_STORE.put(key, `${existingText}${content.endsWith("\n") ? content : `${content}\n`}`);
-  await env.SANDBOX.writeFile(LEARNED_FILE_PATH, "");
+  await withTimeout(env.SANDBOX.writeFile(LEARNED_FILE_PATH, ""), timeoutMs);
   return { key, count: rows.length, lastRecord: rows[rows.length - 1] };
 }
 

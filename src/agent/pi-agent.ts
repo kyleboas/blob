@@ -684,7 +684,7 @@ fi
     const verbosity = opts.verbosity ?? "minimal";
     const conversationKey = opts.conversationKey ?? this.repoDir;
     const selftestRoot = "/workspace";
-    const selftestTimeoutMs = 300000;
+    const selftestTimeoutMs = 30000;
     this.activeSecrets = opts.secrets ?? {};
     const stepLines: string[] = [];
     const uniqueToken = `selftest-${Date.now()}`;
