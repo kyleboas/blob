@@ -679,9 +679,13 @@ fi
     const sandboxId = opts.sandboxId ?? "default";
     const verbosity = opts.verbosity ?? "minimal";
     const conversationKey = opts.conversationKey ?? this.repoDir;
+    const selftestRoot = "/workspace";
+    const selftestTimeoutMs = 300000;
     this.activeSecrets = opts.secrets ?? {};
     const stepLines: string[] = [];
     const uniqueToken = `selftest-${Date.now()}`;
+    const readmePath = `.blob-selftest-${this.repoDir}-README.md`;
+    const statePath = `.blob-selftest-${this.repoDir}.txt`;
 
     const recordStep = async (label: string, detail: string, ok = true): Promise<void> => {
       const icon = ok ? "✅" : "❌";
@@ -693,33 +697,34 @@ fi
     };
 
     try {
-      await this.ensureRepoBootstrapped(sandboxId, opts.onProgress, verbosity);
-      await recordStep("bootstrap", `repo ready at /workspace/${this.repoDir}`);
+      await ensureSandboxSession(sandboxId, this.env);
+      await recordStep("workspace", `using scratch workspace at ${selftestRoot}`);
 
-      await executeInSandbox(`mkdir -p /workspace/${this.repoDir}/.blob`, this.env, {
+      await writeTool(readmePath, `# Blob Self-Test\n\n${uniqueToken}\n`, this.env, {
         sandboxId,
-        workspaceRoot: `/workspace/${this.repoDir}`,
+        workspaceRoot: selftestRoot,
       });
 
-      const readme = await readTool("README.md", this.env, {
+      const readme = await readTool(readmePath, this.env, {
         sandboxId,
-        workspaceRoot: `/workspace/${this.repoDir}`,
+        workspaceRoot: selftestRoot,
       });
-      await recordStep("read", `README.md (${readme.length} bytes)`);
+      await recordStep("read", `${readmePath} (${readme.length} bytes)`);
 
-      await writeTool(".blob/selftest.txt", `${uniqueToken} initial`, this.env, {
+      await writeTool(statePath, `${uniqueToken} initial`, this.env, {
         sandboxId,
-        workspaceRoot: `/workspace/${this.repoDir}`,
+        workspaceRoot: selftestRoot,
       });
-      await editTool(".blob/selftest.txt", "initial", "edited", this.env, {
+      await editTool(statePath, "initial", "edited", this.env, {
         sandboxId,
-        workspaceRoot: `/workspace/${this.repoDir}`,
+        workspaceRoot: selftestRoot,
       });
-      await recordStep("write/edit", "updated .blob/selftest.txt");
+      await recordStep("write/edit", `updated ${statePath}`);
 
       const bashResult = await executeInSandbox("node -v", this.env, {
         sandboxId,
-        workspaceRoot: `/workspace/${this.repoDir}`,
+        workspaceRoot: selftestRoot,
+        timeout: selftestTimeoutMs,
       });
       if (bashResult.exitCode !== 0) {
         throw new Error(`bash command failed: ${summarizeText(bashResult.stderr || bashResult.stdout || "unknown error", 120)}`);
@@ -798,8 +803,8 @@ fi
       });
 
       return verbosity === "verbose"
-        ? `Self-test passed for /workspace/${this.repoDir}\n${stepLines.join("\n")}`
-        : `Self-test passed: bootstrap, tools, and R2 are healthy for /workspace/${this.repoDir}.`;
+        ? `Self-test passed for ${selftestRoot}\n${stepLines.join("\n")}`
+        : `Self-test passed: sandbox tools and R2 are healthy for ${selftestRoot}.`;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logEvent(this.env, "tool_call", "selftest_failed", {
@@ -810,7 +815,7 @@ fi
       });
       await recordStep("selftest", summarizeText(message, 180), false);
       return verbosity === "verbose"
-        ? `Self-test failed for /workspace/${this.repoDir}\n${stepLines.join("\n")}`
+        ? `Self-test failed for ${selftestRoot}\n${stepLines.join("\n")}`
         : `Self-test failed: ${summarizeText(message, 180)}`;
     }
   }

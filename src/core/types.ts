@@ -35,6 +35,7 @@ export interface Env {
   CLOUDFLARE_DIAG_WORKERS?: string;
   WORKER_NAME?: string;
   DO_AUTH_SECRET?: string;
+  SELFTEST_ADMIN_TOKEN?: string;
 
   CRON_FAIL_THRESHOLD?: string;
   CRON_STALL_MULTIPLIER?: string;

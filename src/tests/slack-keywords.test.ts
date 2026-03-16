@@ -348,7 +348,7 @@ test("selftest command runs full workflow and posts result", async () => {
     await handleSlackEvent(req, env);
     assert.equal(posts[0], "Running self-test…");
     assert.match(posts[1], /Self-test passed/i);
-    assert.match(posts[1], /bootstrap, tools, and R2 are healthy/i);
+    assert.match(posts[1], /sandbox tools and R2 are healthy/i);
   } finally {
     globalThis.fetch = originalFetch;
   }
