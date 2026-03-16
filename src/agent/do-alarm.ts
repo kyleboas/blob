@@ -9,6 +9,7 @@ import { PiAgent } from "./pi-agent";
 import { getSecretsForInjection } from "./handlers/secrets";
 import { getRuntimeControls } from "../core/runtime-controls";
 import { diagnoseRepo, type RepoDiagnosis } from "./repo-diagnosis";
+import { maybeOpenAutonomousPullRequest } from "./autonomous-pr";
 
 export function getEffectiveHeartbeatConfig(data: BlobState, env: Env): { intervalMs: number; modelCallLimit: number } {
   return {
@@ -79,6 +80,9 @@ function getRepoAutonomyState(
     lastDiagnosisSummary: existing.lastDiagnosisSummary,
     lastTestCommand: existing.lastTestCommand,
     lastTestStatus: existing.lastTestStatus,
+    lastPullRequestUrl: existing.lastPullRequestUrl,
+    lastPullRequestAt: existing.lastPullRequestAt,
+    lastPullRequestNumber: existing.lastPullRequestNumber,
     lastEnqueuedAt: existing.lastEnqueuedAt,
     lastEnqueuedJobId: existing.lastEnqueuedJobId,
     lastRunAt: existing.lastRunAt,
@@ -100,6 +104,21 @@ function buildDiagnosisPrompt(diagnosis: RepoDiagnosis): string {
     lines.push(`- TODO/FIXME hits:\n${diagnosis.todoMatches.map((item) => `  - ${item}`).join("\n")}`);
   } else {
     lines.push("- TODO/FIXME hits: none");
+  }
+  if (diagnosis.openIssues.length > 0) {
+    lines.push(`- open GitHub issues:\n${diagnosis.openIssues.map((issue) => `  - #${issue.number}: ${issue.title}`).join("\n")}`);
+  } else {
+    lines.push("- open GitHub issues: none");
+  }
+  if (diagnosis.failedWorkflowRuns.length > 0) {
+    lines.push(`- failed workflow runs:\n${diagnosis.failedWorkflowRuns.map((run) => `  - ${run.name} on ${run.head_branch}`).join("\n")}`);
+  } else {
+    lines.push("- failed workflow runs: none");
+  }
+  if (diagnosis.cloudflareSignals.length > 0) {
+    lines.push(`- Cloudflare log signals:\n${diagnosis.cloudflareSignals.map((signal) => `  - ${signal.worker}: ${signal.message}`).join("\n")}`);
+  } else {
+    lines.push("- Cloudflare log signals: none");
   }
   return lines.join("\n");
 }
@@ -149,6 +168,15 @@ Rules:
     return [
       `Fix the failing verification in ${diagnosis.repo}: ${diagnosis.verificationOutput ?? diagnosis.summary}`,
     ];
+  }
+  if (diagnosis.failedWorkflowRuns.length > 0) {
+    return [`Investigate the failing workflow "${diagnosis.failedWorkflowRuns[0].name}" on ${diagnosis.failedWorkflowRuns[0].head_branch}`];
+  }
+  if (diagnosis.cloudflareSignals.length > 0) {
+    return [`Investigate Cloudflare worker signal in ${diagnosis.cloudflareSignals[0].worker}: ${diagnosis.cloudflareSignals[0].message}`];
+  }
+  if (diagnosis.openIssues.length > 0) {
+    return [`Work on GitHub issue #${diagnosis.openIssues[0].number}: ${diagnosis.openIssues[0].title}`];
   }
   if (diagnosis.todoMatches.length > 0) {
     return [`Investigate and address ${diagnosis.todoMatches[0]}`];
@@ -406,7 +434,7 @@ export async function runHeartbeatAlarm(state: DurableObjectState, env: Env, dat
             userMessage = await plan(repoGoals, env).catch(() => repoGoals[0] ?? "improve codebase");
           }
 
-          logEvent(env, "job_lifecycle", "job_dispatched", { id, status, userMessage: userMessage.slice(0, 120) });
+      logEvent(env, "job_lifecycle", "job_dispatched", { id, status, userMessage: userMessage.slice(0, 120) });
 
           const agent = new PiAgent(env, repo);
           await agent.run(userMessage, {
@@ -424,6 +452,32 @@ export async function runHeartbeatAlarm(state: DurableObjectState, env: Env, dat
           );
           if (kind === "background") {
             const repoState = getRepoAutonomyState(data, repo, env, defaultIntervalMs);
+            const pr = await maybeOpenAutonomousPullRequest({
+              env,
+              repo,
+              task: userMessage,
+              jobId: id,
+              sandboxId: sandboxId ?? id,
+              diagnosisSummary: repoState.lastDiagnosisSummary,
+            }).catch((error) => ({ status: "skipped" as const, reason: String(error) }));
+            if (pr.status === "opened") {
+              repoState.lastPullRequestUrl = pr.url;
+              repoState.lastPullRequestNumber = pr.number;
+              repoState.lastPullRequestAt = new Date().toISOString();
+              logEvent(env, "job_lifecycle", "autonomous_pr_opened", {
+                id,
+                repo,
+                url: pr.url,
+                number: pr.number,
+                branch: pr.branch,
+              });
+            } else {
+              logEvent(env, "job_lifecycle", "autonomous_pr_skipped", {
+                id,
+                repo,
+                reason: pr.reason,
+              });
+            }
             repoState.lastRunAt = new Date().toISOString();
             await save();
           }

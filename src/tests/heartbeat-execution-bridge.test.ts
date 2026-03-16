@@ -581,7 +581,26 @@ test("heartbeat diagnosis runs repo tests and feeds failures into autonomous tas
   });
 
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("api.github.com") && url.includes("/issues")) {
+      return new Response(
+        JSON.stringify([{ number: 17, title: "Fix auth retries", html_url: "https://github.com/kyleboas/blob/issues/17", updated_at: "2026-03-16T00:00:00Z" }]),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("api.github.com") && url.includes("/actions/runs")) {
+      return new Response(
+        JSON.stringify({ workflow_runs: [{ id: 1, name: "CI", html_url: "https://github.com/kyleboas/blob/actions/runs/1", status: "completed", conclusion: "failure", head_branch: "main", created_at: "2026-03-16T00:00:00Z" }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("api.cloudflare.com/client/v4/accounts/")) {
+      return new Response(
+        JSON.stringify({ result: { events: [{ Message: "TypeError: boom", Timestamp: "2026-03-16T00:00:00Z" }] } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     const userMessage = body?.messages?.find((m: { role: string }) => m.role === "user")?.content ?? "";
     if (userMessage.includes("Autonomous diagnosis:")) {
@@ -598,7 +617,7 @@ test("heartbeat diagnosis runs repo tests and feeds failures into autonomous tas
   };
 
   try {
-    await runHeartbeatAlarm(state, env, data, async () => undefined);
+    await runHeartbeatAlarm(state, { ...env, GITHUB_TOKEN: "github-token", CLOUDFLARE_API_TOKEN: "cf-token", CLOUDFLARE_ACCOUNT_ID: "acct", WORKER_NAME: "blob-agent" }, data, async () => undefined);
     await flushWaitUntil(waitUntilPromises);
 
     assert.equal(verifyExecuted, true, "expected diagnosis to execute the repo verification command");
@@ -606,6 +625,12 @@ test("heartbeat diagnosis runs repo tests and feeds failures into autonomous tas
     assert.match(capturedBacklogPrompt, /npm run typecheck && npm run test/);
     assert.match(capturedBacklogPrompt, /FAIL src\/tests\/auth\.test\.ts/);
     assert.match(capturedBacklogPrompt, /TODO tighten retry handling/);
+    assert.match(capturedBacklogPrompt, /open GitHub issues:/);
+    assert.match(capturedBacklogPrompt, /#17: Fix auth retries/);
+    assert.match(capturedBacklogPrompt, /failed workflow runs:/);
+    assert.match(capturedBacklogPrompt, /CI on main/);
+    assert.match(capturedBacklogPrompt, /Cloudflare log signals:/);
+    assert.match(capturedBacklogPrompt, /blob-agent: TypeError: boom/);
     assert.equal(data.repoAutonomy?.["kyleboas/blob"]?.lastTestStatus, "failed");
   } finally {
     globalThis.fetch = originalFetch;

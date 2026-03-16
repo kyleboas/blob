@@ -21,6 +21,9 @@ export interface BlobState {
     lastDiagnosisSummary?: string;
     lastTestCommand?: string;
     lastTestStatus?: "passed" | "failed" | "missing" | "error";
+    lastPullRequestUrl?: string;
+    lastPullRequestAt?: string;
+    lastPullRequestNumber?: number;
     lastEnqueuedAt?: string;
     lastEnqueuedJobId?: string;
     lastRunAt?: string;

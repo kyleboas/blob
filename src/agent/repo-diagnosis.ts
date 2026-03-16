@@ -1,5 +1,12 @@
 import type { Env } from "../core/types";
 import { executeInSandbox } from "../integrations/sandbox";
+import { GitHubApi, type GitHubIssue, type GitHubWorkflowRun } from "../integrations/github";
+
+export type CloudflareLogSignal = {
+  worker: string;
+  message: string;
+  timestamp?: string;
+};
 
 export type RepoDiagnosis = {
   repo: string;
@@ -10,6 +17,9 @@ export type RepoDiagnosis = {
   verificationOutput?: string;
   latestCommit?: string;
   todoMatches: string[];
+  openIssues: Array<Pick<GitHubIssue, "number" | "title" | "html_url" | "updated_at">>;
+  failedWorkflowRuns: Array<Pick<GitHubWorkflowRun, "name" | "html_url" | "head_branch" | "created_at">>;
+  cloudflareSignals: CloudflareLogSignal[];
   summary: string;
 };
 
@@ -26,6 +36,19 @@ function summarizeText(text: string, maxChars = 1200): string {
 
 export function repoDirFromSlug(repo: string): string {
   return repo.includes("/") ? repo.split("/").pop()! : repo;
+}
+
+function getCloudflareAccountId(env: Env): string | undefined {
+  return env.CLOUDFLARE_ACCOUNT_ID ?? env.ACCOUNT_ID;
+}
+
+function getCloudflareWorkers(env: Env): string[] {
+  const configured = (env.CLOUDFLARE_DIAG_WORKERS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (configured.length > 0) return configured;
+  return env.WORKER_NAME ? [env.WORKER_NAME] : [];
 }
 
 export function buildRepoBootstrapScript(repoDir: string, repo: string): string {
@@ -157,6 +180,108 @@ PY`,
   return command ? command : undefined;
 }
 
+async function fetchGitHubSignals(env: Env, repo: string): Promise<{
+  openIssues: RepoDiagnosis["openIssues"];
+  failedWorkflowRuns: RepoDiagnosis["failedWorkflowRuns"];
+}> {
+  if (!env.GITHUB_TOKEN || !repo.includes("/")) {
+    return { openIssues: [], failedWorkflowRuns: [] };
+  }
+  const [owner, repoName] = repo.split("/", 2);
+  if (!owner || !repoName) {
+    return { openIssues: [], failedWorkflowRuns: [] };
+  }
+
+  try {
+    const api = new GitHubApi(env.GITHUB_TOKEN, fetch, env);
+    const [issues, runs] = await Promise.all([
+      api.listOpenIssues({ owner, repo: repoName, perPage: 5 }),
+      api.listFailedWorkflowRuns({ owner, repo: repoName, perPage: 5 }),
+    ]);
+    return {
+      openIssues: issues.map((issue) => ({
+        number: issue.number,
+        title: issue.title,
+        html_url: issue.html_url,
+        updated_at: issue.updated_at,
+      })),
+      failedWorkflowRuns: runs.map((run) => ({
+        name: run.name,
+        html_url: run.html_url,
+        head_branch: run.head_branch,
+        created_at: run.created_at,
+      })),
+    };
+  } catch (_err) {
+    return { openIssues: [], failedWorkflowRuns: [] };
+  }
+}
+
+async function fetchCloudflareSignals(env: Env): Promise<CloudflareLogSignal[]> {
+  const accountId = getCloudflareAccountId(env);
+  if (!env.CLOUDFLARE_API_TOKEN || !accountId) return [];
+
+  const workers = getCloudflareWorkers(env);
+  if (workers.length === 0) return [];
+
+  const since = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+  const signals: CloudflareLogSignal[] = [];
+
+  for (const worker of workers.slice(0, 3)) {
+    try {
+      const response = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${accountId}/telemetry/query`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            view: "events",
+            limit: 5,
+            parameters: {
+              datasets: ["workers_trace_events"],
+              filters: [
+                { key: "ScriptName", operation: "eq", type: "string", value: worker },
+                { key: "Timestamp", operation: "gte", type: "datetime", value: since },
+              ],
+            },
+          }),
+        },
+      );
+      if (!response.ok) continue;
+      const payload = await response.json() as {
+        result?: { events?: Array<Record<string, unknown>> };
+        events?: Array<Record<string, unknown>>;
+      };
+      const events = payload.result?.events ?? payload.events ?? [];
+      for (const event of events) {
+        const metadata = typeof event === "object" && event !== null
+          ? (event as Record<string, unknown>)["$metadata"]
+          : undefined;
+        const rawMessage =
+          event.Exceptions ||
+          event.Logs ||
+          event.Message ||
+          event.Event ||
+          (typeof metadata === "object" && metadata !== null ? (metadata as Record<string, unknown>).message : undefined);
+        const message = typeof rawMessage === "string" ? summarizeText(rawMessage, 240) : "";
+        if (!message) continue;
+        signals.push({
+          worker,
+          message,
+          timestamp: typeof event.Timestamp === "string" ? event.Timestamp : undefined,
+        });
+      }
+    } catch (_err) {
+      void _err;
+    }
+  }
+
+  return signals.slice(0, 5);
+}
+
 export async function diagnoseRepo(
   env: Env,
   repo: string,
@@ -182,7 +307,7 @@ export async function diagnoseRepo(
     throw new Error(`repo bootstrap failed (${repoDir}): ${message}`);
   }
 
-  const [verificationCommand, latestCommitResult, todoResult] = await Promise.all([
+  const [verificationCommand, latestCommitResult, todoResult, githubSignals, cloudflareSignals] = await Promise.all([
     detectVerificationCommand(env, repo, sandboxId),
     executeInSandbox("git log -1 --pretty=format:'%h %s'", env, {
       sandboxId,
@@ -198,6 +323,8 @@ export async function diagnoseRepo(
         timeout: 30000,
       },
     ),
+    fetchGitHubSignals(env, repo),
+    fetchCloudflareSignals(env),
   ]);
 
   let verificationStatus: RepoDiagnosis["verificationStatus"] = "missing";
@@ -229,6 +356,9 @@ export async function diagnoseRepo(
     `Verification ${verificationStatus}${verificationCommand ? ` via ${verificationCommand}` : ""}`,
     latestCommit ? `latest commit ${latestCommit}` : "",
     todoMatches.length > 0 ? `${todoMatches.length} TODO/FIXME hits` : "no TODO/FIXME hits found",
+    githubSignals.openIssues.length > 0 ? `${githubSignals.openIssues.length} open GitHub issues` : "",
+    githubSignals.failedWorkflowRuns.length > 0 ? `${githubSignals.failedWorkflowRuns.length} failed workflow runs` : "",
+    cloudflareSignals.length > 0 ? `${cloudflareSignals.length} Cloudflare log signals` : "",
     verificationOutput ? `output: ${verificationOutput}` : "",
   ].filter(Boolean);
 
@@ -241,6 +371,9 @@ export async function diagnoseRepo(
     verificationOutput: verificationOutput || undefined,
     latestCommit,
     todoMatches,
+    openIssues: githubSignals.openIssues,
+    failedWorkflowRuns: githubSignals.failedWorkflowRuns,
+    cloudflareSignals,
     summary: summaryParts.join("; "),
   };
 }

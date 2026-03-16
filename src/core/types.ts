@@ -31,6 +31,8 @@ export interface Env {
   SLACK_SUMMARY_CHANNEL?: string;
   CLOUDFLARE_API_TOKEN?: string;
   ACCOUNT_ID?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_DIAG_WORKERS?: string;
   WORKER_NAME?: string;
   DO_AUTH_SECRET?: string;
 
@@ -51,6 +53,7 @@ export interface Env {
   AUTONOMOUS_JOB_COOLDOWN_MS?: string;
   AUTONOMOUS_JOB_ESTIMATED_CALLS?: string;
   AUTONOMOUS_TASK_BACKLOG_SIZE?: string;
+  AUTONOMOUS_PR_ENABLED?: string;
   MAX_BACKGROUND_JOBS?: string;
   POST_DEPLOY_HEARTBEAT_COUNT?: string;
   DAILY_TOKEN_CEILING?: string;
