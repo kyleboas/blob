@@ -12,6 +12,15 @@ export interface CronJob {
 }
 
 export interface BlobState {
+  repoAutonomy?: Record<string, {
+    enabled?: boolean;
+    cooldownMs?: number;
+    nextTasks?: string[];
+    lastTaskGeneratedAt?: string;
+    lastEnqueuedAt?: string;
+    lastEnqueuedJobId?: string;
+    lastRunAt?: string;
+  }>;
   repos: string[];
   goals: Record<string, string[]>;
   messages: Array<{ role: string; content: string; timestamp: number }>;
