@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PiAgent } from "../agent/pi-agent";
-import { __resetSandboxSessionsForTests, __sandboxTestUtils, cleanupSandboxForJob, readTool, teardownIdleSandboxes, writeTool } from "../integrations/sandbox";
+import { __resetSandboxSessionsForTests, __sandboxTestUtils, appendWorkspaceState, cleanupSandboxForJob, readTool, teardownIdleSandboxes, writeTool } from "../integrations/sandbox";
 
 function makeEnv(overrides: Record<string, unknown> = {}) {
   const files = new Map<string, string>();
@@ -88,6 +88,42 @@ test("sandbox tools enforce path allowlist and atomic writes", async () => {
   assert.equal(files.get("/workspace/blob/src/new.txt"), "content");
 
   await assert.rejects(() => readTool("../secrets", env, { sandboxId: "s1" }));
+});
+
+test("appendWorkspaceState creates the blob_state directory before writing", async () => {
+  __resetSandboxSessionsForTests();
+  const files = new Map<string, string>();
+  const dirs = new Set(["/workspace"]);
+  const { env } = makeEnv({
+    SANDBOX: {
+      start: async () => {},
+      exec: async (command: string) => {
+        if (command.startsWith("mkdir -p ")) {
+          const match = command.match(/mkdir -p '([^']+)'/);
+          if (match?.[1]) {
+            dirs.add(match[1]);
+          }
+          return { stdout: "", stderr: "", exitCode: 0 };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+      readFile: async (path: string) => {
+        if (!files.has(path)) throw new Error("ENOENT");
+        return files.get(path) ?? "";
+      },
+      writeFile: async (path: string, content: string) => {
+        const parent = path.slice(0, path.lastIndexOf("/"));
+        if (!dirs.has(parent)) {
+          throw new Error("ENOENT");
+        }
+        files.set(path, content);
+      },
+    },
+  });
+
+  await appendWorkspaceState("context", "{\"role\":\"assistant\",\"content\":\"ok\"}", env, "state-1");
+
+  assert.equal(files.get("/workspace/blob_state/context.jsonl"), "{\"role\":\"assistant\",\"content\":\"ok\"}\n");
 });
 
 test("sandbox idle teardown removes expired sessions", async () => {

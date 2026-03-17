@@ -166,6 +166,43 @@ test("agent prompts for tool usage when external data request gets no tool call"
   assert.equal(result, "It is sunny.");
   assert.equal(callCount, 3);
 });
+
+test("agent still returns final answer when workspace state append fails after a tool call", async () => {
+  const env = makeEnv({
+    SANDBOX: {
+      start: async () => undefined,
+      exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+      readFile: async () => {
+        throw new Error("ENOENT");
+      },
+      writeFile: async (path: string) => {
+        if (path.startsWith("/workspace/blob_state/")) {
+          throw new Error("ENOENT");
+        }
+      },
+    },
+  });
+  const agent = new PiAgent(env, "acme/repo");
+
+  let callCount = 0;
+  (agent as any).callLLM = async () => {
+    callCount += 1;
+    if (callCount === 1) {
+      return { content: "", toolCalls: [{ function: { name: "bash", arguments: "{\"command\":\"echo 72F\"}" } }] };
+    }
+    return { content: "Phoenix is 72F.", toolCalls: [] };
+  };
+  (agent as any).executeToolWithRetry = async () => ({ output: "72F" });
+
+  const result = await agent.run("What temperature is it in Phoenix, Arizona?", {
+    sandboxId: "weather-1",
+    skipRepoBootstrap: true,
+  });
+
+  assert.equal(result, "Phoenix is 72F.");
+  assert.equal(callCount, 2);
+});
+
 test("agent run executes structured tool calls and emits tool ledger entries", async () => {
   const env = makeEnv();
   const agent = new PiAgent(env, "acme/repo");

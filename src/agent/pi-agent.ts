@@ -767,7 +767,9 @@ Stop when done and provide a concise summary.`;
         const verifyResult = await this.runVerification(sandboxId, bootstrapAttempted, verifyAttempts, maxVerifyAttempts, opts);
         if (verifyResult.passed || verifyResult.skipped) {
           this.messages.push({ role: "assistant", content: responseText });
-          await appendWorkspaceState("context", JSON.stringify({ role: "assistant", content: responseText }), this.env, sandboxId);
+          await appendWorkspaceState("context", JSON.stringify({ role: "assistant", content: responseText }), this.env, sandboxId).catch((err: unknown) => {
+            logEvent(this.env, "memory_ops", "workspace_state_append_failed", { kind: "context", error: String(err) });
+          });
           return this.finishRun(userMessage, responseText, conversationKey, sandboxId);
         }
         // Verification failed — feed errors back to model and continue loop
@@ -848,7 +850,9 @@ Stop when done and provide a concise summary.`;
           content: `TOOL: ${toolCall.tool}\nARG: ${JSON.stringify(toolCall.args)}\nRESULT: ${result.output}`,
         });
       }
-      await appendWorkspaceState("log", JSON.stringify({ tool: toolCall.tool, ok: !result.error }), this.env, sandboxId);
+      await appendWorkspaceState("log", JSON.stringify({ tool: toolCall.tool, ok: !result.error }), this.env, sandboxId).catch((err: unknown) => {
+        logEvent(this.env, "memory_ops", "workspace_state_append_failed", { kind: "log", error: String(err) });
+      });
     }
 
     return this.finishRun(userMessage, "Stopped after heartbeat model call limit.", conversationKey, sandboxId);
