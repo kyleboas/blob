@@ -15,6 +15,20 @@ interface ToolOptions {
   workspaceRoot?: string;
 }
 
+interface SandboxFileOptions {
+  sandboxId?: string;
+  encoding?: string;
+}
+
+interface GitCheckoutOptions {
+  sessionId?: string;
+  branch?: string;
+  targetDir?: string;
+  depth?: number;
+  cwd?: string;
+  envVars?: Record<string, string>;
+}
+
 const SANDBOX_STARTUP_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const SANDBOX_STARTUP_RETRYABLE_MESSAGES = [
   "container is not running",
@@ -26,8 +40,6 @@ const WORKSPACE_STATE_DIR = "/workspace/blob_state";
 const DEFAULT_SANDBOX_IO_TIMEOUT_MS = 60000;
 
 const sessions = new Map<string, SandboxSession>();
-const sandboxEnvKeys = new Set<string>();
-
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -84,6 +96,10 @@ function normalizeToolPath(path: string, workspaceRoot: string): string {
   }
 
   return normalized;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
 async function withSandboxRetry<T>(opts: {
@@ -145,68 +161,45 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   });
 }
 
-async function syncSandboxEnvVars(env: Env, envVars?: Record<string, string>): Promise<void> {
-  if (typeof env.SANDBOX.setEnvVars !== "function") {
+function touchSandboxSession(sandboxId: string): void {
+  const existing = sessions.get(sandboxId);
+  if (existing) {
+    existing.lastUsedAt = Date.now();
     return;
   }
-
-  const nextKeys = new Set(Object.keys(envVars ?? {}));
-  const payload: Record<string, string | undefined> = {};
-
-  for (const key of sandboxEnvKeys) {
-    if (!nextKeys.has(key)) {
-      payload[key] = undefined;
-    }
-  }
-
-  for (const [key, value] of Object.entries(envVars ?? {})) {
-    payload[key] = value;
-  }
-
-  if (Object.keys(payload).length === 0) {
-    return;
-  }
-
-  await withTimeout(env.SANDBOX.setEnvVars(payload), getSandboxIoTimeoutMs(env));
-
-  sandboxEnvKeys.clear();
-  for (const key of nextKeys) {
-    sandboxEnvKeys.add(key);
-  }
+  sessions.set(sandboxId, { lastUsedAt: Date.now() });
 }
 
-export async function configureSandboxEnvVars(
+export async function ensureSandboxSession(
+  sandboxId: string,
   env: Env,
-  envVars?: Record<string, string>,
-  sandboxId?: string,
+  opts: { cwd?: string; envVars?: Record<string, string> } = {},
 ): Promise<void> {
-  if (sandboxId) {
-    await ensureSandboxSession(sandboxId, env);
-  } else {
-    await ensureSandboxStarted(env);
-  }
-
-  await syncSandboxEnvVars(env, envVars);
-}
-
-export async function ensureSandboxSession(sandboxId: string, env: Env): Promise<void> {
   await ensureSandboxStarted(env);
-
-  if (!sessions.has(sandboxId)) {
-    sessions.set(sandboxId, { lastUsedAt: Date.now() });
-  } else {
-    sessions.get(sandboxId)!.lastUsedAt = Date.now();
+  touchSandboxSession(sandboxId);
+  if (typeof env.SANDBOX.ensureSession === "function") {
+    await withTimeout(
+      env.SANDBOX.ensureSession(sandboxId, {
+        cwd: opts.cwd,
+        env: opts.envVars,
+      }),
+      getSandboxIoTimeoutMs(env),
+    );
   }
 }
 
 export async function teardownIdleSandboxes(env: Env, now = Date.now()): Promise<string[]> {
   const idleMs = Number.parseInt(env.SANDBOX_IDLE_TIMEOUT_MS ?? "3600000", 10);
   const removed: string[] = [];
+  const timeoutMs = getSandboxIoTimeoutMs(env);
 
   for (const [sandboxId, session] of sessions.entries()) {
     if (now - session.lastUsedAt >= idleMs) {
       sessions.delete(sandboxId);
       removed.push(sandboxId);
+      if (typeof env.SANDBOX.deleteSession === "function") {
+        await withTimeout(env.SANDBOX.deleteSession(sandboxId), timeoutMs).catch(() => {});
+      }
     }
   }
 
@@ -226,27 +219,37 @@ export async function cleanupSandboxForJob(
   if (sessions.has(sandboxId)) {
     sessions.delete(sandboxId);
   }
+
+  if (typeof env.SANDBOX.deleteSession === "function") {
+    await withTimeout(env.SANDBOX.deleteSession(sandboxId), getSandboxIoTimeoutMs(env)).catch(() => {});
+  }
 }
 
 export async function executeInSandbox(
   command: string,
   env: Env,
-  opts: { timeout?: number; sandboxId?: string; workspaceRoot?: string; envVars?: Record<string, string> } = {},
+  opts: { timeout?: number; sandboxId?: string; workspaceRoot?: string; cwd?: string; envVars?: Record<string, string> } = {},
 ): Promise<SandboxResult> {
   // Security boundary: Cloudflare Sandbox (Firecracker microVM) provides execution isolation. No application-level command filtering.
 
   if (opts.sandboxId) {
-    await ensureSandboxSession(opts.sandboxId, env);
+    touchSandboxSession(opts.sandboxId);
   } else {
     await ensureSandboxStarted(env);
   }
 
   const timeout = opts.timeout ?? Number.parseInt(env.BASH_TIMEOUT_MS ?? "120000", 10);
   const maxOutputBytes = Number.parseInt(env.BASH_MAX_OUTPUT_BYTES ?? "1000000", 10);
-  const workspaceRoot = opts.workspaceRoot ? resolveWorkspaceRoot(opts.workspaceRoot) : undefined;
-  await syncSandboxEnvVars(env, opts.envVars);
-  const commandToRun = workspaceRoot ? `cd ${workspaceRoot} && ${command}`.trim() : command.trim();
-  const result = await withTimeout(env.SANDBOX.exec(commandToRun), timeout);
+  const cwd = opts.cwd?.trim() ? opts.cwd : (opts.workspaceRoot ? resolveWorkspaceRoot(opts.workspaceRoot) : undefined);
+  const result = await withTimeout(
+    env.SANDBOX.exec(command.trim(), {
+      sessionId: opts.sandboxId,
+      timeout,
+      cwd,
+      env: opts.envVars,
+    }),
+    timeout,
+  );
   if (estimateBytes(result.stdout) > maxOutputBytes) {
     result.stdout = result.stdout.slice(0, maxOutputBytes) + "\n[output truncated]";
   }
@@ -256,6 +259,105 @@ export async function executeInSandbox(
   return result;
 }
 
+export async function probeSandbox(env: Env): Promise<boolean> {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const result = await executeInSandbox("true", env, {
+        cwd: "/workspace",
+        timeout: 5000,
+      });
+      return result.exitCode === 0;
+    } catch {
+      if (attempt === maxAttempts) {
+        return false;
+      }
+      await delay(250 * attempt);
+    }
+  }
+  return false;
+}
+
+export async function readSandboxFile(path: string, env: Env, opts: SandboxFileOptions = {}): Promise<string> {
+  if (opts.sandboxId) touchSandboxSession(opts.sandboxId);
+  return withTimeout(
+    env.SANDBOX.readFile(path, { sessionId: opts.sandboxId, encoding: opts.encoding }),
+    getSandboxIoTimeoutMs(env),
+  );
+}
+
+export async function writeSandboxFile(path: string, content: string, env: Env, opts: SandboxFileOptions = {}): Promise<void> {
+  if (opts.sandboxId) touchSandboxSession(opts.sandboxId);
+  await withTimeout(
+    env.SANDBOX.writeFile(path, content, { sessionId: opts.sandboxId, encoding: opts.encoding }),
+    getSandboxIoTimeoutMs(env),
+  );
+}
+
+export async function fileExists(path: string, env: Env, opts: SandboxFileOptions = {}): Promise<boolean> {
+  if (opts.sandboxId) touchSandboxSession(opts.sandboxId);
+  const timeoutMs = getSandboxIoTimeoutMs(env);
+  if (typeof env.SANDBOX.exists === "function") {
+    const result = await withTimeout(env.SANDBOX.exists(path, { sessionId: opts.sandboxId }), timeoutMs);
+    return result.exists;
+  }
+  return withTimeout(
+    env.SANDBOX.readFile(path, { sessionId: opts.sandboxId, encoding: opts.encoding }),
+    timeoutMs,
+  ).then(() => true, () => false);
+}
+
+export async function deleteSandboxFile(path: string, env: Env, opts: { sandboxId?: string } = {}): Promise<void> {
+  if (opts.sandboxId) {
+    touchSandboxSession(opts.sandboxId);
+  }
+  const result = await withTimeout(
+    env.SANDBOX.exec(`rm -f ${shellQuote(path)}`, {
+      sessionId: opts.sandboxId,
+      cwd: "/workspace",
+    }),
+    getSandboxIoTimeoutMs(env),
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || result.stdout || `Failed to delete ${path}`);
+  }
+}
+
+export async function gitCheckoutRepo(repoUrl: string, env: Env, opts: GitCheckoutOptions = {}): Promise<void> {
+  if (opts.sessionId) touchSandboxSession(opts.sessionId);
+  if (typeof env.SANDBOX.gitCheckout === "function") {
+    const gitCheckoutOptions = {
+      ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+      ...(opts.branch ? { branch: opts.branch } : {}),
+      ...(opts.targetDir ? { targetDir: opts.targetDir } : {}),
+      ...(typeof opts.depth === "number" ? { depth: opts.depth } : {}),
+      ...(opts.cwd ? { cwd: opts.cwd } : {}),
+      ...(opts.envVars ? { env: opts.envVars } : {}),
+    };
+    await withTimeout(
+      env.SANDBOX.gitCheckout(repoUrl, gitCheckoutOptions),
+      getSandboxIoTimeoutMs(env),
+    );
+    return;
+  }
+
+  const branchArg = opts.branch ? ` --branch ${shellQuote(opts.branch)}` : "";
+  const depthArg = typeof opts.depth === "number" ? ` --depth=${opts.depth}` : "";
+  const targetDirArg = opts.targetDir ? ` ${shellQuote(opts.targetDir)}` : "";
+  const clone = await executeInSandbox(
+    `mkdir -p /workspace && git clone${depthArg}${branchArg} ${shellQuote(repoUrl)}${targetDirArg}`,
+    env,
+    {
+      sandboxId: opts.sessionId,
+      cwd: opts.cwd ?? "/workspace",
+      envVars: opts.envVars,
+    },
+  );
+  if (clone.exitCode !== 0) {
+    throw new Error(clone.stderr || clone.stdout || `git checkout failed for ${repoUrl}`);
+  }
+}
+
 function resolveWorkspaceRoot(workspaceRoot?: string): string {
   return workspaceRoot && workspaceRoot.trim() ? workspaceRoot : "/workspace/blob";
 }
@@ -263,9 +365,9 @@ function resolveWorkspaceRoot(workspaceRoot?: string): string {
 export async function readTool(path: string, env: Env, opts: ToolOptions = {}): Promise<string> {
   const workspaceRoot = resolveWorkspaceRoot(opts.workspaceRoot);
   const normalized = normalizeToolPath(path, workspaceRoot);
-  if (opts.sandboxId) await ensureSandboxSession(opts.sandboxId, env);
+  if (opts.sandboxId) touchSandboxSession(opts.sandboxId);
 
-  const content = await withTimeout(env.SANDBOX.readFile(`${workspaceRoot}/${normalized}`), getSandboxIoTimeoutMs(env));
+  const content = await readSandboxFile(`${workspaceRoot}/${normalized}`, env, { sandboxId: opts.sandboxId });
   const maxBytes = Number.parseInt(env.TOOL_MAX_FILE_BYTES ?? "200000", 10);
   if (estimateBytes(content) > maxBytes) {
     throw new Error(`File exceeds max size: ${path}`);
@@ -280,13 +382,20 @@ export async function writeTool(path: string, content: string, env: Env, opts: T
   if (estimateBytes(content) > maxBytes) {
     throw new Error(`Write content exceeds max size: ${path}`);
   }
-  if (opts.sandboxId) await ensureSandboxSession(opts.sandboxId, env);
+  if (opts.sandboxId) touchSandboxSession(opts.sandboxId);
 
   const abs = `${workspaceRoot}/${normalized}`;
   const temp = `${abs}.tmp`;
   const timeoutMs = getSandboxIoTimeoutMs(env);
-  await withTimeout(env.SANDBOX.writeFile(temp, content), timeoutMs);
-  await withTimeout(env.SANDBOX.exec(`mv ${temp} ${abs}`), timeoutMs);
+  await writeSandboxFile(temp, content, env, { sandboxId: opts.sandboxId });
+  if (typeof env.SANDBOX.renameFile === "function") {
+    await withTimeout(env.SANDBOX.renameFile(temp, abs, { sessionId: opts.sandboxId }), timeoutMs);
+  } else {
+    await withTimeout(
+      env.SANDBOX.exec(`mv ${shellQuote(temp)} ${shellQuote(abs)}`, { sessionId: opts.sandboxId }),
+      timeoutMs,
+    );
+  }
 }
 
 export async function editTool(
@@ -310,21 +419,19 @@ export async function appendWorkspaceState(
   sandboxId?: string,
 ): Promise<void> {
   const fileName = `${WORKSPACE_STATE_DIR}/${kind}.jsonl`;
-  if (sandboxId) await ensureSandboxSession(sandboxId, env);
-  const timeoutMs = getSandboxIoTimeoutMs(env);
-  const current = await withTimeout(env.SANDBOX.readFile(fileName), timeoutMs).catch(() => "");
-  await withTimeout(env.SANDBOX.writeFile(fileName, `${current}${line.endsWith("\n") ? line : `${line}\n`}`), timeoutMs);
+  if (sandboxId) touchSandboxSession(sandboxId);
+  const current = await readSandboxFile(fileName, env, { sandboxId }).catch(() => "");
+  await writeSandboxFile(fileName, `${current}${line.endsWith("\n") ? line : `${line}\n`}`, env, { sandboxId });
 }
 
 export async function readWorkspaceState(kind: "log" | "context", env: Env, sandboxId?: string): Promise<string> {
   const fileName = `${WORKSPACE_STATE_DIR}/${kind}.jsonl`;
-  if (sandboxId) await ensureSandboxSession(sandboxId, env);
-  return withTimeout(env.SANDBOX.readFile(fileName), getSandboxIoTimeoutMs(env)).catch(() => "");
+  if (sandboxId) touchSandboxSession(sandboxId);
+  return readSandboxFile(fileName, env, { sandboxId }).catch(() => "");
 }
 
 export function __resetSandboxSessionsForTests(): void {
   sessions.clear();
-  sandboxEnvKeys.clear();
 }
 
 export const __sandboxTestUtils = { normalizeToolPath, resolveWorkspaceRoot };

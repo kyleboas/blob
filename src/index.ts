@@ -8,6 +8,7 @@ import { withDOAuth } from "./core/do-auth";
 import { embedText } from "./core/memory-system";
 import { PiAgent } from "./agent/pi-agent";
 import { getRepos } from "./core/storage";
+import { probeSandbox as probeSandboxHealth } from "./integrations/sandbox";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -159,35 +160,8 @@ async function withTimeout<T>(factory: () => Promise<T>, timeoutMs: number): Pro
   });
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function probeSandbox(env: Env): Promise<boolean> {
-  if (typeof env.SANDBOX.start !== "function") {
-    return false;
-  }
-
-  const maxAttempts = 3;
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    try {
-      await env.SANDBOX.start();
-      if (typeof env.SANDBOX.exec === "function") {
-        const result = await env.SANDBOX.exec("true");
-        if (result.exitCode !== 0) {
-          throw new Error(result.stderr || result.stdout || "sandbox exec failed");
-        }
-      }
-      return true;
-    } catch (err) {
-      if (attempt === maxAttempts) {
-        return false;
-      }
-      await delay(250 * attempt);
-    }
-  }
-
-  return false;
+  return probeSandboxHealth(env);
 }
 
 async function runHealthChecks(env: Env): Promise<Response> {

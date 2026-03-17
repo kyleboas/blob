@@ -1,15 +1,65 @@
 // types.ts - Service binding interface for sandbox worker
 
 export interface SandboxService {
+  ensureSession?(
+    sessionId: string,
+    options?: {
+      cwd?: string;
+      env?: Record<string, string | undefined>;
+      isolation?: boolean;
+    },
+  ): Promise<{ id: string }>;
+  deleteSession?(sessionId: string): Promise<void>;
   start?(): Promise<void>;
-  exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }>;
-  writeFile(path: string, content: string): Promise<void>;
-  readFile(path: string): Promise<string>;
+  exec(
+    command: string,
+    options?: {
+      sessionId?: string;
+      timeout?: number;
+      cwd?: string;
+      env?: Record<string, string | undefined>;
+      encoding?: string;
+    },
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  writeFile(
+    path: string,
+    content: string,
+    options?: {
+      sessionId?: string;
+      encoding?: string;
+    },
+  ): Promise<void>;
+  readFile(
+    path: string,
+    options?: {
+      sessionId?: string;
+      encoding?: string;
+    },
+  ): Promise<string>;
+  exists?(
+    path: string,
+    options?: {
+      sessionId?: string;
+    },
+  ): Promise<{ exists: boolean }>;
+  renameFile?(
+    oldPath: string,
+    newPath: string,
+    options?: {
+      sessionId?: string;
+    },
+  ): Promise<void>;
   gitCheckout?(
     repoUrl: string,
-    options?: { branch?: string; targetDir?: string; depth?: number },
+    options?: {
+      sessionId?: string;
+      branch?: string;
+      targetDir?: string;
+      depth?: number;
+      cwd?: string;
+      env?: Record<string, string | undefined>;
+    },
   ): Promise<{ success?: boolean; targetDir?: string; branch?: string }>;
-  setEnvVars?(envVars: Record<string, string | undefined>): Promise<void>;
 }
 
 export interface Env {

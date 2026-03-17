@@ -1,5 +1,5 @@
 import type { Env } from "../core/types";
-import { configureSandboxEnvVars, executeInSandbox } from "../integrations/sandbox";
+import { executeInSandbox, gitCheckoutRepo } from "../integrations/sandbox";
 import { GitHubApi, type GitHubIssue, type GitHubWorkflowRun } from "../integrations/github";
 
 export type CloudflareLogSignal = {
@@ -42,19 +42,6 @@ function shouldFetchExternalSignals(verificationStatus: RepoDiagnosis["verificat
   return verificationStatus === "passed" || verificationStatus === "missing";
 }
 
-function getCloudflareAccountId(env: Env): string | undefined {
-  return env.CLOUDFLARE_ACCOUNT_ID ?? env.ACCOUNT_ID;
-}
-
-function getCloudflareWorkers(env: Env): string[] {
-  const configured = (env.CLOUDFLARE_DIAG_WORKERS ?? "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-  if (configured.length > 0) return configured;
-  return env.WORKER_NAME ? [env.WORKER_NAME] : [];
-}
-
 export function getGitEnvVars(env: Env): Record<string, string> | undefined {
   if (!env.GITHUB_TOKEN) return undefined;
   return {
@@ -73,8 +60,6 @@ export async function ensureRepoWorkspaceReady(
   const repoDir = repoDirFromSlug(repo);
   const workspaceRoot = `/workspace/${repoDir}`;
   const gitEnvVars = getGitEnvVars(env);
-
-  await configureSandboxEnvVars(env, gitEnvVars, sandboxId);
 
   const hasGit = await executeInSandbox(`test -d ${shellQuote(`${workspaceRoot}/.git`)}`, env, {
     sandboxId,
@@ -96,22 +81,15 @@ export async function ensureRepoWorkspaceReady(
     }
 
     const repoUrl = `https://github.com/${repo}.git`;
-    if (typeof env.SANDBOX.gitCheckout === "function") {
-      try {
-        await configureSandboxEnvVars(env, gitEnvVars, sandboxId);
-        await env.SANDBOX.gitCheckout(repoUrl, { targetDir: workspaceRoot, depth: 1 });
-      } catch (err) {
-        throw new Error(`repo bootstrap failed (${repoDir}): ${summarizeText(String(err), 400)}`);
-      }
-    } else {
-      const clone = await executeInSandbox(
-        `mkdir -p /workspace && git clone --depth=1 ${shellQuote(repoUrl)} ${shellQuote(workspaceRoot)}`,
-        env,
-        { sandboxId, timeout, envVars: gitEnvVars },
-      );
-      if (clone.exitCode !== 0) {
-        throw new Error(`repo bootstrap failed (${repoDir}): ${summarizeText(clone.stderr || clone.stdout || "clone failed", 400)}`);
-      }
+    try {
+      await gitCheckoutRepo(repoUrl, env, {
+        sessionId: sandboxId,
+        targetDir: workspaceRoot,
+        depth: 1,
+        envVars: gitEnvVars,
+      });
+    } catch (err) {
+      throw new Error(`repo bootstrap failed (${repoDir}): ${summarizeText(String(err), 400)}`);
     }
   }
 
@@ -256,71 +234,6 @@ async function fetchGitHubSignals(env: Env, repo: string): Promise<{
   }
 }
 
-async function fetchCloudflareSignals(env: Env): Promise<CloudflareLogSignal[]> {
-  const accountId = getCloudflareAccountId(env);
-  if (!env.CLOUDFLARE_API_TOKEN || !accountId) return [];
-
-  const workers = getCloudflareWorkers(env);
-  if (workers.length === 0) return [];
-
-  const since = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
-  const signals: CloudflareLogSignal[] = [];
-
-  for (const worker of workers.slice(0, 3)) {
-    try {
-      const response = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${accountId}/telemetry/query`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({
-            view: "events",
-            limit: 5,
-            parameters: {
-              datasets: ["workers_trace_events"],
-              filters: [
-                { key: "ScriptName", operation: "eq", type: "string", value: worker },
-                { key: "Timestamp", operation: "gte", type: "datetime", value: since },
-              ],
-            },
-          }),
-        },
-      );
-      if (!response.ok) continue;
-      const payload = await response.json() as {
-        result?: { events?: Array<Record<string, unknown>> };
-        events?: Array<Record<string, unknown>>;
-      };
-      const events = payload.result?.events ?? payload.events ?? [];
-      for (const event of events) {
-        const metadata = typeof event === "object" && event !== null
-          ? (event as Record<string, unknown>)["$metadata"]
-          : undefined;
-        const rawMessage =
-          event.Exceptions ||
-          event.Logs ||
-          event.Message ||
-          event.Event ||
-          (typeof metadata === "object" && metadata !== null ? (metadata as Record<string, unknown>).message : undefined);
-        const message = typeof rawMessage === "string" ? summarizeText(rawMessage, 240) : "";
-        if (!message) continue;
-        signals.push({
-          worker,
-          message,
-          timestamp: typeof event.Timestamp === "string" ? event.Timestamp : undefined,
-        });
-      }
-    } catch (_err) {
-      void _err;
-    }
-  }
-
-  return signals.slice(0, 5);
-}
-
 export async function diagnoseRepo(
   env: Env,
   repo: string,
@@ -371,7 +284,7 @@ export async function diagnoseRepo(
     .slice(0, 10);
 
   const [githubSignals, cloudflareSignals] = shouldFetchExternalSignals(verificationStatus)
-    ? await Promise.all([fetchGitHubSignals(env, repo), fetchCloudflareSignals(env)])
+    ? await Promise.all([fetchGitHubSignals(env, repo), Promise.resolve([] as CloudflareLogSignal[])])
     : [{ openIssues: [], failedWorkflowRuns: [] }, []];
 
   const latestCommit = latestCommitResult.stdout.trim() || undefined;

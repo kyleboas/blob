@@ -70,13 +70,10 @@ test("dispatchCronTask routes configured cron expression", async () => {
   assert.equal(result?.jobName, "memory-reconciliation");
 });
 
-test("runCronTask starts sandbox and records cron outcome", async () => {
-  let started = false;
+test("runCronTask records cron outcome without eager sandbox startup", async () => {
   const env = makeEnv() as Env & { __outcomeCalls: () => number };
-  env.SANDBOX.start = async () => { started = true; };
 
   const result = await runCronTask("memory-reconciliation", env);
-  assert.equal(started, true);
   assert.equal(result.status, "success");
   assert.equal(env.__outcomeCalls(), 1);
 });

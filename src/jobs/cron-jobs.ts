@@ -9,6 +9,8 @@ import type { Scenario } from "../../evals/run-eval";
 import { runOptimizationCycle, loadConfig, appendToHistory } from "../self-improve/index";
 import { scoreItem, shouldFlag, extractContentSignals } from "../self-improve/scoring-engine";
 import type { HistoryRecord } from "../self-improve/types";
+import { ensureSandboxSession, executeInSandbox, readSandboxFile, writeSandboxFile } from "../integrations/sandbox";
+import { ensureRepoWorkspaceReady, getGitEnvVars } from "../agent/repo-diagnosis";
 
 export type CronTaskName = "content-scan" | "memory-compaction" | "memory-reconciliation" | "autoresearch" | "self-improve";
 export type CronStatus = "success" | "failure" | "running";
@@ -55,6 +57,10 @@ function summarizeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
 async function postToSlack(env: AlertEnv, text: string): Promise<boolean> {
   if (!env.SLACK_BOT_TOKEN || !env.SLACK_SUMMARY_CHANNEL) return false;
   const response = await fetch("https://slack.com/api/chat.postMessage", {
@@ -79,17 +85,13 @@ export async function runCronTask(jobName: CronTaskName, env: Env): Promise<Cron
   logEvent(env, "cron_runs", "cron_start", { jobName });
   const sessionId = crypto.randomUUID();
   try {
-    if (env.SANDBOX.start) {
-      await env.SANDBOX.start();
-    }
-
     let summary = "";
     if (jobName === "content-scan") {
       summary = await runContentScan(env);
     } else if (jobName === "memory-compaction") {
       summary = await runMemoryCompaction(env);
     } else if (jobName === "autoresearch") {
-      summary = await runAutoresearch(env);
+      summary = await runAutoresearch(env, sessionId);
     } else if (jobName === "self-improve") {
       summary = await runOptimizationCycle(env);
     } else {
@@ -335,9 +337,10 @@ async function loadDataset(env: Env): Promise<Scenario[]> {
   ];
 }
 
-async function runAutoresearch(env: Env): Promise<string> {
+async function runAutoresearch(env: Env, sandboxId: string): Promise<string> {
   const repo = env.AUTORESEARCH_REPO ?? "kyleboas/blob";
   const branch = env.AUTORESEARCH_BRANCH ?? "main";
+  const gitEnvVars = getGitEnvVars(env);
 
   // 1. Load dataset
   const dataset = await loadDataset(env);
@@ -375,22 +378,35 @@ async function runAutoresearch(env: Env): Promise<string> {
   }
 
   // 4. Apply the proposed edit in the sandbox
-  const workspace = "/workspace/blob";
+  await ensureSandboxSession(sandboxId, env);
+  const { workspaceRoot: workspace } = await ensureRepoWorkspaceReady(env, repo, sandboxId, 180000);
   const experimentBranch = `autoresearch/${Date.now()}`;
-  await env.SANDBOX.exec(`cd ${workspace} && git checkout -b ${experimentBranch}`);
+  await executeInSandbox(`git checkout -b ${shellQuote(experimentBranch)}`, env, {
+    sandboxId,
+    cwd: workspace,
+    envVars: gitEnvVars,
+  });
 
   // Read the target file, apply string replacement
   let fileContent: string;
   try {
-    fileContent = await env.SANDBOX.readFile(`${workspace}/${proposal.target_file}`);
+    fileContent = await readSandboxFile(`${workspace}/${proposal.target_file}`, env, { sandboxId });
   } catch (err) {
     logEvent(env, "autoresearch", "target_file_read_failed", { error: String(err), targetFile: proposal.target_file });
-    await env.SANDBOX.exec(`cd ${workspace} && git checkout ${branch} 2>/dev/null; git branch -D ${experimentBranch} 2>/dev/null`);
+    await executeInSandbox(`git checkout ${shellQuote(branch)} 2>/dev/null; git branch -D ${shellQuote(experimentBranch)} 2>/dev/null`, env, {
+      sandboxId,
+      cwd: workspace,
+      envVars: gitEnvVars,
+    });
     return `Autoresearch: baseline=${baseline.aggregate}/20, target file not found: ${proposal.target_file}`;
   }
 
   if (!fileContent.includes(proposal.old_text)) {
-    await env.SANDBOX.exec(`cd ${workspace} && git checkout ${branch} 2>/dev/null; git branch -D ${experimentBranch} 2>/dev/null`);
+    await executeInSandbox(`git checkout ${shellQuote(branch)} 2>/dev/null; git branch -D ${shellQuote(experimentBranch)} 2>/dev/null`, env, {
+      sandboxId,
+      cwd: workspace,
+      envVars: gitEnvVars,
+    });
     await storeExperimentLog(env, {
       baselineScore: baseline.aggregate,
       experimentScore: null,
@@ -400,15 +416,25 @@ async function runAutoresearch(env: Env): Promise<string> {
     return `Autoresearch: baseline=${baseline.aggregate}/20, old_text not found in ${proposal.target_file}`;
   }
 
-  await env.SANDBOX.writeFile(
+  await writeSandboxFile(
     `${workspace}/${proposal.target_file}`,
     fileContent.replace(proposal.old_text, proposal.new_text),
+    env,
+    { sandboxId },
   );
 
   // 5. Typecheck
-  const typecheck = await env.SANDBOX.exec(`cd ${workspace} && npx tsc --noEmit 2>&1`);
+  const typecheck = await executeInSandbox("npx tsc --noEmit 2>&1", env, {
+    sandboxId,
+    cwd: workspace,
+    envVars: gitEnvVars,
+  });
   if (typecheck.exitCode !== 0) {
-    await env.SANDBOX.exec(`cd ${workspace} && git checkout ${branch} 2>/dev/null; git branch -D ${experimentBranch} 2>/dev/null`);
+    await executeInSandbox(`git checkout ${shellQuote(branch)} 2>/dev/null; git branch -D ${shellQuote(experimentBranch)} 2>/dev/null`, env, {
+      sandboxId,
+      cwd: workspace,
+      envVars: gitEnvVars,
+    });
     await storeExperimentLog(env, {
       baselineScore: baseline.aggregate,
       experimentScore: null,
@@ -433,18 +459,34 @@ async function runAutoresearch(env: Env): Promise<string> {
   };
 
   if (accepted) {
-    await env.SANDBOX.exec(
-      `cd ${workspace} && git config user.email "autoresearch@blob.bot" && git config user.name "autoresearch"`,
+    await executeInSandbox(
+      `git config user.email "autoresearch@blob.bot" && git config user.name "autoresearch"`,
+      env,
+      { sandboxId, cwd: workspace, envVars: gitEnvVars },
     );
-    await env.SANDBOX.exec(
-      `cd ${workspace} && git add -A && git commit -m "autoresearch: ${proposal.hypothesis.slice(0, 72)}"`,
+    await executeInSandbox(
+      `git add -A && git commit -m ${shellQuote(`autoresearch: ${proposal.hypothesis.slice(0, 72)}`)}`,
+      env,
+      { sandboxId, cwd: workspace, envVars: gitEnvVars },
     );
-    await env.SANDBOX.exec(`cd ${workspace} && git checkout ${branch} && git merge ${experimentBranch}`);
+    await executeInSandbox(`git checkout ${shellQuote(branch)} && git merge ${shellQuote(experimentBranch)}`, env, {
+      sandboxId,
+      cwd: workspace,
+      envVars: gitEnvVars,
+    });
     if (env.GITHUB_TOKEN) {
-      await env.SANDBOX.exec(`cd ${workspace} && git push origin ${branch} 2>&1`);
+      await executeInSandbox(`git push origin ${shellQuote(branch)} 2>&1`, env, {
+        sandboxId,
+        cwd: workspace,
+        envVars: gitEnvVars,
+      });
     }
   } else {
-    await env.SANDBOX.exec(`cd ${workspace} && git checkout ${branch} 2>/dev/null; git branch -D ${experimentBranch} 2>/dev/null`);
+    await executeInSandbox(`git checkout ${shellQuote(branch)} 2>/dev/null; git branch -D ${shellQuote(experimentBranch)} 2>/dev/null`, env, {
+      sandboxId,
+      cwd: workspace,
+      envVars: gitEnvVars,
+    });
   }
 
   // Store results to R2

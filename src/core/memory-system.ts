@@ -5,6 +5,7 @@ import { logEvent } from "./observability";
 import { estimateTokens } from "./tokens";
 import { loadConfig } from "../self-improve/index";
 import { DEFAULT_SCORING_CONFIG } from "../self-improve/types";
+import { readSandboxFile, writeSandboxFile } from "../integrations/sandbox";
 
 export type MemoryScope = "thread" | "channel" | "team";
 export type MemorySource = "thread" | "cron" | "compaction";
@@ -277,17 +278,22 @@ export function parseLearnedJsonl(jsonl: string, defaultScope: string): LearnedE
   return parsed;
 }
 
-export async function appendDailyLearned(env: Env, date: string, entries: LearnedEntry[]): Promise<string> {
+export async function appendDailyLearned(
+  env: Env,
+  date: string,
+  entries: LearnedEntry[],
+  opts: { sandboxId?: string } = {},
+): Promise<string> {
   const path = `/workspace/blob_state/daily/${date}.learned.jsonl`;
   const payload = entries.map((e) => JSON.stringify({ ...e, content: redactSecrets(e.content) })).join("\n") + (entries.length ? "\n" : "");
   let existing = "";
   try {
-    existing = await env.SANDBOX.readFile(path);
+    existing = await readSandboxFile(path, env, opts);
   } catch (err) {
     logEvent(env, "memory_ops", "daily_learned_read_failed", { error: String(err), path });
     existing = "";
   }
-  await env.SANDBOX.writeFile(path, `${existing}${payload}`);
+  await writeSandboxFile(path, `${existing}${payload}`, env, opts);
   await env.REPO_STORE.put(`daily/${date}.learned.jsonl`, `${existing}${payload}`);
   return path;
 }
@@ -415,19 +421,27 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   });
 }
 
-export async function appendLearnedRecord(env: Env, record: LearnedRecord): Promise<void> {
+export async function appendLearnedRecord(
+  env: Env,
+  record: LearnedRecord,
+  opts: { sandboxId?: string } = {},
+): Promise<void> {
   const timeoutMs = getSandboxIoTimeoutMs(env);
-  const current = await withTimeout(env.SANDBOX.readFile(LEARNED_FILE_PATH), timeoutMs).catch((err: unknown) => {
+  const current = await withTimeout(readSandboxFile(LEARNED_FILE_PATH, env, opts), timeoutMs).catch((err: unknown) => {
     logEvent(env, "memory_ops", "learned_file_read_failed", { error: String(err) });
     return "";
   });
   const line = `${JSON.stringify(record)}\n`;
-  await withTimeout(env.SANDBOX.writeFile(LEARNED_FILE_PATH, `${current}${line}`), timeoutMs);
+  await withTimeout(writeSandboxFile(LEARNED_FILE_PATH, `${current}${line}`, env, opts), timeoutMs);
 }
 
-export async function flushLearnedRecordsToR2(env: Env, conversationKey: string): Promise<{ key: string; count: number; lastRecord?: LearnedRecord }> {
+export async function flushLearnedRecordsToR2(
+  env: Env,
+  conversationKey: string,
+  opts: { sandboxId?: string } = {},
+): Promise<{ key: string; count: number; lastRecord?: LearnedRecord }> {
   const timeoutMs = getSandboxIoTimeoutMs(env);
-  const content = await withTimeout(env.SANDBOX.readFile(LEARNED_FILE_PATH), timeoutMs).catch((err: unknown) => {
+  const content = await withTimeout(readSandboxFile(LEARNED_FILE_PATH, env, opts), timeoutMs).catch((err: unknown) => {
     logEvent(env, "memory_ops", "learned_file_flush_read_failed", { error: String(err) });
     return "";
   });
@@ -451,7 +465,7 @@ export async function flushLearnedRecordsToR2(env: Env, conversationKey: string)
   const existing = await env.REPO_STORE.get(key);
   const existingText = existing ? await existing.text() : "";
   await env.REPO_STORE.put(key, `${existingText}${content.endsWith("\n") ? content : `${content}\n`}`);
-  await withTimeout(env.SANDBOX.writeFile(LEARNED_FILE_PATH, ""), timeoutMs);
+  await withTimeout(writeSandboxFile(LEARNED_FILE_PATH, "", env, opts), timeoutMs);
   return { key, count: rows.length, lastRecord: rows[rows.length - 1] };
 }
 
