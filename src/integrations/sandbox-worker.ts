@@ -4,6 +4,8 @@ import {
   proxyToSandbox,
   Sandbox as SandboxDO,
   type Sandbox as SandboxType,
+  type ExecutionSession,
+  type SessionOptions,
 } from "@cloudflare/sandbox";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { classifyCommandKind, estimateBytes, summarizePath } from "./sandbox-observability";
@@ -63,6 +65,60 @@ interface Env {
   Sandbox: DurableObjectNamespace<SandboxType>;
 }
 
+type SessionRequestOptions = {
+  cwd?: string;
+  env?: Record<string, string | undefined>;
+  isolation?: boolean;
+};
+
+type ExecRequestOptions = SessionRequestOptions & {
+  sessionId?: string;
+  timeout?: number;
+  encoding?: string;
+};
+
+type FileRequestOptions = {
+  sessionId?: string;
+  encoding?: string;
+};
+
+function getAgentSandbox(env: Env): SandboxType {
+  return getSandbox(env.Sandbox, "agent");
+}
+
+function toSessionOptions(sessionId: string, options?: SessionRequestOptions): SessionOptions {
+  return {
+    id: sessionId,
+    cwd: options?.cwd,
+    env: options?.env,
+    isolation: options?.isolation,
+  };
+}
+
+async function getOrCreateSession(
+  sandbox: SandboxType,
+  sessionId: string,
+  options?: SessionRequestOptions,
+): Promise<ExecutionSession> {
+  const session = await runSandboxOperation(sandbox, async () => {
+    try {
+      return await sandbox.getSession(sessionId);
+    } catch {
+      try {
+        return await sandbox.createSession(toSessionOptions(sessionId, options));
+      } catch {
+        return sandbox.getSession(sessionId);
+      }
+    }
+  });
+
+  if (options?.env && Object.keys(options.env).length > 0) {
+    await runSandboxOperation(sandbox, () => session.setEnvVars(options.env!));
+  }
+
+  return session;
+}
+
 export default class SandboxWorker extends WorkerEntrypoint<Env> {
   async fetch(request: Request): Promise<Response> {
     const proxied = await proxyToSandbox(request, this.env);
@@ -85,13 +141,45 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
 
 
   async start(): Promise<void> {
-    const sandbox = getSandbox(this.env.Sandbox, "agent");
+    const sandbox = getAgentSandbox(this.env);
     await withOperationLog("start", { sandbox: "agent" }, () => ensureSandboxStarted(sandbox));
+  }
+
+  async ensureSession(
+    sessionId: string,
+    options?: SessionRequestOptions,
+  ): Promise<{ id: string }> {
+    const sandbox = getAgentSandbox(this.env);
+    const session = await withOperationLog(
+      "ensureSession",
+      { sandbox: "agent", sessionId },
+      () => getOrCreateSession(sandbox, sessionId, options),
+      () => ({ sessionId }),
+    );
+    return { id: session.id };
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    const sandbox = getAgentSandbox(this.env);
+    await withOperationLog(
+      "deleteSession",
+      { sandbox: "agent", sessionId },
+      async () => {
+        try {
+          await runSandboxOperation(sandbox, () => sandbox.deleteSession(sessionId));
+        } catch (err: unknown) {
+          console.warn("[sandbox] deleteSession skipped", {
+            sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      },
+    );
   }
 
   // Initialize sandbox - run restore-auth on first use
   async init(): Promise<{ restored: boolean; message: string }> {
-    const sandbox = getSandbox(this.env.Sandbox, "agent");
+    const sandbox = getAgentSandbox(this.env);
     try {
       const result = await withOperationLog(
         "init",
@@ -114,12 +202,33 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
   }
 
   // Run command in sandbox
-  async exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    const sandbox = getSandbox(this.env.Sandbox, "agent");
+  async exec(command: string, options?: ExecRequestOptions): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const sandbox = getAgentSandbox(this.env);
     const result = await withOperationLog(
       "exec",
-      { sandbox: "agent", commandKind: classifyCommandKind(command), commandLength: command.length },
-      () => runSandboxOperation(sandbox, () => sandbox.exec(command)),
+      {
+        sandbox: "agent",
+        sessionId: options?.sessionId,
+        commandKind: classifyCommandKind(command),
+        commandLength: command.length,
+      },
+      async () => {
+        if (options?.sessionId) {
+          const session = await getOrCreateSession(sandbox, options.sessionId, options);
+          return session.exec(command, {
+            timeout: options.timeout,
+            cwd: options.cwd,
+            env: options.env,
+            encoding: options.encoding,
+          });
+        }
+        return runSandboxOperation(sandbox, () => sandbox.exec(command, {
+          timeout: options?.timeout,
+          cwd: options?.cwd,
+          env: options?.env,
+          encoding: options?.encoding,
+        }));
+      },
       (value) => ({
         exitCode: value.exitCode ?? (value.success ? 0 : 1),
         stdoutBytes: estimateBytes(value.stdout ?? ""),
@@ -133,40 +242,115 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
     };
   }
 
-  async writeFile(path: string, content: string): Promise<void> {
-    const sandbox = getSandbox(this.env.Sandbox, "agent");
+  async writeFile(path: string, content: string, options?: FileRequestOptions): Promise<void> {
+    const sandbox = getAgentSandbox(this.env);
     await withOperationLog(
       "writeFile",
-      { sandbox: "agent", path: summarizePath(path), contentBytes: estimateBytes(content) },
-      () => runSandboxOperation(sandbox, () => sandbox.writeFile(path, content)),
+      {
+        sandbox: "agent",
+        sessionId: options?.sessionId,
+        path: summarizePath(path),
+        contentBytes: estimateBytes(content),
+      },
+      async () => {
+        if (options?.sessionId) {
+          const session = await getOrCreateSession(sandbox, options.sessionId);
+          await session.writeFile(path, content, { encoding: options.encoding });
+          return;
+        }
+        await runSandboxOperation(sandbox, () => sandbox.writeFile(path, content, { encoding: options?.encoding }));
+      },
     );
   }
 
-  async readFile(path: string): Promise<string> {
-    const sandbox = getSandbox(this.env.Sandbox, "agent");
+  async readFile(path: string, options?: FileRequestOptions): Promise<string> {
+    const sandbox = getAgentSandbox(this.env);
     const result = await withOperationLog(
       "readFile",
-      { sandbox: "agent", path: summarizePath(path) },
-      () => runSandboxOperation(sandbox, () => sandbox.readFile(path)),
+      { sandbox: "agent", sessionId: options?.sessionId, path: summarizePath(path) },
+      async () => {
+        if (options?.sessionId) {
+          const session = await getOrCreateSession(sandbox, options.sessionId);
+          return session.readFile(path, { encoding: options.encoding });
+        }
+        return runSandboxOperation(sandbox, () => sandbox.readFile(path, { encoding: options?.encoding }));
+      },
       (value) => ({ contentBytes: estimateBytes(value.content ?? "") }),
     );
     return result.content ?? "";
   }
 
+  async exists(path: string, options?: { sessionId?: string }): Promise<{ exists: boolean }> {
+    const sandbox = getAgentSandbox(this.env);
+    const result = await withOperationLog(
+      "exists",
+      { sandbox: "agent", sessionId: options?.sessionId, path: summarizePath(path) },
+      async () => {
+        if (options?.sessionId) {
+          const session = await getOrCreateSession(sandbox, options.sessionId);
+          return session.exists(path);
+        }
+        return runSandboxOperation(sandbox, () => sandbox.exists(path));
+      },
+      (value) => ({ exists: value.exists }),
+    );
+    return { exists: result.exists };
+  }
+
+  async renameFile(oldPath: string, newPath: string, options?: { sessionId?: string }): Promise<void> {
+    const sandbox = getAgentSandbox(this.env);
+    await withOperationLog(
+      "renameFile",
+      {
+        sandbox: "agent",
+        sessionId: options?.sessionId,
+        oldPath: summarizePath(oldPath),
+        newPath: summarizePath(newPath),
+      },
+      async () => {
+        if (options?.sessionId) {
+          const session = await getOrCreateSession(sandbox, options.sessionId);
+          await session.renameFile(oldPath, newPath);
+          return;
+        }
+        await runSandboxOperation(sandbox, () => sandbox.renameFile(oldPath, newPath));
+      },
+    );
+  }
+
   async gitCheckout(
     repoUrl: string,
-    options?: { branch?: string; targetDir?: string; depth?: number },
+    options?: { sessionId?: string; branch?: string; targetDir?: string; depth?: number; cwd?: string; env?: Record<string, string | undefined> },
   ): Promise<{ success: boolean; targetDir?: string; branch?: string }> {
-    const sandbox = getSandbox(this.env.Sandbox, "agent");
+    const sandbox = getAgentSandbox(this.env);
     await withOperationLog(
       "gitCheckout",
       {
         sandbox: "agent",
+        sessionId: options?.sessionId,
         targetDir: options?.targetDir ?? "/workspace",
         branch: options?.branch ?? "default",
         depth: options?.depth ?? "full",
       },
-      () => runSandboxOperation(sandbox, () => sandbox.gitCheckout(repoUrl, options)),
+      async () => {
+        if (options?.sessionId) {
+          const session = await getOrCreateSession(sandbox, options.sessionId, {
+            cwd: options.cwd,
+            env: options.env,
+          });
+          await session.gitCheckout(repoUrl, {
+            branch: options.branch,
+            targetDir: options.targetDir,
+            depth: options.depth,
+          });
+          return;
+        }
+        await runSandboxOperation(sandbox, () => sandbox.gitCheckout(repoUrl, {
+          branch: options?.branch,
+          targetDir: options?.targetDir,
+          depth: options?.depth,
+        }));
+      },
     );
     return {
       success: true,
@@ -176,7 +360,7 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
   }
 
   async setEnvVars(envVars: Record<string, string | undefined>): Promise<void> {
-    const sandbox = getSandbox(this.env.Sandbox, "agent");
+    const sandbox = getAgentSandbox(this.env);
     await withOperationLog(
       "setEnvVars",
       { sandbox: "agent", envVarCount: Object.keys(envVars).length },

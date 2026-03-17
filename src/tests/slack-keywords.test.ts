@@ -59,6 +59,11 @@ function makeEnv() {
         if (!files.has(path)) throw new Error("ENOENT");
         return files.get(path) ?? "";
       },
+      exists: async (path: string) => ({ exists: files.has(path) }),
+      renameFile: async (oldPath: string, newPath: string) => {
+        files.set(newPath, files.get(oldPath) ?? "");
+        files.delete(oldPath);
+      },
     },
     REPO_STORE: {
       put: async (key: string, value: string) => {

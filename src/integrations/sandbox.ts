@@ -26,8 +26,6 @@ const WORKSPACE_STATE_DIR = "/workspace/blob_state";
 const DEFAULT_SANDBOX_IO_TIMEOUT_MS = 60000;
 
 const sessions = new Map<string, SandboxSession>();
-const sandboxEnvKeys = new Set<string>();
-
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -145,34 +143,13 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   });
 }
 
-async function syncSandboxEnvVars(env: Env, envVars?: Record<string, string>): Promise<void> {
-  if (typeof env.SANDBOX.setEnvVars !== "function") {
+function touchSandboxSession(sandboxId: string): void {
+  const existing = sessions.get(sandboxId);
+  if (existing) {
+    existing.lastUsedAt = Date.now();
     return;
   }
-
-  const nextKeys = new Set(Object.keys(envVars ?? {}));
-  const payload: Record<string, string | undefined> = {};
-
-  for (const key of sandboxEnvKeys) {
-    if (!nextKeys.has(key)) {
-      payload[key] = undefined;
-    }
-  }
-
-  for (const [key, value] of Object.entries(envVars ?? {})) {
-    payload[key] = value;
-  }
-
-  if (Object.keys(payload).length === 0) {
-    return;
-  }
-
-  await withTimeout(env.SANDBOX.setEnvVars(payload), getSandboxIoTimeoutMs(env));
-
-  sandboxEnvKeys.clear();
-  for (const key of nextKeys) {
-    sandboxEnvKeys.add(key);
-  }
+  sessions.set(sandboxId, { lastUsedAt: Date.now() });
 }
 
 export async function configureSandboxEnvVars(
@@ -181,32 +158,45 @@ export async function configureSandboxEnvVars(
   sandboxId?: string,
 ): Promise<void> {
   if (sandboxId) {
-    await ensureSandboxSession(sandboxId, env);
+    await ensureSandboxSession(sandboxId, env, { envVars });
   } else {
     await ensureSandboxStarted(env);
+    if (envVars && typeof env.SANDBOX.setEnvVars === "function") {
+      await withTimeout(env.SANDBOX.setEnvVars(envVars), getSandboxIoTimeoutMs(env));
+    }
   }
-
-  await syncSandboxEnvVars(env, envVars);
 }
 
-export async function ensureSandboxSession(sandboxId: string, env: Env): Promise<void> {
+export async function ensureSandboxSession(
+  sandboxId: string,
+  env: Env,
+  opts: { cwd?: string; envVars?: Record<string, string> } = {},
+): Promise<void> {
   await ensureSandboxStarted(env);
-
-  if (!sessions.has(sandboxId)) {
-    sessions.set(sandboxId, { lastUsedAt: Date.now() });
-  } else {
-    sessions.get(sandboxId)!.lastUsedAt = Date.now();
+  touchSandboxSession(sandboxId);
+  if (typeof env.SANDBOX.ensureSession === "function") {
+    await withTimeout(
+      env.SANDBOX.ensureSession(sandboxId, {
+        cwd: opts.cwd,
+        env: opts.envVars,
+      }),
+      getSandboxIoTimeoutMs(env),
+    );
   }
 }
 
 export async function teardownIdleSandboxes(env: Env, now = Date.now()): Promise<string[]> {
   const idleMs = Number.parseInt(env.SANDBOX_IDLE_TIMEOUT_MS ?? "3600000", 10);
   const removed: string[] = [];
+  const timeoutMs = getSandboxIoTimeoutMs(env);
 
   for (const [sandboxId, session] of sessions.entries()) {
     if (now - session.lastUsedAt >= idleMs) {
       sessions.delete(sandboxId);
       removed.push(sandboxId);
+      if (typeof env.SANDBOX.deleteSession === "function") {
+        await withTimeout(env.SANDBOX.deleteSession(sandboxId), timeoutMs).catch(() => {});
+      }
     }
   }
 
@@ -226,6 +216,10 @@ export async function cleanupSandboxForJob(
   if (sessions.has(sandboxId)) {
     sessions.delete(sandboxId);
   }
+
+  if (typeof env.SANDBOX.deleteSession === "function") {
+    await withTimeout(env.SANDBOX.deleteSession(sandboxId), getSandboxIoTimeoutMs(env)).catch(() => {});
+  }
 }
 
 export async function executeInSandbox(
@@ -236,7 +230,7 @@ export async function executeInSandbox(
   // Security boundary: Cloudflare Sandbox (Firecracker microVM) provides execution isolation. No application-level command filtering.
 
   if (opts.sandboxId) {
-    await ensureSandboxSession(opts.sandboxId, env);
+    touchSandboxSession(opts.sandboxId);
   } else {
     await ensureSandboxStarted(env);
   }
@@ -244,9 +238,15 @@ export async function executeInSandbox(
   const timeout = opts.timeout ?? Number.parseInt(env.BASH_TIMEOUT_MS ?? "120000", 10);
   const maxOutputBytes = Number.parseInt(env.BASH_MAX_OUTPUT_BYTES ?? "1000000", 10);
   const workspaceRoot = opts.workspaceRoot ? resolveWorkspaceRoot(opts.workspaceRoot) : undefined;
-  await syncSandboxEnvVars(env, opts.envVars);
-  const commandToRun = workspaceRoot ? `cd ${workspaceRoot} && ${command}`.trim() : command.trim();
-  const result = await withTimeout(env.SANDBOX.exec(commandToRun), timeout);
+  const result = await withTimeout(
+    env.SANDBOX.exec(command.trim(), {
+      sessionId: opts.sandboxId,
+      timeout,
+      cwd: workspaceRoot,
+      env: opts.envVars,
+    }),
+    timeout,
+  );
   if (estimateBytes(result.stdout) > maxOutputBytes) {
     result.stdout = result.stdout.slice(0, maxOutputBytes) + "\n[output truncated]";
   }
@@ -263,9 +263,12 @@ function resolveWorkspaceRoot(workspaceRoot?: string): string {
 export async function readTool(path: string, env: Env, opts: ToolOptions = {}): Promise<string> {
   const workspaceRoot = resolveWorkspaceRoot(opts.workspaceRoot);
   const normalized = normalizeToolPath(path, workspaceRoot);
-  if (opts.sandboxId) await ensureSandboxSession(opts.sandboxId, env);
+  if (opts.sandboxId) touchSandboxSession(opts.sandboxId);
 
-  const content = await withTimeout(env.SANDBOX.readFile(`${workspaceRoot}/${normalized}`), getSandboxIoTimeoutMs(env));
+  const content = await withTimeout(
+    env.SANDBOX.readFile(`${workspaceRoot}/${normalized}`, { sessionId: opts.sandboxId }),
+    getSandboxIoTimeoutMs(env),
+  );
   const maxBytes = Number.parseInt(env.TOOL_MAX_FILE_BYTES ?? "200000", 10);
   if (estimateBytes(content) > maxBytes) {
     throw new Error(`File exceeds max size: ${path}`);
@@ -280,13 +283,20 @@ export async function writeTool(path: string, content: string, env: Env, opts: T
   if (estimateBytes(content) > maxBytes) {
     throw new Error(`Write content exceeds max size: ${path}`);
   }
-  if (opts.sandboxId) await ensureSandboxSession(opts.sandboxId, env);
+  if (opts.sandboxId) touchSandboxSession(opts.sandboxId);
 
   const abs = `${workspaceRoot}/${normalized}`;
   const temp = `${abs}.tmp`;
   const timeoutMs = getSandboxIoTimeoutMs(env);
-  await withTimeout(env.SANDBOX.writeFile(temp, content), timeoutMs);
-  await withTimeout(env.SANDBOX.exec(`mv ${temp} ${abs}`), timeoutMs);
+  await withTimeout(env.SANDBOX.writeFile(temp, content, { sessionId: opts.sandboxId }), timeoutMs);
+  if (typeof env.SANDBOX.renameFile === "function") {
+    await withTimeout(env.SANDBOX.renameFile(temp, abs, { sessionId: opts.sandboxId }), timeoutMs);
+  } else {
+    await withTimeout(
+      env.SANDBOX.exec(`mv ${temp} ${abs}`, { sessionId: opts.sandboxId }),
+      timeoutMs,
+    );
+  }
 }
 
 export async function editTool(
@@ -310,21 +320,23 @@ export async function appendWorkspaceState(
   sandboxId?: string,
 ): Promise<void> {
   const fileName = `${WORKSPACE_STATE_DIR}/${kind}.jsonl`;
-  if (sandboxId) await ensureSandboxSession(sandboxId, env);
+  if (sandboxId) touchSandboxSession(sandboxId);
   const timeoutMs = getSandboxIoTimeoutMs(env);
-  const current = await withTimeout(env.SANDBOX.readFile(fileName), timeoutMs).catch(() => "");
-  await withTimeout(env.SANDBOX.writeFile(fileName, `${current}${line.endsWith("\n") ? line : `${line}\n`}`), timeoutMs);
+  const current = await withTimeout(env.SANDBOX.readFile(fileName, { sessionId: sandboxId }), timeoutMs).catch(() => "");
+  await withTimeout(
+    env.SANDBOX.writeFile(fileName, `${current}${line.endsWith("\n") ? line : `${line}\n`}`, { sessionId: sandboxId }),
+    timeoutMs,
+  );
 }
 
 export async function readWorkspaceState(kind: "log" | "context", env: Env, sandboxId?: string): Promise<string> {
   const fileName = `${WORKSPACE_STATE_DIR}/${kind}.jsonl`;
-  if (sandboxId) await ensureSandboxSession(sandboxId, env);
-  return withTimeout(env.SANDBOX.readFile(fileName), getSandboxIoTimeoutMs(env)).catch(() => "");
+  if (sandboxId) touchSandboxSession(sandboxId);
+  return withTimeout(env.SANDBOX.readFile(fileName, { sessionId: sandboxId }), getSandboxIoTimeoutMs(env)).catch(() => "");
 }
 
 export function __resetSandboxSessionsForTests(): void {
   sessions.clear();
-  sandboxEnvKeys.clear();
 }
 
 export const __sandboxTestUtils = { normalizeToolPath, resolveWorkspaceRoot };

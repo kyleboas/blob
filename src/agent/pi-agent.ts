@@ -266,17 +266,16 @@ Stop when done and provide a concise summary.`;
     await executeInSandbox(`mkdir -p ${blobDir}/tools ${blobDir}/config ${blobDir}/memory ${blobDir}/scratch`, this.env, { sandboxId });
 
     const seedFileIfMissing = async (path: string, content: string): Promise<void> => {
-      const existsCheck = await executeInSandbox(`test -f '${path.replace(/'/g, `'\\''`)}'`, this.env, {
-        sandboxId,
-        timeout: 10000,
-      });
-      if (existsCheck.exitCode === 0) {
-        const existing = await this.env.SANDBOX.readFile(path);
+      const exists = typeof this.env.SANDBOX.exists === "function"
+        ? await this.env.SANDBOX.exists(path, { sessionId: sandboxId }).then((result) => result.exists)
+        : await this.env.SANDBOX.readFile(path, { sessionId: sandboxId }).then(() => true, () => false);
+      if (exists) {
+        const existing = await this.env.SANDBOX.readFile(path, { sessionId: sandboxId });
         if (existing.trim().length > 0) {
           return;
         }
       }
-      await this.env.SANDBOX.writeFile(path, content);
+      await this.env.SANDBOX.writeFile(path, content, { sessionId: sandboxId });
     };
 
     await Promise.all([
