@@ -60,7 +60,6 @@ export interface SandboxService {
       env?: Record<string, string | undefined>;
     },
   ): Promise<{ success?: boolean; targetDir?: string; branch?: string }>;
-  setEnvVars?(envVars: Record<string, string | undefined>): Promise<void>;
 }
 
 export interface Env {

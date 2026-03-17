@@ -1,6 +1,6 @@
 import type { Env } from "../core/types";
 import { DEFAULT_MODEL, WORKERS_AI_FALLBACK_MODEL } from "../core/models";
-import { appendWorkspaceState, editTool, ensureSandboxSession, executeInSandbox, readTool, writeTool } from "../integrations/sandbox";
+import { appendWorkspaceState, editTool, ensureSandboxSession, executeInSandbox, fileExists, readSandboxFile, readTool, writeSandboxFile, writeTool } from "../integrations/sandbox";
 import { logEvent } from "../core/observability";
 import { estimateTokens } from "../core/tokens";
 import { classifyIntent } from "../core/intent-classifier";
@@ -266,16 +266,14 @@ Stop when done and provide a concise summary.`;
     await executeInSandbox(`mkdir -p ${blobDir}/tools ${blobDir}/config ${blobDir}/memory ${blobDir}/scratch`, this.env, { sandboxId });
 
     const seedFileIfMissing = async (path: string, content: string): Promise<void> => {
-      const exists = typeof this.env.SANDBOX.exists === "function"
-        ? await this.env.SANDBOX.exists(path, { sessionId: sandboxId }).then((result) => result.exists)
-        : await this.env.SANDBOX.readFile(path, { sessionId: sandboxId }).then(() => true, () => false);
+      const exists = await fileExists(path, this.env, { sandboxId });
       if (exists) {
-        const existing = await this.env.SANDBOX.readFile(path, { sessionId: sandboxId });
+        const existing = await readSandboxFile(path, this.env, { sandboxId });
         if (existing.trim().length > 0) {
           return;
         }
       }
-      await this.env.SANDBOX.writeFile(path, content, { sessionId: sandboxId });
+      await writeSandboxFile(path, content, this.env, { sandboxId });
     };
 
     await Promise.all([
@@ -287,7 +285,7 @@ Stop when done and provide a concise summary.`;
 
     const days = Number.parseInt(this.env.TOOL_EXPIRY_DAYS ?? "30", 10);
     try {
-      await expireUnusedTools(`${blobDir}/tools/manifest.json`, this.env, Number.isFinite(days) ? days : 30);
+      await expireUnusedTools(`${blobDir}/tools/manifest.json`, this.env, Number.isFinite(days) ? days : 30, { sandboxId });
     } catch (err) {
       logEvent(this.env, "tool_call", "tool_expiry_failed", { error: String(err) });
     }
@@ -471,8 +469,8 @@ Stop when done and provide a concise summary.`;
       tags: ["agent-run"],
       sourceRefs: [this.repo],
     };
-    await appendLearnedRecord(this.env, record);
-    const flushed = await flushLearnedRecordsToR2(this.env, conversationKey);
+    await appendLearnedRecord(this.env, record, { sandboxId });
+    const flushed = await flushLearnedRecordsToR2(this.env, conversationKey, { sandboxId });
     if (flushed.count > 0) {
       await updateLearnedMemoryStatus(this.env, {
         lastFlushAt: new Date().toISOString(),
@@ -558,8 +556,8 @@ Stop when done and provide a concise summary.`;
         tags: ["selftest", "healthcheck"],
         sourceRefs: [this.repo],
       };
-      await appendLearnedRecord(this.env, record);
-      const flushed = await flushLearnedRecordsToR2(this.env, conversationKey);
+      await appendLearnedRecord(this.env, record, { sandboxId });
+      const flushed = await flushLearnedRecordsToR2(this.env, conversationKey, { sandboxId });
       if (!flushed.key || flushed.count < 1) {
         throw new Error("learned memory flush wrote no records");
       }

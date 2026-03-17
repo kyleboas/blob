@@ -7,7 +7,7 @@ function createEnv(files: Record<string, string>) {
   const deleted: string[] = [];
   const sandbox = {
     exec: async (cmd: string) => {
-      const path = cmd.replace("rm -f ", "").trim();
+      const path = cmd.replace("rm -f ", "").trim().replace(/^'/, "").replace(/'$/, "");
       deleted.push(path);
       delete files[path];
       return { stdout: "", stderr: "", exitCode: 0 };

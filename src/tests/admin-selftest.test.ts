@@ -38,6 +38,10 @@ function makeEnv(overrides: Record<string, unknown> = {}) {
         files.set(path, content);
       },
       readFile: async (path: string) => files.get(path) ?? "",
+      renameFile: async (from: string, to: string) => {
+        files.set(to, files.get(from) ?? "");
+        files.delete(from);
+      },
     },
     AI: {
       run: async (_model: string, inputs: { text?: string | string[] }) => {

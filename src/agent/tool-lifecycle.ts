@@ -1,3 +1,4 @@
+import { deleteSandboxFile, readSandboxFile, writeSandboxFile } from "../integrations/sandbox";
 import { getSecretPatterns } from "../core/safety";
 import type { Env } from "../core/types";
 
@@ -11,19 +12,29 @@ function hasSecret(content: string, env: Env): boolean {
   });
 }
 
-export async function validateTool(manifestPath: string, toolPath: string, env: Env): Promise<{ valid: boolean; reason?: string }> {
+export async function validateTool(
+  manifestPath: string,
+  toolPath: string,
+  env: Env,
+  opts: { sandboxId?: string } = {},
+): Promise<{ valid: boolean; reason?: string }> {
   void manifestPath;
-  const content = await env.SANDBOX.readFile(toolPath);
+  const content = await readSandboxFile(toolPath, env, opts);
   if (hasSecret(content, env)) {
     return { valid: false, reason: "Tool contains potential secret material" };
   }
   return { valid: true };
 }
 
-export async function expireUnusedTools(manifestPath: string, env: Env, maxAgeDays: number): Promise<string[]> {
+export async function expireUnusedTools(
+  manifestPath: string,
+  env: Env,
+  maxAgeDays: number,
+  opts: { sandboxId?: string } = {},
+): Promise<string[]> {
   let manifest: ToolManifest;
   try {
-    const raw = await env.SANDBOX.readFile(manifestPath);
+    const raw = await readSandboxFile(manifestPath, env, opts);
     manifest = JSON.parse(raw) as ToolManifest;
   } catch (err) {
     console.error("expireUnusedTools manifest read failed", err);
@@ -44,9 +55,9 @@ export async function expireUnusedTools(manifestPath: string, env: Env, maxAgeDa
   }
 
   for (const tool of expired) {
-    await env.SANDBOX.exec(`rm -f ${tool.path}`);
+    await deleteSandboxFile(tool.path, env, opts);
   }
 
-  await env.SANDBOX.writeFile(manifestPath, JSON.stringify({ tools: keep }, null, 2));
+  await writeSandboxFile(manifestPath, JSON.stringify({ tools: keep }, null, 2), env, opts);
   return expired.map((tool) => tool.name);
 }

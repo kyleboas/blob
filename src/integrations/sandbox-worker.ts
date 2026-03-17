@@ -358,13 +358,4 @@ export default class SandboxWorker extends WorkerEntrypoint<Env> {
       branch: options?.branch,
     };
   }
-
-  async setEnvVars(envVars: Record<string, string | undefined>): Promise<void> {
-    const sandbox = getAgentSandbox(this.env);
-    await withOperationLog(
-      "setEnvVars",
-      { sandbox: "agent", envVarCount: Object.keys(envVars).length },
-      () => runSandboxOperation(sandbox, () => sandbox.setEnvVars(envVars)),
-    );
-  }
 }
