@@ -102,6 +102,31 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
+function getParentDir(path: string): string | null {
+  const lastSlash = path.lastIndexOf("/");
+  if (lastSlash <= 0) {
+    return null;
+  }
+  return path.slice(0, lastSlash);
+}
+
+async function ensureSandboxParentDir(path: string, env: Env, opts: { sandboxId?: string } = {}): Promise<void> {
+  const parentDir = getParentDir(path);
+  if (!parentDir) {
+    return;
+  }
+  const result = await withTimeout(
+    env.SANDBOX.exec(`mkdir -p ${shellQuote(parentDir)}`, {
+      sessionId: opts.sandboxId,
+      cwd: "/workspace",
+    }),
+    getSandboxIoTimeoutMs(env),
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || result.stdout || `Failed to create directory ${parentDir}`);
+  }
+}
+
 async function withSandboxRetry<T>(opts: {
   env: Env;
   phase: "start" | "exec" | "writeFile" | "readFile";
@@ -288,6 +313,7 @@ export async function readSandboxFile(path: string, env: Env, opts: SandboxFileO
 
 export async function writeSandboxFile(path: string, content: string, env: Env, opts: SandboxFileOptions = {}): Promise<void> {
   if (opts.sandboxId) touchSandboxSession(opts.sandboxId);
+  await ensureSandboxParentDir(path, env, { sandboxId: opts.sandboxId });
   await withTimeout(
     env.SANDBOX.writeFile(path, content, { sessionId: opts.sandboxId, encoding: opts.encoding }),
     getSandboxIoTimeoutMs(env),
