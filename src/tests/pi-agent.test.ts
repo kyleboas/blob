@@ -91,32 +91,6 @@ test("tool-avoidance claim detector catches no-access language", () => {
   assert.equal(__piAgentTestUtils.containsToolAvoidanceClaim("Here is the result."), false);
 });
 
-test("agent prompts for tool usage when classifier flags external-data-only sandbox need", async () => {
-  const env = makeEnv();
-  const agent = new PiAgent(env, "acme/repo");
-
-  let callCount = 0;
-  (agent as any).callLLM = async () => {
-    callCount += 1;
-    if (callCount === 1) {
-      return { content: "Here is my best guess.", toolCalls: [] };
-    }
-    if (callCount === 2) {
-      return { content: "", toolCalls: [{ function: { name: "bash", arguments: '{"command":"echo live-data"}' } }] };
-    }
-    return { content: "Fetched live-data.", toolCalls: [] };
-  };
-
-  (agent as any).shouldForceExternalToolForMessage = async () => true;
-  (agent as any).ensureRepoBootstrapped = async () => undefined;
-  (agent as any).executeToolWithRetry = async () => ({ output: "live-data" });
-
-  const result = await agent.run("give me latest exchange rate");
-
-  assert.equal(result, "Fetched live-data.");
-  assert.equal(callCount, 3);
-});
-
 test("agent prompts for tool usage when model claims no access on uncovered topic", async () => {
   const env = makeEnv();
   const agent = new PiAgent(env, "acme/repo");
@@ -196,7 +170,6 @@ test("agent still returns final answer when workspace state append fails after a
 
   const result = await agent.run("What temperature is it in Phoenix, Arizona?", {
     sandboxId: "weather-1",
-    skipRepoBootstrap: true,
   });
 
   assert.equal(result, "Phoenix is 72F.");
@@ -281,7 +254,6 @@ test("verification loop re-enters agent when VERIFY_COMMAND fails", async () => 
   try {
     const progress: string[] = [];
     const agent = new PiAgent(env, "blob");
-    (agent as any).shouldForceExternalToolForMessage = async () => false;
     const result = await agent.run("fix tests", {
       sandboxId: "verify-1",
       verbosity: "verbose",
@@ -309,8 +281,6 @@ test("verification skipped when VERIFY_COMMAND is not set", async () => {
     callCount += 1;
     return { content: "All done.", toolCalls: [] };
   };
-  // Mock the intent classifier so it doesn't make its own LLM call
-  (agent as any).shouldForceExternalToolForMessage = async () => false;
 
   const result = await agent.run("hello");
   assert.equal(result, "All done.");
@@ -357,7 +327,6 @@ test("verification auto-detects repo test command when VERIFY_COMMAND is not set
 
   try {
     const agent = new PiAgent(env, "blob");
-    (agent as any).shouldForceExternalToolForMessage = async () => false;
     const result = await agent.run("fix it", { sandboxId: "auto-detect-verify" });
 
     assert.equal(verifyCallCount, 1);
@@ -407,7 +376,6 @@ test("verification stops retrying after max attempts", async () => {
 
   try {
     const agent = new PiAgent(env, "blob");
-    (agent as any).shouldForceExternalToolForMessage = async () => false;
     const result = await agent.run("fix it", { sandboxId: "verify-max" });
 
     // After 2 failed verify attempts, the 3rd "done" goes through without verify

@@ -478,7 +478,7 @@ test("sandbox chat still posts a fallback Slack message when agent final text is
     if (inputs.messages) {
       const user = inputs.messages.find((m) => m.role === "user")?.content ?? "";
       if (user.includes("intent classifier")) {
-        return { response: '{"intent":"chat","needsSandbox":true,"externalDataOnly":true}' };
+        return { response: '{"intent":"chat","needsSandbox":true}' };
       }
       return { response: "" };
     }
@@ -518,6 +518,8 @@ test("sandbox chat still posts a fallback Slack message when agent final text is
 
 test("sandbox chat still posts final result when verbose progress Slack posts fail", async () => {
   const { env, posts } = makeEnv();
+  env.AI_GATEWAY_BASE_URL = "https://gateway.test";
+  env.AI_GATEWAY_TOKEN = "gateway-token";
   const key = "T1:C1:channel";
   await env.AGENT_DO.get(env.AGENT_DO.idFromName(key)).fetch("http://do/settings/verbosity", {
     method: "POST",
@@ -526,7 +528,33 @@ test("sandbox chat still posts final result when verbose progress Slack posts fa
   });
 
   const originalFetch = globalThis.fetch;
+  let gatewayCallCount = 0;
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url) === "https://gateway.test/chat/completions") {
+      gatewayCallCount += 1;
+      if (gatewayCallCount === 1) {
+        return Response.json({
+          choices: [{
+            message: {
+              content: "",
+              tool_calls: [{
+                function: {
+                  name: "bash",
+                  arguments: JSON.stringify({ command: "echo done" }),
+                },
+              }],
+            },
+          }],
+        });
+      }
+      return Response.json({
+        choices: [{
+          message: {
+            content: "Final answer from model after tool call.",
+          },
+        }],
+      });
+    }
     if (String(url).includes("slack.com/api/chat.postMessage")) {
       const body = JSON.parse(String(init?.body)) as { text: string };
       const isProgressMessage =
@@ -541,17 +569,13 @@ test("sandbox chat still posts final result when verbose progress Slack posts fa
     }
     return new Response("unexpected", { status: 500 });
   }) as typeof fetch;
-
   env.AI.run = async (_model: string, inputs: { messages?: Array<{ role: string; content: string }>; text?: string }) => {
     if (inputs.messages) {
       const user = [...inputs.messages].reverse().find((m) => m.role === "user")?.content ?? "";
       if (user.includes("intent classifier")) {
-        return { response: '{"intent":"chat","needsSandbox":true,"externalDataOnly":true}' };
+        return { response: '{"intent":"chat","needsSandbox":true}' };
       }
-      if (user.includes("Before finalizing, use an available tool")) {
-        return { response: "Final answer from model after tool call." };
-      }
-      return { response: '{"tool":"bash","args":{"command":"echo done"}}' };
+      throw new Error("sandbox planner should use the gateway path in this test");
     }
     return { data: [[0.1, 0.2, 0.3]] };
   };

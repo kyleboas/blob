@@ -5,8 +5,6 @@ import type { Env } from "./types";
 export interface IntentResult {
   intent: "list_cron" | "add_cron" | "delete_cron" | "chat";
   needsSandbox?: boolean;
-  /** True when the task only needs bash/curl (no repo clone needed). */
-  externalDataOnly?: boolean;
   schedule?: string;
   task?: string;
   search?: string;
@@ -39,9 +37,7 @@ For "delete_cron", extract:
 - search: Keywords to find the job to delete (e.g., "email", "test", "backup")
 
 Respond with ONLY a JSON object in this format:
-{"intent": "list_cron|add_cron|delete_cron|chat", "needsSandbox": true|false, "externalDataOnly": true|false, "schedule": "...", "task": "...", "search": "..."}
-
-Set externalDataOnly=true only when this is a chat request that needs sandbox access solely to fetch external/fresh data (typically via bash/curl/API) and does NOT require repository reads/writes/tests.
+{"intent": "list_cron|add_cron|delete_cron|chat", "needsSandbox": true|false, "schedule": "...", "task": "...", "search": "..."}
 
 Message: "${text}"`;
 
@@ -49,13 +45,7 @@ Message: "${text}"`;
     const response = await callLLM([{ role: "user", content: prompt }], env, { maxTokens: 200, model: WORKERS_AI_GATEWAY_MODEL });
     const jsonMatch = response.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
-      const result = JSON.parse(jsonMatch[0]) as IntentResult;
-
-      if (result.intent === "chat" && result.needsSandbox === true && typeof result.externalDataOnly !== "boolean") {
-        result.externalDataOnly = false;
-      }
-
-      return result;
+      return JSON.parse(jsonMatch[0]) as IntentResult;
     }
   } catch (err) {
     logEvent(env, "slack_ingest", "intent_classify_failed", { error: String(err) });
@@ -65,7 +55,6 @@ Message: "${text}"`;
   return {
     intent: "chat",
     needsSandbox: true,
-    externalDataOnly: false, // Assume full sandbox needed if LLM fails
   };
 }
 

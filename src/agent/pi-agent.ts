@@ -3,7 +3,6 @@ import { DEFAULT_MODEL, WORKERS_AI_FALLBACK_MODEL } from "../core/models";
 import { appendWorkspaceState, editTool, ensureSandboxSession, executeInSandbox, fileExists, readSandboxFile, readTool, writeSandboxFile, writeTool } from "../integrations/sandbox";
 import { logEvent } from "../core/observability";
 import { estimateTokens } from "../core/tokens";
-import { classifyIntent } from "../core/intent-classifier";
 import { withDOAuth } from "../core/do-auth";
 import { expireUnusedTools } from "./tool-lifecycle";
 import { detectVerificationCommand, ensureRepoWorkspaceReady, getGitEnvVars, repoDirFromSlug } from "./repo-diagnosis";
@@ -54,8 +53,6 @@ interface RunOptions {
   conversationHistory?: Array<{ role: string; content: string }>;
   conversationKey?: string;
   secrets?: Record<string, string>;
-  /** Skip git clone/repo bootstrap. Use for tasks that only need bash (e.g. curl for external data). Sandbox still runs. */
-  skipRepoBootstrap?: boolean;
 }
 
 interface SelfTestOptions {
@@ -176,7 +173,6 @@ export class PiAgent {
   private messages: PiMessage[];
   private repoDir: string;
   private activeSecrets: Record<string, string> = {};
-  private skipRepoBootstrap = false;
 
   constructor(
     private env: Env,
@@ -387,10 +383,8 @@ Stop when done and provide a concise summary.`;
             );
             return { output: `Edited ${String(call.args.path ?? "")}` };
           case "bash": {
-            // When skipRepoBootstrap is set, don't force a cd to the workspace dir
-            // (it doesn't exist). Run the command in the sandbox root instead.
-            const workspaceRoot = this.skipRepoBootstrap ? undefined : `/workspace/${this.repoDir}`;
-            const envVars = this.skipRepoBootstrap ? this.activeSecrets : { ...getGitEnvVars(this.env), ...this.activeSecrets };
+            const workspaceRoot = `/workspace/${this.repoDir}`;
+            const envVars = { ...getGitEnvVars(this.env), ...this.activeSecrets };
             const result = await executeInSandbox(String(call.args.command ?? ""), this.env, { sandboxId, workspaceRoot, envVars });
             return { output: result.stdout, error: result.stderr || undefined };
           }
@@ -661,15 +655,6 @@ Stop when done and provide a concise summary.`;
     }
   }
 
-  private async shouldForceExternalToolForMessage(userMessage: string): Promise<boolean> {
-    try {
-      const result = await classifyIntent(userMessage, this.env);
-      return result.intent === "chat" && result.needsSandbox === true && result.externalDataOnly === true;
-    } catch (_err) {
-      return false;
-    }
-  }
-
   async run(userMessage: string, opts: RunOptions = {}): Promise<string> {
     const sandboxId = opts.sandboxId ?? "default";
     const usage: BudgetState = { inputTokens: 0, outputTokens: 0, warned: false, halted: false };
@@ -691,7 +676,6 @@ Stop when done and provide a concise summary.`;
     let verifyAttempts = 0;
     let toolCallsExecuted = 0;
     let externalDataGuardAttempts = 0;
-    let shouldForceExternalTool: boolean | null = null;
     const maxVerifyAttempts = Number.parseInt(this.env.VERIFY_MAX_ATTEMPTS ?? "3", 10);
 
     const verbosity = opts.verbosity ?? "verbose";
@@ -744,12 +728,9 @@ Stop when done and provide a concise summary.`;
       const structuredToolCall = llmResponse.toolCalls.length > 0 ? parseStructuredToolCall(llmResponse.toolCalls[0]) : null;
       const toolCall = structuredToolCall;
       if (!toolCall) {
-        if (shouldForceExternalTool === null) {
-          shouldForceExternalTool = await this.shouldForceExternalToolForMessage(userMessage);
-        }
         const claimedNoAccess = containsToolAvoidanceClaim(responseText);
         const shouldForceToolAttempt =
-          toolCallsExecuted === 0 && externalDataGuardAttempts < 1 && (shouldForceExternalTool || claimedNoAccess);
+          toolCallsExecuted === 0 && externalDataGuardAttempts < 1 && claimedNoAccess;
         if (shouldForceToolAttempt) {
           externalDataGuardAttempts += 1;
           this.messages.push({ role: "assistant", content: responseText });
@@ -794,21 +775,15 @@ Stop when done and provide a concise summary.`;
 
       if (!bootstrapAttempted) {
         bootstrapAttempted = true;
-        if (opts.skipRepoBootstrap) {
-          // Bare sandbox — just ensure the session is alive, skip git clone.
-          this.skipRepoBootstrap = true;
-          await ensureSandboxSession(sandboxId, this.env);
-        } else {
-          try {
-            await this.ensureRepoBootstrapped(sandboxId, opts.onProgress, verbosity);
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            const failure = `Bootstrap failed: ${message}`;
-            if (opts.onProgress && verbosity === "verbose") {
-              await opts.onProgress(`⚠️ ${failure}`);
-            }
-            return this.finishRun(userMessage, failure, conversationKey, sandboxId);
+        try {
+          await this.ensureRepoBootstrapped(sandboxId, opts.onProgress, verbosity);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const failure = `Bootstrap failed: ${message}`;
+          if (opts.onProgress && verbosity === "verbose") {
+            await opts.onProgress(`⚠️ ${failure}`);
           }
+          return this.finishRun(userMessage, failure, conversationKey, sandboxId);
         }
       }
 

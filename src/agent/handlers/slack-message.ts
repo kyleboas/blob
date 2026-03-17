@@ -105,7 +105,7 @@ function classifyMessageRoute(text: string): MessageRoute {
     return { kind: "repo-question" };
   }
   if (parseDirectSandboxTask(text)) {
-    return { kind: "chat", intentHint: { intent: "chat", needsSandbox: true, externalDataOnly: false } };
+    return { kind: "chat", intentHint: { intent: "chat", needsSandbox: true } };
   }
 
   if (looksLikeCronRequest(text)) {
@@ -113,14 +113,14 @@ function classifyMessageRoute(text: string): MessageRoute {
   }
 
   if (looksLikeRepoTask(text)) {
-    return { kind: "chat", intentHint: { intent: "chat", needsSandbox: true, externalDataOnly: false } };
+    return { kind: "chat", intentHint: { intent: "chat", needsSandbox: true } };
   }
 
   if (looksLikeExternalDataTask(text)) {
-    return { kind: "chat", intentHint: { intent: "chat", needsSandbox: true, externalDataOnly: true } };
+    return { kind: "chat", intentHint: { intent: "chat", needsSandbox: true } };
   }
 
-  return { kind: "chat", intentHint: { intent: "chat", needsSandbox: false, externalDataOnly: false } };
+  return { kind: "chat", intentHint: { intent: "chat", needsSandbox: false } };
 }
 
 function looksLikeCronRequest(text: string): boolean {
