@@ -1,5 +1,5 @@
 import type { Env } from "../core/types";
-import { configureSandboxEnvVars, executeInSandbox } from "../integrations/sandbox";
+import { executeInSandbox } from "../integrations/sandbox";
 import { GitHubApi, type GitHubIssue, type GitHubWorkflowRun } from "../integrations/github";
 
 export type CloudflareLogSignal = {
@@ -74,8 +74,6 @@ export async function ensureRepoWorkspaceReady(
   const workspaceRoot = `/workspace/${repoDir}`;
   const gitEnvVars = getGitEnvVars(env);
 
-  await configureSandboxEnvVars(env, gitEnvVars, sandboxId);
-
   const hasGit = await executeInSandbox(`test -d ${shellQuote(`${workspaceRoot}/.git`)}`, env, {
     sandboxId,
     timeout: 30000,
@@ -98,8 +96,12 @@ export async function ensureRepoWorkspaceReady(
     const repoUrl = `https://github.com/${repo}.git`;
     if (typeof env.SANDBOX.gitCheckout === "function") {
       try {
-        await configureSandboxEnvVars(env, gitEnvVars, sandboxId);
-        await env.SANDBOX.gitCheckout(repoUrl, { targetDir: workspaceRoot, depth: 1 });
+        await env.SANDBOX.gitCheckout(repoUrl, {
+          sessionId: sandboxId,
+          targetDir: workspaceRoot,
+          depth: 1,
+          env: gitEnvVars,
+        });
       } catch (err) {
         throw new Error(`repo bootstrap failed (${repoDir}): ${summarizeText(String(err), 400)}`);
       }
