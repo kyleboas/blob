@@ -6,6 +6,8 @@ import { getRepos } from "../core/storage";
 import type { Env } from "../core/types";
 import { withDOAuth } from "../core/do-auth";
 import { runOptimizationCycle, loadConfig } from "../self-improve/index";
+import { embedText } from "../core/memory-system";
+import { probeSandbox as probeSandboxHealth } from "./sandbox";
 export { classifyIntent } from "../core/intent-classifier";
 
 type Verbosity = "minimal" | "verbose";
@@ -18,9 +20,9 @@ export function normalizeCommandText(text: string): string {
   return text.replace(/^(?:\s*<@[^>]+>\s*)+/, "").trim().replace(/\s+/g, " ");
 }
 
-export function getExactKeywordCommand(text: string): "settings" | "status" | "selftest" | "set minimal" | "set verbose" | "secrets" | "heartbeat config" | "self-improve" | "jobs" | null {
+export function getExactKeywordCommand(text: string): "settings" | "status" | "selftest" | "set minimal" | "set verbose" | "secrets" | "heartbeat config" | "self-improve" | "jobs" | "dryrun" | null {
   const normalized = normalizeCommandText(text).toLowerCase();
-  if (["settings", "status", "selftest", "set minimal", "set verbose", "secrets", "heartbeat config", "self-improve", "jobs"].includes(normalized)) {
+  if (["settings", "status", "selftest", "set minimal", "set verbose", "secrets", "heartbeat config", "self-improve", "jobs", "dryrun"].includes(normalized)) {
     return normalized as ReturnType<typeof getExactKeywordCommand>;
   }
   return null;
@@ -200,6 +202,65 @@ async function handleSelfImproveCommand(env: Env): Promise<{ handled: boolean; r
   }
 }
 
+async function runDryRunHealthChecks(env: Env): Promise<{ r2: boolean; sandbox: boolean; vectorize: boolean; do: boolean; memory: boolean; details: string[] }> {
+  const timeoutMs = 5000;
+  const details: string[] = [];
+
+  const withTimeout = <T>(factory: () => Promise<T>, timeoutMs: number): Promise<T> => {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`timeout_after_${timeoutMs}ms`)), timeoutMs);
+      factory().then(
+        (value) => { clearTimeout(timer); resolve(value); },
+        (error) => { clearTimeout(timer); reject(error); },
+      );
+    });
+  };
+
+  const r2Check = withTimeout(async () => {
+    await env.REPO_STORE.head("config/runtime-controls.json");
+    return true;
+  }, timeoutMs).catch((err) => { details.push(`R2: ${err instanceof Error ? err.message : String(err)}`); return false; });
+
+  const sandboxCheck = withTimeout(() => probeSandboxHealth(env), timeoutMs).catch((err) => { details.push(`Sandbox: ${err instanceof Error ? err.message : String(err)}`); return false; });
+
+  const vectorizeCheck = withTimeout(async () => {
+    if (!env.PI_VECTORS || !env.AI) {
+      details.push("Vectorize: PI_VECTORS or AI binding missing");
+      return false;
+    }
+    const vector = await embedText(env, "blob dryrun healthcheck");
+    if (!vector?.length) {
+      details.push("Vectorize: embedding failed");
+      return false;
+    }
+    const result = await env.PI_VECTORS.query(vector, { topK: 1 });
+    if (!Array.isArray(result.matches)) {
+      details.push("Vectorize: query failed");
+      return false;
+    }
+    return true;
+  }, timeoutMs).catch((err) => { details.push(`Vectorize: ${err instanceof Error ? err.message : String(err)}`); return false; });
+
+  const doCheck = withTimeout(async () => {
+    const doStub = env.AGENT_DO.get(env.AGENT_DO.idFromName("blob"));
+    const response = await doStub.fetch("http://do/heartbeat/status", withDOAuth(env, { method: "GET" }));
+    return response.ok;
+  }, timeoutMs).catch((err) => { details.push(`Durable Object: ${err instanceof Error ? err.message : String(err)}`); return false; });
+
+  const memoryCheck = withTimeout(async () => {
+    const status = await getLearnedMemoryStatus(env);
+    if (!status.lastFlushAt) {
+      details.push("Memory: no flush history (may be normal for fresh install)");
+      return true; // Not a failure, just informational
+    }
+    return true;
+  }, timeoutMs).catch((err) => { details.push(`Memory: ${err instanceof Error ? err.message : String(err)}`); return false; });
+
+  const [r2, sandbox, vectorize, doHealth, memory] = await Promise.all([r2Check, sandboxCheck, vectorizeCheck, doCheck, memoryCheck]);
+
+  return { r2, sandbox, vectorize, do: doHealth, memory, details };
+}
+
 export async function handleCommand(
   text: string,
   channel: string,
@@ -233,7 +294,7 @@ export async function handleCommand(
         : `failure (${vectorize.lastUpsertError ?? "error"})`;
     return {
       handled: true,
-      response: `Status: ready. Current verbosity is ${verbosity}. Heartbeat last run: ${heartbeat.lastCompletedAt ?? "never"}. Next heartbeat: ${heartbeat.nextAlarmAt ?? "unknown"}. Heartbeat jobs queued/paused/running: ${heartbeat.jobs.queued}/${heartbeat.jobs.paused}/${heartbeat.jobs.running}. Heartbeat call budget remaining in last cycle: ${heartbeat.callsRemaining ?? "unknown"}. Learned memory last flush: ${flushText}. Learned entries in last flush: ${learned.lastFlushCount}. Vectorize upsert: ${upsert} at ${vectorize.lastUpsertAt ?? "never"}. Vectorize last query count: ${vectorize.lastQueryCount} at ${vectorize.lastQueryAt ?? "never"}.`,
+      response: `Status: ready. Current verbosity is ${verbosity}. Heartbeat last run: ${heartbeat.lastCompletedAt ?? "never"}. Next heartbeat: ${heartbeat.nextAlarmAt ?? "unknown"}. Heartbeat jobs queued/paused/running: ${heartbeat.jobs.queued}/${heartbeat.jobs.paused}/${heartbeat.jobs.running}. Heartbeat call budget remaining in last cycle: ${heartbeat.callsRemaining ?? "unknown"}. Learned memory last flush: ${flushText}. Learned entries in last flush: ${learned.lastFlushCount}. Vectorize upsert: ${upsert} at ${vectorize.lastUpsertAt ?? "never"}. Vectorize last query count: ${vectorize.lastQueryCount} at ${vectorize.lastQueryAt ?? "never"}.\n\n💡 Run \`dryrun\` to test infrastructure without LLMs.`,
     };
   }
   if (keywordCommand === "secrets") {
@@ -297,6 +358,28 @@ export async function handleCommand(
       conversationKey: channel,
     });
     return { handled: true, response: verbosity === "minimal" ? `Running self-test…\n${selftestResult}` : selftestResult };
+  }
+
+  if (keywordCommand === "dryrun") {
+    const checks = await runDryRunHealthChecks(env);
+    const passing = Object.values(checks).filter((v) => typeof v === "boolean" && v).length;
+    const total = 5;
+    const status = passing === total ? "✅ All systems operational" : passing === 0 ? "❌ All systems failing" : `⚠️ ${passing}/${total} systems passing`;
+
+    const lines = [
+      status,
+      "",
+      `• R2 Storage: ${checks.r2 ? "✅" : "❌"}`,
+      `• Sandbox: ${checks.sandbox ? "✅" : "❌"}`,
+      `• Vectorize: ${checks.vectorize ? "✅" : "❌"}`,
+      `• Durable Object: ${checks.do ? "✅" : "❌"}`,
+      `• Memory System: ${checks.memory ? "✅" : "❌"}`,
+    ];
+    if (checks.details.length > 0) {
+      lines.push("", "Details:");
+      lines.push(...checks.details.map((d) => `  ${d}`));
+    }
+    return { handled: true, response: lines.join("\n") };
   }
 
   const deleteSecretMatch = text.trim().match(/^delete secret ([A-Z][A-Z0-9_]{2,})$/i);
